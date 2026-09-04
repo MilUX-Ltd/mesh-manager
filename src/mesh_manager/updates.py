@@ -159,6 +159,44 @@ def download(rec, token, state_dir):
     return {"ready": True, "dir": d, "tarball": paths["tgz"], "version": rec["version"]}
 
 
+def is_available(rec, running=None):
+    """Whether the last check still names something newer than what is running now.
+
+    `available` is decided when the check runs and stored, so after an update the record still
+    said yes and About offered to update the box to the version it was already running.
+    """
+    if not rec or rec.get("error") or not rec.get("version"):
+        return False
+    here = vtuple(running or __version__) or (0, 0, 0)
+    there = vtuple(rec.get("version"))
+    return bool(there and there > here)
+
+
+def prune_staged(state_dir, keep=5, running=None, arch="amd64"):
+    """Keep the newest few staged releases and remove the rest.
+
+    Every release the box takes leaves its tarball behind, about 20 MB each, and nothing ever
+    removed them: the kit had twelve. They are what a roll back returns to, so a few are worth
+    keeping and an unbounded pile is not. The running version is never removed.
+    """
+    rows = staged(state_dir, arch=arch, running=running)
+    removed, freed = [], 0
+    for r in rows[max(0, int(keep)):]:
+        if r.get("running"):
+            continue
+        d = os.path.dirname(r["tarball"])
+        try:
+            for name in os.listdir(d):
+                fp = os.path.join(d, name)
+                freed += os.path.getsize(fp) if os.path.isfile(fp) else 0
+                os.remove(fp)
+            os.rmdir(d)
+            removed.append(r["version"])
+        except OSError:
+            pass
+    return {"kept": [r["version"] for r in rows[:max(0, int(keep))]], "removed": removed, "freed": freed}
+
+
 def staged(state_dir, arch="amd64", running=None):
     """What the box could return to: every release whose artefacts are still under updates/.
 

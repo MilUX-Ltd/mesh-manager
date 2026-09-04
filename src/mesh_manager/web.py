@@ -206,7 +206,7 @@ class Web:
 
     def update_available(self):
         rec = U.last_check(self.state_dir)
-        return rec.get("version") if rec.get("available") and rec.get("version") != __version__ else None
+        return rec.get("version") if U.is_available(rec) else None
 
     def subscribe(self):
         q = queue.Queue(maxsize=500)
@@ -1918,14 +1918,14 @@ def update_box(web):
         last = "never checked" if tok else "never checked; no GitHub token yet (Settings)"
     elif rec.get("error"):
         last = f"checked {hhmm(rec.get('checked'))}: {rec['error']}"
-    elif rec.get("available"):
+    elif U.is_available(rec):
         last = f"checked {hhmm(rec.get('checked'))}: <b>{e(str(rec.get('version')))} available</b> ({e(str(rec.get('tag') or ''))}, published {e(str(rec.get('published') or '')[:10])})"
     else:
         last = f"checked {hhmm(rec.get('checked'))}: up to date ({e(str(rec.get('version') or __version__))} is the newest on {e(str(rec.get('channel') or ''))})"
     notes = ""
-    if rec.get("available") and rec.get("notes"):
+    if U.is_available(rec) and rec.get("notes"):
         notes = f"<details class='fold ctl'><summary>What is in {e(str(rec.get('version')))}</summary><pre class='log' style='max-height:40vh'>{e(str(rec['notes']))}</pre></details>"
-    apply_btn = (f"<button type='button' data-update-apply='{e(str(rec.get('version')))}'>Update now to {e(str(rec.get('version')))}</button>" if rec.get("available") else "")
+    apply_btn = (f"<button type='button' data-update-apply='{e(str(rec.get('version')))}'>Update now to {e(str(rec.get('version')))}</button>" if U.is_available(rec) else "")
     log = U.last_log(web.state_dir)
     logbox = f"<details class='fold ctl'><summary>The last update's log</summary><pre class='log' style='max-height:40vh'>{e(chr(10).join(log))}</pre></details>" if log else ""
     return (f"<div class='card' id='update-box'><div class='k'>Updates from GitHub · {e(mode)}</div><div class='v'>{last}</div>"
@@ -2135,7 +2135,8 @@ def rollback_box(web):
             f"{'s' if len(back) != 1 else ''} still on this box</div>"
             "<p class='meta'>Re-applies a release the box already has, checking its hash first. It returns the "
             "<b>code</b> and not the box's config, which the installer keeps either way. The bridge and this screen "
-            "restart, so the mesh is off TAK for about a minute.</p>"
+            "restart, so the mesh is off TAK for about a minute. The five most recent are kept; older ones "
+            "are removed as new releases arrive.</p>"
             f"{warn}{items}<div class='res meta' id='rollback-res' role='status'></div></div>")
 
 
@@ -2619,14 +2620,15 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 if path == "/api/update/apply":
                     want = str(body.get("version") or "")
                     rec = U.last_check(web.state_dir)
-                    if not rec.get("available") or (want and want != rec.get("version")):
+                    if not U.is_available(rec) or (want and want != rec.get("version")):
                         rec = U.check(web.config, web.github_token(), web.state_dir, api=web.config.get("UPDATE_API"))
-                    if not rec.get("available"):
+                    if not U.is_available(rec):
                         return self._json(400, {"error": rec.get("error") or "nothing newer to apply", "running": __version__})
                     d = U.download(rec, web.github_token(), web.state_dir)
                     if not d.get("ready"):
                         K.audit(web.etc_dir, who="operator", event="update-refused", version=rec.get("version"), error=d.get("error"))
                         return self._json(400, {"error": d.get("error"), "running": __version__})
+                    U.prune_staged(web.state_dir, keep=5, running=__version__, arch=web.arch)
                     a = U.apply(web.state_dir, rec["version"])
                     K.audit(web.etc_dir, who="operator", event="update-apply", version=rec.get("version"), started=a.get("started"), error=a.get("error"))
                     return self._json(200 if a.get("started") else 500, dict(a, running=__version__))

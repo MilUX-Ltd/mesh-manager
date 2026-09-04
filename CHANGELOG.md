@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.5.1 (4 September 2026)
+
+Two things the kit showed the moment 0.5.0 was on it.
+
+- **About offered to update the box to the version it was already running.** Whether a release
+  is available was decided when the check ran and stored with it, and never reconsidered, so
+  after an update the record still said yes. It is now judged against the version running now,
+  everywhere it is read: the About card, the header pill and the apply route.
+- **Staged releases grew without limit.** Every release the box takes leaves its tarball behind,
+  about 20 MB, and nothing removed them: the kit had twelve, a quarter of a gigabyte. They are
+  what a roll back returns to, so the five most recent are kept and older ones are removed as
+  new releases arrive. The running version is never removed, and the page says so.
+
 ## 0.5.0 (4 September 2026)
 
 The four slices carried on. Thirty-seven suites green.
