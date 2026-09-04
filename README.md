@@ -13,6 +13,15 @@ Most tools in this space watch a mesh. This one manages it: devices set up on th
 administered over the air, firmware from a verified shelf, channels minted and rotated, and
 an agent that can do everything the screen can under rules you set.
 
+<p align="center">
+  <img src="assets/screenshots/mesh-map.png"
+       alt="The Mesh page: nodes on an OpenStreetMap layer with range rings, an MGRS readout, and the node table below"
+       width="900">
+</p>
+
+<p align="center"><em>The mesh on the map, with range rings that follow the zoom and MGRS under the cursor.
+Tiles here are OpenStreetMap; Google, your own offline MBTiles and any ATAK custom map source also work.</em></p>
+
 **Status: 0.x.** In daily use on its author's own deployable kit and released often. The
 version line stays 0.x until the interface settles; the
 [releases page](../../releases) has the current one.
@@ -40,6 +49,31 @@ version line stays 0.x until the interface settles; the
 - **An AI surface.** An MCP endpoint, an agent role and a set of skills, all derived from the
   same action catalogue the screen uses. Anything a person can do on the screen an agent can
   do through a connector, at the autonomy you set, and nothing else.
+
+## What it looks like
+
+<img src="assets/screenshots/nodes.png"
+     alt="The Nodes page: each node with signal, battery, when it was last heard, and per-node actions"
+     width="900">
+
+Every node the radio hears, with signal, battery and age, the link quality out and back on each
+hop, and the actions for that node on the row: ask for a position, ask for a battery, trace the
+route, set a label.
+
+<img src="assets/screenshots/register.png"
+     alt="The Register page: the fleet of known devices, their labels, holders, hardware, firmware and whether they are managed"
+     width="900">
+
+The register of devices you own, whether the gateway can administer each one over the air, and
+the fleet profile the drift check compares them against.
+
+<img src="assets/screenshots/health.png"
+     alt="The Health page: channel utilisation with a verdict, transmit air time against the duty-cycle budget, packets per hour, and open alerts"
+     width="900">
+
+Whether the mesh is healthy, in numbers with a verdict rather than raw counters: channel
+utilisation, the gateway's own transmit air time against the region's duty-cycle limit, and any
+alert currently open.
 
 ## What it needs
 
@@ -87,6 +121,13 @@ on, the source goes with it.
 Third-party work it stands on, each under its own licence with attribution kept, is listed in
 [`NOTICE`](NOTICE); the licence texts travel inside every release under `LICENSES/`.
 
+## Reporting a security fault
+
+Not in a public issue. Use the **Security** tab of this repository, then **Report a
+vulnerability**, which opens a private thread. [`SECURITY.md`](SECURITY.md) says what to
+expect, which versions get fixes, and what counts as a fault in something that sits on the
+box carrying a deployment's radio.
+
 ## Not affiliated
 
 Meshtastic is a registered trademark of Meshtastic LLC. TAK, ATAK and the TAK Product Center
@@ -95,7 +136,10 @@ or supported by either, and ships neither TAK Server nor device firmware: you su
 
 ## What travels with it
 
-`CHANGELOG.md` is the record of what changed and why. `NOTICE` and `THIRD-PARTY.md` name the
+`SECURITY.md` is the disclosure route and the security model in brief.
+`release/verify-public.sh` checks a published release the way a stranger receives it, with no
+credentials: run it yourself against this repository if you want to confirm what you
+downloaded matches what is published. `CHANGELOG.md` is the record of what changed and why. `NOTICE` and `THIRD-PARTY.md` name the
 third-party work this stands on, with the licence texts under `LICENSES/`. `agents/` and
 `skills/` hold the agent role and the skills for the AI surface, and `install/` holds the
 installer and the systemd units. The design notes and the build record stay in the private

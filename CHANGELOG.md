@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.4.4 (4 September 2026)
+
+- **The demo carried real device identifiers.** Its sample nodes were built from captures of a
+  live fleet and kept four real Meshtastic node ids and the gateway radio's real MAC in its USB
+  path, and the demo ships with the product. The suite had listed one of those ids as a string
+  that must never appear in the agent role, so the fault was recorded in one place and shipped
+  from another. The demo now uses the synthetic `!ee0000NN` block, and the cut whitelists
+  device identifiers rather than blacklisting known-bad ones, so a real id introduced tomorrow
+  stops the cut instead of being published.
+- The `*.png` rule in `.gitignore`, which exists to keep channel QRs out of git, silently kept
+  the new screenshots out too, so a clean checkout would have cut a README with four broken
+  images. That is the second time that rule has done this (LESSONS 23). The cut now refuses a
+  README that names a file the staged tree does not have, whatever the cause.
+- Four screenshots in the README, taken from the demo: the mesh on the map, the node list, the
+  register, and health.
+
+- `SECURITY.md`: a private route for reporting a fault, what to expect and when, which
+  versions get fixes, and what counts as a fault in software that sits on the box carrying a
+  deployment's radio. The public repository had no way for a finder to tell us privately,
+  which pushed them towards telling everyone at once.
+- `release/verify-public.sh` checks a published release as the stranger who receives it, with
+  no credentials: the releases API, the downloads, the hash, the installer, an anonymous
+  clone, the leak scan on both tree and tarball, every path the README names, and the tree's
+  version against the newest release. It runs weekly and on every release, and it travels
+  with the product so anyone can check what they downloaded.
+- CODEOWNERS, so the gates and the script that decides what may leave the building cannot be
+  changed without review.
+
 ## 0.4.3 (4 September 2026)
 
 - A release is one anyone can install, so a box checks the public repository by default; a box

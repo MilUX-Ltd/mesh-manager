@@ -17,20 +17,20 @@ import time
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/fake-bridge.sock"
 NODES = [
-    {"id": "!dc0a12a5", "name": "Tracker 4", "battery": 81, "lat": 51.500000, "lon": -0.120000, "heard": "2026-09-03T01:23:55Z", "snr": 13.0, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR4"},
-    {"id": "!57d9f894", "name": "Tracker 2", "battery": 9, "lat": 51.500180, "lon": -0.119700, "heard": "2026-09-03T01:20:11Z", "snr": 9.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR2"},
-    {"id": "!8b96768b", "name": "Handset", "battery": 29, "lat": 51.499910, "lon": -0.120400, "heard": "2026-09-03T01:22:16Z", "snr": 11.25, "hops": 0, "heard_here": True, "hw": "RAK4631", "short": "S413"},
-    {"id": "!932f7d09", "name": "Relay 2", "battery": None, "heard": None, "snr": None, "hops": None, "heard_here": False, "hw": "TRACKER_T1000_E", "short": "T2"},
+    {"id": "!ee000004", "name": "Tracker 4", "battery": 81, "lat": 51.500000, "lon": -0.120000, "heard": "2026-09-03T01:23:55Z", "snr": 13.0, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR4"},
+    {"id": "!ee000002", "name": "Tracker 2", "battery": 9, "lat": 51.500180, "lon": -0.119700, "heard": "2026-09-03T01:20:11Z", "snr": 9.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR2"},
+    {"id": "!ee000003", "name": "Handset", "battery": 29, "lat": 51.499910, "lon": -0.120400, "heard": "2026-09-03T01:22:16Z", "snr": 11.25, "hops": 0, "heard_here": True, "hw": "RAK4631", "short": "HAND"},
+    {"id": "!ee000006", "name": "Relay 2", "battery": None, "heard": None, "snr": None, "hops": None, "heard_here": False, "hw": "TRACKER_T1000_E", "short": "T2"},
 ]
-STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_A4:CB:8F:A7:C4:0C-if00",
+STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_A4:CB:8F:EE:00:01-if00",
           "radio_present": True, "bootloader": False, "connected": True, "last_activity": "2026-09-03T01:24:06Z",
           "last_forwarded": "2026-09-03T01:24:06Z", "nodes_seen": sum(1 for n in NODES if n.get("heard_here", True)), "nodes_db": len(NODES), "observe": False,
-          "own": {"id": "!a7c40c00", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
+          "own": {"id": "!ee000001", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
           "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
 CHANNELS = {"channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True},
                          {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
             "url": "https://meshtastic.org/e/#CgcSAQEoATABEg8IATgBQANIAVAeaAHABgE"}
-LOG = ["[01:23:55] INFO Sending <event uid=\"!dc0a12a5\" type=\"a-f-G-U-C\"> Tracker 4",
+LOG = ["[01:23:55] INFO Sending <event uid=\"!ee000004\" type=\"a-f-G-U-C\"> Tracker 4",
        "[01:24:02] INFO [radio] AGC reset (fixed) DC Cal. Mode 1",
        "[01:24:06] INFO Sending <event uid=\"ANDROID-7b40d9b887a4ec20\" callsign=\"MilUX\"> (TAK V2, port 78)"]
 clients = []
@@ -38,13 +38,13 @@ HISTORY = {n["id"]: [] for n in NODES}
 for _n in NODES[:3]:
     for _k in range(12):
         HISTORY[_n["id"]].append([time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - (12 - _k) * 60)), round(random.uniform(5, 13), 1), 0])
-ROUTES = {"!dc0a12a5": {"dest": "!dc0a12a5", "ts": "2026-09-03T01:20:00Z", "hops": 1,
-                        "towards": [{"id": "!57d9f894", "name": "Tracker 2", "snr": 9.5}, {"id": "!dc0a12a5", "name": "Tracker 4", "snr": 6.25}],
-                        "back": [{"id": "!57d9f894", "name": "Tracker 2", "snr": 8.0}, {"id": "!a7c40c00", "name": "Gateway", "snr": None}]}}
+ROUTES = {"!ee000004": {"dest": "!ee000004", "ts": "2026-09-03T01:20:00Z", "hops": 1,
+                        "towards": [{"id": "!ee000002", "name": "Tracker 2", "snr": 9.5}, {"id": "!ee000004", "name": "Tracker 4", "snr": 6.25}],
+                        "back": [{"id": "!ee000002", "name": "Tracker 2", "snr": 8.0}, {"id": "!ee000001", "name": "Gateway", "snr": None}]}}
 
 
-REG = {"!dc0a12a5": {"label": "Tracker 4", "holder": "the operator", "managed": True, "firmware": "2.6.11", "role": "TRACKER", "managed_at": "2026-09-02T10:00:00Z"},
-       "!8b96768b": {"label": "Handset", "holder": "the operator", "managed": False}}
+REG = {"!ee000004": {"label": "Tracker 4", "holder": "the operator", "managed": True, "firmware": "2.6.11", "role": "TRACKER", "managed_at": "2026-09-02T10:00:00Z"},
+       "!ee000003": {"label": "Handset", "holder": "the operator", "managed": False}}
 
 
 def register():
@@ -61,7 +61,7 @@ def register():
 
 def links():
     nodes = [dict(n, direct_snr=(n.get("snr") if n.get("hops") == 0 else None), history=HISTORY.get(n["id"], [])) for n in NODES]
-    return {"own": {"id": "!a7c40c00", "name": "Gateway", "lat": 51.5000, "lon": -0.1200, "position_source": "config"}, "nodes": nodes, "routes": ROUTES}
+    return {"own": {"id": "!ee000001", "name": "Gateway", "lat": 51.5000, "lon": -0.1200, "position_source": "config"}, "nodes": nodes, "routes": ROUTES}
 
 
 def answer_traceroute(dest):
@@ -69,7 +69,7 @@ def answer_traceroute(dest):
     node = next((n for n in NODES if n["id"] == dest), None)
     rec = {"dest": dest, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "hops": 0,
            "towards": [{"id": dest, "name": node["name"] if node else dest, "snr": round(random.uniform(4, 13), 2)}],
-           "back": [{"id": "!a7c40c00", "name": "Gateway", "snr": round(random.uniform(4, 13), 2)}]}
+           "back": [{"id": "!ee000001", "name": "Gateway", "snr": round(random.uniform(4, 13), 2)}]}
     ROUTES[dest] = rec
     for c in list(clients):
         try:
@@ -88,12 +88,12 @@ def _demo_history():
         a = i / 180 * 2 * _math.pi
         lat, lon = 51.50000 + 0.004 * _math.sin(a), -0.12001 + 0.006 * _math.cos(a)
         snr = 12 - 9 * abs(_math.sin(a * 2))
-        pos.append({"ts": ts, "node": "!dc0a12a5", "lat": round(lat, 6), "lon": round(lon, 6), "snr": round(snr, 1), "hops": 0})
-        pk.append({"ts": ts, "node": "!dc0a12a5", "port": "POSITION_APP", "snr": round(snr, 1), "hops": 0, "size": 24})
+        pos.append({"ts": ts, "node": "!ee000004", "lat": round(lat, 6), "lon": round(lon, 6), "snr": round(snr, 1), "hops": 0})
+        pk.append({"ts": ts, "node": "!ee000004", "port": "POSITION_APP", "snr": round(snr, 1), "hops": 0, "size": 24})
         if i % 10 == 0:
-            tel.append({"ts": ts, "node": "!dc0a12a5", "level": max(5, 90 - i // 2), "voltage": round(4.1 - i * 0.003, 2), "chutil": round(2 + 3 * abs(_math.sin(a)), 1), "airutil": round(0.3 + 0.5 * abs(_math.cos(a)), 2), "uptime": 3600 + i * 60})
+            tel.append({"ts": ts, "node": "!ee000004", "level": max(5, 90 - i // 2), "voltage": round(4.1 - i * 0.003, 2), "chutil": round(2 + 3 * abs(_math.sin(a)), 1), "airutil": round(0.3 + 0.5 * abs(_math.cos(a)), 2), "uptime": 3600 + i * 60})
         if i in (5, 60, 120):
-            msg.append({"ts": ts, "node": "!dc0a12a5", "name": "Tracker 4", "dest": "^all", "channel": 0, "text": ["at the start point", "halfway, all well", "heading back"][[5, 60, 120].index(i)], "snr": round(snr, 1)})
+            msg.append({"ts": ts, "node": "!ee000004", "name": "Tracker 4", "dest": "^all", "channel": 0, "text": ["at the start point", "halfway, all well", "heading back"][[5, 60, 120].index(i)], "snr": round(snr, 1)})
     return {"positions": pos, "telemetry": tel, "messages": msg, "packets": pk}
 DEMO_HISTORY = _demo_history()
 
@@ -114,32 +114,32 @@ def serve_one(c):
         c.sendall((json.dumps({"requested": "telemetry", "dest": req.get("dest")}) + "\n").encode()); c.close(); return
     if op in ("survey_start", "survey_stop", "survey_status"):
         rep = {"survey_start": {"started": True, "dest": req.get("dest"), "interval": int(req.get("interval") or 15), "minutes": int(req.get("minutes") or 10)},
-               "survey_stop": {"stopped": True, "dest": "!dc0a12a5", "asked": 4}, "survey_status": {"running": False}}[op]
+               "survey_stop": {"stopped": True, "dest": "!ee000004", "asked": 4}, "survey_status": {"running": False}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op == "health":
         tel = DEMO_HISTORY["telemetry"]; hourly = {}
         for r in tel: hourly.setdefault(r["ts"][:13], []).append(r["chutil"])
         c.sendall((json.dumps({"hours": 24, "region": "EU_868", "budget_pct": 10.0, "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "verdict": "normal", "air_share": round(tel[-1]["airutil"] / 10 * 100, 1), "packets": len(DEMO_HISTORY["packets"]), "packets_per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "nodes_heard": 1,
-                               "nodes": [{"id": "!dc0a12a5", "name": "Tracker 4", "packets": len(DEMO_HISTORY["packets"]), "per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "battery": tel[-1]["level"], "last_telemetry": tel[-1]["ts"], "own": False}],
+                               "nodes": [{"id": "!ee000004", "name": "Tracker 4", "packets": len(DEMO_HISTORY["packets"]), "per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "battery": tel[-1]["level"], "last_telemetry": tel[-1]["ts"], "own": False}],
                                "hourly": [{"hour": k + ":00Z", "chutil": round(sum(v) / len(v), 1)} for k, v in sorted(hourly.items())]}) + "\n").encode()); c.close(); return
     if op in ("profile", "profile_set", "drift", "drift_fix"):
         prof = {"role": "TRACKER", "tx_power": 20, "position_broadcast_secs": 900, "region": "EU_868", "modem_preset": "SHORT_FAST"}
         rep = {"profile": prof, "profile_set": {"written": {k: req.get(k) for k in prof}, "confirmed": True},
                "drift": {"profile": prof, "enforced": list(prof), "counts": {"in_line": 1, "drifted": 1, "unread": 2},
-                         "devices": [{"id": "!dc0a12a5", "name": "Tracker 4", "state": "in line", "diffs": [], "read_at": "2026-09-03T10:00:00Z", "managed": True},
-                                     {"id": "!57d9f894", "name": "Tracker 2", "state": "drifted", "diffs": [{"field": "tx_power", "is": 27, "should": 20}, {"field": "position_broadcast_secs", "is": 300, "should": 900}], "read_at": "2026-09-03T10:05:00Z", "managed": True},
-                                     {"id": "!8b96768b", "name": "Handset", "state": "unread", "diffs": [], "managed": False},
-                                     {"id": "!932f7d09", "name": "Relay 2", "state": "unread", "diffs": [], "managed": False}]},
+                         "devices": [{"id": "!ee000004", "name": "Tracker 4", "state": "in line", "diffs": [], "read_at": "2026-09-03T10:00:00Z", "managed": True},
+                                     {"id": "!ee000002", "name": "Tracker 2", "state": "drifted", "diffs": [{"field": "tx_power", "is": 27, "should": 20}, {"field": "position_broadcast_secs", "is": 300, "should": 900}], "read_at": "2026-09-03T10:05:00Z", "managed": True},
+                                     {"id": "!ee000003", "name": "Handset", "state": "unread", "diffs": [], "managed": False},
+                                     {"id": "!ee000006", "name": "Relay 2", "state": "unread", "diffs": [], "managed": False}]},
                "drift_fix": {"id": req.get("id"), "safe": {"written": ["tx_power", "position_broadcast_secs"], "confirmed": True, "read_back": {"tx_power": 20, "position_broadcast_secs": 900}}, "hard": None, "skipped": [], "confirmed": True}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op in ("rotation_status", "rotation_mark"):
         rep = {"rotation_status": {"rotation": {"ts": DEMO_HISTORY["messages"][0]["ts"], "index": 0, "name": "MESH-DEMO", "source": "rotated from the screen", "note": None},
-                                   "back": [{"id": "!dc0a12a5", "name": "Tracker 4", "heard": DEMO_HISTORY["messages"][1]["ts"]}, {"id": "!8b96768b", "name": "Handset", "heard": DEMO_HISTORY["messages"][2]["ts"]}],
-                                   "waiting": [{"id": "!57d9f894", "name": "Tracker 2"}, {"id": "!932f7d09", "name": "Relay 2"}], "counts": {"expected": 4, "back": 2, "waiting": 2}},
+                                   "back": [{"id": "!ee000004", "name": "Tracker 4", "heard": DEMO_HISTORY["messages"][1]["ts"]}, {"id": "!ee000003", "name": "Handset", "heard": DEMO_HISTORY["messages"][2]["ts"]}],
+                                   "waiting": [{"id": "!ee000002", "name": "Tracker 2"}, {"id": "!ee000006", "name": "Relay 2"}], "counts": {"expected": 4, "back": 2, "waiting": 2}},
                "rotation_mark": {"marked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "index": int(req.get("index") or 0), "name": "MESH-DEMO", "expected": 4, "confirmed": True}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op in ("alerts", "alert_settings", "alert_set", "alert_test"):
-        rep = {"alerts": {"open": [], "recent": [{"ts": DEMO_HISTORY["telemetry"][-1]["ts"], "node": "!dc0a12a5", "kind": "battery", "text": "Tracker 4 battery 5%", "state": "open", "cleared": None}], "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
+        rep = {"alerts": {"open": [], "recent": [{"ts": DEMO_HISTORY["telemetry"][-1]["ts"], "node": "!ee000004", "kind": "battery", "text": "Tracker 4 battery 5%", "state": "open", "cleared": None}], "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
                "alert_settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True},
                "alert_set": {"written": {k: req.get(k) for k in ("silent_min", "battery_pct", "unknown", "fence_m", "to_tak") if req.get(k) is not None}, "confirmed": True},
                "alert_test": {"sent": True, "observe": False, "note": "a GeoChat to All Chat Rooms"}}[op]
