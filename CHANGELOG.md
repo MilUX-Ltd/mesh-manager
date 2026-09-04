@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 0.5.0 (4 September 2026)
+
+The four slices carried on. Thirty-seven suites green.
+
+- **Roll back a release (Spec 030).** An update is one press and ten seconds, so a bad release
+  arrives just as fast, and the way back was an SSH session and a hand-run installer. Nothing
+  new is downloaded: a successful apply removes only the READY marker, so every release the box
+  has taken is still on disk. About lists them, checks the tarball's hash and re-applies one
+  through the same root unit an update uses, beside the last update log. It returns the code and
+  not the box's config, and says so. On a box in auto mode it says the checker will roll forward
+  again. `update_staged` and `update_rollback` join the catalogue.
+- **A GPS lamp on the state strip (Spec 031).** Where the box thinks it is decides where every
+  node is drawn relative to it and what position goes on its own CoT. The bridge already recorded
+  what each read of the receiver established and none of it reached the operator, so a box with
+  no fix looked exactly like a box with a good one until the map was wrong. Not answering, no fix
+  with satellites seen, or a fix with satellites used; the source and the time in the tooltip. A
+  box with no receiver says nothing rather than showing a lamp that can never go green.
+- **Ask a node for its name (Spec 032).** A device renamed over the air kept its old name until
+  it next broadcast, which on a quiet mesh is an hour, and the only way out was Forget, which
+  throws away everything the box has heard from a node to fix a label. A NODEINFO_APP sendData
+  with a handler, never a blocking helper; the node learns the gateway's name in the same
+  exchange. Fourth icon on the node row, after the three already there.
+- **A bench radio's own fix (Spec 033).** `bench_read` and `bench_export` carry what the device
+  says about its own receiver: the fix with its MGRS, age, satellites and altitude, or no fix, or
+  position switched off in its config, which is a setting and not a fault. The Bench page shows
+  it and offers the map at that point (`/map#at=lat,lon`).
+
+Also: sizes read as `20.6 MB` rather than `0 KB`; the update architecture is a config value
+(`UPDATE_ARCH`, default amd64) rather than the machine's own, because only amd64 is built and
+sniffing would send every arm box looking for a release that does not exist.
+
 ## 0.4.4 (4 September 2026)
 
 - **The demo carried real device identifiers.** Its sample nodes were built from captures of a

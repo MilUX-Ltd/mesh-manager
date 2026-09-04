@@ -463,6 +463,7 @@ class Bridge(TAKMeshtasticGateway):
                 "modem_preset": preset_name(lora.modem_preset) if lora else None,
                 "primary_channel": primary, "watchdog": self.watchdog_state, "position": self.own_position(),
                 "forwarded_counter": getattr(self.socket_client, "packets", None) if self.observe else None,
+                "gps": self.gps_state,
                 "state_dir": self.state_dir, "socket": self.socket_path}
 
     def op_nodes(self, **_):
@@ -1514,6 +1515,44 @@ class Bridge(TAKMeshtasticGateway):
         except Exception:  # noqa: BLE001
             return None
 
+    def _bench_position(self, iface):
+        """Spec 033: what the device on the cable says about its own receiver. Nothing is asked
+        of the mesh. Three states are told apart because they mean different things to whoever is
+        holding it: a fix, a receiver with no fix (indoors, the expected answer), and position
+        switched off in the device's own config, which is a setting and not a fault."""
+        try:
+            cfg = self._read_section("position", node=iface.localNode)
+            secs = int(getattr(cfg, "position_broadcast_secs", 0) or 0)
+            mode = int(getattr(cfg, "gps_mode", 0) or 0)
+        except Exception:  # noqa: BLE001
+            secs, mode = 0, 1
+        enabled = not (secs == 0 and mode in (0, 2))
+        out = {"enabled": enabled, "fix": False, "lat": None, "lon": None, "alt": None, "sats": None, "time": None}
+        if not enabled:
+            out["state"] = "position is switched off on the device"
+            return out
+        try:
+            pos = (iface.getMyNodeInfo() or {}).get("position") or {}
+        except Exception:  # noqa: BLE001
+            pos = {}
+        lat = pos.get("latitude")
+        lon = pos.get("longitude")
+        if lat is None and pos.get("latitudeI") is not None:
+            lat, lon = pos.get("latitudeI") / 1e7, (pos.get("longitudeI") or 0) / 1e7
+        if lat is None or lon is None or (lat == 0 and lon == 0):
+            out["state"] = "a receiver, but no fix"
+            return out
+        t = pos.get("time")
+        try:
+            from .mgrs import mgrs as _mgrs
+            grid = _mgrs(float(lat), float(lon))
+        except Exception:  # noqa: BLE001
+            grid = None
+        out.update({"fix": True, "lat": round(float(lat), 6), "lon": round(float(lon), 6),
+                    "alt": pos.get("altitude"), "sats": pos.get("satsInView"), "mgrs": grid,
+                    "time": utc(t) if t else None, "state": "a fix"})
+        return out
+
     def _bench_snapshot(self, iface):
         """What the device itself says: every figure from its own admin answers."""
         node = iface.localNode
@@ -1525,7 +1564,9 @@ class Bridge(TAKMeshtasticGateway):
         chans = [self._read_channel(i, node=node) for i in range(8)]
         ours = self._own_public_key()
         keys = [bytes(k) for k in sec.admin_key]
+        position = self._bench_position(iface)
         snap = {"id": u.get("id"), "long_name": owner["long_name"], "short_name": owner["short_name"], "hw": u.get("hwModel"),
+                "position": position,
                 "firmware": self._read_metadata(node=node), "region": region_name(lora.region), "modem_preset": preset_name(lora.modem_preset),
                 "role": role_name(device.role), "managed": bool(ours) and ours in keys, "admin_keys": len(keys),
                 "channels": [self._public(c) for c in chans if c["role"] != "DISABLED"]}
@@ -1541,7 +1582,8 @@ class Bridge(TAKMeshtasticGateway):
         except OSError:
             pass
         fn = os.path.join(d, utc(time.time()).replace(":", "-") + ".json")
-        doc = {"exported": utc(time.time()), "id": snap.get("id"), "hw": snap.get("hw"), "firmware": snap.get("firmware"), "owner": raw["owner"],
+        doc = {"exported": utc(time.time()), "id": snap.get("id"), "hw": snap.get("hw"), "firmware": snap.get("firmware"),
+               "position": snap.get("position"), "owner": raw["owner"],
                "config": {k: MessageToDict(raw[k]) for k in ("lora", "device", "security")},
                "channels": [{"index": c["index"], "name": c["name"], "role": c["role"], "psk": bytes(c.get("_psk") or b"").hex()} for c in raw["channels"]]}
         fd = os.open(fn, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1715,6 +1757,46 @@ class Bridge(TAKMeshtasticGateway):
         self.interface.sendData(telemetry_pb2.Telemetry(), destinationId=dest, portNum=portnums_pb2.PortNum.TELEMETRY_APP,
                                 wantResponse=True, onResponse=self._on_telemetry_answer)
         return {"requested": "telemetry", "dest": dest, "asked": utc(time.time())}
+
+    def op_request_nodeinfo(self, dest=None, **_):
+        """Spec 032: ask one node what it calls itself. A device renamed over the air keeps its
+        old name on the screen until it next broadcasts, which on a quiet mesh is an hour, and
+        the only way out was Forget, which throws away everything the box has heard from it to
+        fix a label. Sending our own User is what the protocol expects for this exchange, and
+        the node learns the gateway's name at the same time."""
+        if not dest:
+            return {"error": "dest is required"}
+        from meshtastic.protobuf import mesh_pb2, portnums_pb2
+        own = self._own() or {}
+        me = mesh_pb2.User(id=str(own.get("id") or ""), long_name=str(own.get("name") or ""), short_name=str(own.get("short") or ""))
+        self.interface.sendData(me, destinationId=dest, portNum=portnums_pb2.PortNum.NODEINFO_APP,
+                                wantResponse=True, onResponse=self._on_nodeinfo_answer)
+        return {"requested": "nodeinfo", "dest": dest, "asked": utc(time.time())}
+
+    def _on_nodeinfo_answer(self, p):
+        try:
+            from meshtastic.protobuf import mesh_pb2
+            d = p.get("decoded", {}) if isinstance(p, dict) else {}
+            u = mesh_pb2.User()
+            u.ParseFromString(d.get("payload") or b"")
+            nid = p.get("fromId") or self._num_id(p.get("from")) or (u.id or None)
+            if not nid:
+                return
+            nodes = getattr(self.interface, "nodes", None)
+            if nodes is None:
+                return
+            rec = nodes.setdefault(nid, {})
+            user = rec.setdefault("user", {})
+            if u.long_name:
+                user["longName"] = u.long_name
+            if u.short_name:
+                user["shortName"] = u.short_name
+            if u.hw_model:
+                user["hwModel"] = mesh_pb2.HardwareModel.Name(u.hw_model)
+            self._emit("nodeinfo", id=nid, name=user.get("longName"), short=user.get("shortName"),
+                       hw=user.get("hwModel"), ts=utc(time.time()))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"a nodeinfo answer could not be read: {type(e).__name__}: {e}")
 
     def _on_telemetry_answer(self, p):
         try:

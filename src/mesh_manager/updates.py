@@ -35,6 +35,15 @@ def _get(url, token, accept, timeout=15):
         return r.read()
 
 
+def config_arch(config):
+    """The architecture the release names. Only amd64 is built, so that is the default whatever
+    the box reports about itself; a box on another architecture names it in UPDATE_ARCH once a
+    release carries that file. Sniffing the machine here would send every arm box looking for a
+    release that does not exist."""
+    a = str((config or {}).get("UPDATE_ARCH") or "").strip().lower()
+    return a if re.fullmatch(r"[a-z0-9_]{2,12}", a or "") else "amd64"
+
+
 def _updates_dir(state_dir):
     d = os.path.join(state_dir, "updates")
     os.makedirs(d, exist_ok=True)
@@ -148,6 +157,70 @@ def download(rec, token, state_dir):
     with open(ready, "w") as fh:
         fh.write(paths["tgz"] + "\n")
     return {"ready": True, "dir": d, "tarball": paths["tgz"], "version": rec["version"]}
+
+
+def staged(state_dir, arch="amd64", running=None):
+    """What the box could return to: every release whose artefacts are still under updates/.
+
+    A successful apply removes only the READY marker, so the tarball, its .sha256 and the
+    installer that came with it stay on disk. Rolling back is applying one of those again.
+    """
+    out = []
+    root = os.path.join(state_dir, "updates")
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    for name in names:
+        d = os.path.join(root, name)
+        if not os.path.isdir(d) or vtuple(name) is None:
+            continue
+        tgz = os.path.join(d, f"mesh-manager-{name}-{arch}.tgz")
+        if not (os.path.exists(tgz) and os.path.exists(tgz + ".sha256") and os.path.exists(os.path.join(d, "install.sh"))):
+            continue
+        out.append({"version": name, "tarball": tgz, "size": os.path.getsize(tgz),
+                    "staged": utc(os.path.getmtime(tgz)), "running": name == str(running or "")})
+    out.sort(key=lambda r: vtuple(r["version"]) or (0, 0, 0), reverse=True)
+    return out
+
+
+def rollback(state_dir, version, running=None, mode="manual", arch="amd64", start_unit=None):
+    """Apply a release the box already has. The hash is checked before anything is marked
+    ready, because a roll back happens on a box that is already in trouble."""
+    version = str(version or "")
+    if not version:
+        return {"error": "no version given: name the release to return to"}
+    if version == str(running or ""):
+        return {"error": f"{version} is the running version; there is nothing to return to"}
+    rows = {r["version"]: r for r in staged(state_dir, arch=arch, running=running)}
+    if version not in rows:
+        return {"error": f"{version} is not on this box: nothing under updates/{version} with a tarball, its .sha256 and an installer"}
+    tgz = rows[version]["tarball"]
+    want = (open(tgz + ".sha256").read().split() or [""])[0].lower()
+    h = hashlib.sha256()
+    with open(tgz, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    got = h.hexdigest()
+    if not want or want != got:
+        return {"error": f"sha256 mismatch for {version}: the staged hash says {want[:12] or '?'}, the tarball on disk is {got[:12]}; refusing to roll back to it"}
+    ready = os.path.join(os.path.dirname(tgz), "READY")
+    with open(ready, "w") as fh:
+        fh.write(tgz + "\n")
+    os.utime(ready, None)          # update.sh takes the newest READY by mtime
+    rc = (start_unit or _systemctl_start)(UNIT)
+    if rc != 0:
+        try:
+            os.remove(ready)
+        except OSError:
+            pass
+        return {"error": f"could not start {UNIT} (exit {rc}): is the polkit rule from install.sh in place?", "version": version}
+    out = {"started": True, "version": version, "unit": UNIT,
+           "note": "the bridge and the screen restart; watch /healthz for the version. A roll back returns the code, not the box's config."}
+    if str(mode or "").lower() == "auto":
+        out["warning"] = ("updates are on auto, so the checker will apply the newest release again "
+                          "within the day; put updates on manual if this roll back is to stand")
+    return out
 
 
 def _systemctl_start(unit):

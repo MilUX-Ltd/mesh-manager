@@ -26,6 +26,7 @@ STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Es
           "radio_present": True, "bootloader": False, "connected": True, "last_activity": "2026-09-03T01:24:06Z",
           "last_forwarded": "2026-09-03T01:24:06Z", "nodes_seen": sum(1 for n in NODES if n.get("heard_here", True)), "nodes_db": len(NODES), "observe": False,
           "own": {"id": "!ee000001", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
+          "gps": {"reachable": True, "fix": True, "seen": 11, "used": 8, "checked": "2026-09-03T01:24:00Z", "via": "gpsd://127.0.0.1:2947"},
           "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
 CHANNELS = {"channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True},
                          {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
@@ -98,6 +99,21 @@ def _demo_history():
 DEMO_HISTORY = _demo_history()
 
 
+def answer_nodeinfo(dest):
+    """Spec 032: the node answers with what it calls itself, a couple of seconds later."""
+    time.sleep(2.0)
+    node = next((n for n in NODES if n["id"] == dest), None)
+    if not node:
+        return
+    rec = {"kind": "nodeinfo", "id": dest, "name": node["name"], "short": node.get("short"),
+           "hw": node.get("hw"), "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    for c in list(clients):
+        try:
+            c.sendall((json.dumps(rec) + "\n").encode())
+        except OSError:
+            pass
+
+
 def serve_one(c):
     f = c.makefile("rb")
     try:
@@ -116,6 +132,9 @@ def serve_one(c):
         rep = {"survey_start": {"started": True, "dest": req.get("dest"), "interval": int(req.get("interval") or 15), "minutes": int(req.get("minutes") or 10)},
                "survey_stop": {"stopped": True, "dest": "!ee000004", "asked": 4}, "survey_status": {"running": False}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "request_nodeinfo":
+        threading.Thread(target=answer_nodeinfo, args=(req.get("dest"),), daemon=True).start()
+        c.sendall((json.dumps({"requested": "nodeinfo", "dest": req.get("dest"), "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n").encode()); c.close(); return
     if op == "health":
         tel = DEMO_HISTORY["telemetry"]; hourly = {}
         for r in tel: hourly.setdefault(r["ts"][:13], []).append(r["chutil"])
@@ -231,7 +250,10 @@ def serve_one(c):
         time.sleep(2)
         rep = ({"path": req.get("path"), "id": "!ee000005", "long_name": REG.get("!ee000005", {}).get("name") or "New Device", "short_name": "NEW", "hw": "TRACKER_T1000_E", "firmware": "2.6.11",
                 "region": "UNSET", "modem_preset": "LONG_FAST", "role": "CLIENT", "managed": bool(REG.get("!ee000005", {}).get("managed")), "admin_keys": 1 if REG.get("!ee000005", {}).get("managed") else 0,
-                "channels": [{"index": 0, "name": "LongFast", "role": "PRIMARY", "has_key": True}]}
+                "channels": [{"index": 0, "name": "LongFast", "role": "PRIMARY", "has_key": True}],
+                "position": {"enabled": True, "fix": True, "lat": 51.500600, "lon": -0.119200, "alt": 21, "sats": 9,
+                             "mgrs": "30U XC 99928 09420", "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 900)),
+                             "state": "a fix"}}
                if op == "bench_read" else {"export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json", "bytes": 1840, "id": "!ee000005"})
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),

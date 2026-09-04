@@ -171,10 +171,12 @@ class Web:
         self.messages = collections.deque(maxlen=200)
         self.etc_dir = etc_dir
         self.stop = threading.Event()
+        self.arch = U.config_arch(config)
+        self.start_unit = None            # the suite substitutes systemctl here
         threading.Thread(target=self._pump, name="events-pump", daemon=True).start()
         threading.Thread(target=self._status_tick, name="status-tick", daemon=True).start()
         if self.update_mode() != "off":
-            U.Checker(self).start()
+            U.Checker(self, arch=self.arch).start()
 
     def github_token(self):
         try:
@@ -283,6 +285,16 @@ def run_action(web, aid, args, who):
         return 400, {"error": err}
     if action["op"] == "web:messages":
         return 200, {"messages": list(web.messages)}
+    if action["op"] == "web:update_staged":
+        return 200, {"staged": U.staged(web.state_dir, arch=web.arch, running=__version__)}
+    if action["op"] == "web:update_rollback":
+        out = U.rollback(web.state_dir, str(clean.get("version") or ""), running=__version__,
+                         mode=web.update_mode(), arch=web.arch, start_unit=web.start_unit)
+        if out.get("error"):
+            K.audit(web.etc_dir, who=who, event="refused", action=aid, error=out["error"])
+            return 400, out
+        K.audit(web.etc_dir, who=who, event="ran", action=aid, result=out.get("version"))
+        return 200, out
     if action["op"] == "web:map_sources":
         t = tile_sources(web.config, web.etc_dir)
         return 200, {"default": t["default"], "sources": [{k: v for k, v in x.items() if k != "url"} | {"url": x["url"]} for x in t["sources"]],
@@ -531,6 +543,29 @@ def state_strip(st):
         parts.append(f"<span>{e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</span>")
     if st.get("primary_channel"):
         parts.append(f"<span>primary <b>{e(st['primary_channel'])}</b></span>")
+    g = st.get("gps")
+    if isinstance(g, dict) and g:
+        # Spec 031: what the last read of the receiver established. Where the box thinks it is
+        # decides where every node is drawn relative to it, so a receiver with no fix should not
+        # look like a good one. A box with no receiver says nothing rather than showing a lamp
+        # that can never go green.
+        seen, used, via = g.get("seen"), g.get("used"), str(g.get("via") or "")
+        when = str(g.get("checked") or "")
+        if not g.get("reachable"):
+            glamp, gword, sats = "warn", "GPS not answering", ""
+        elif not g.get("fix"):
+            glamp, gword = "warn", "GPS no fix"
+            sats = f" · {int(seen)} sats seen" if isinstance(seen, int) else ""
+        else:
+            glamp, gword = "ok", "GPS fix"
+            sats = f" · {int(used)} sats used" if isinstance(used, int) else ""
+        tip = "  ".join(x for x in (
+            f"read from {via}" if via else "",
+            f"last read {when}" if when else "",
+            f"{int(seen)} seen" if isinstance(seen, int) else "",
+            f"{int(used)} used" if isinstance(used, int) else "") if x)
+        parts.append(f"<span class='word' data-tip='{e(tip)}' tabindex='0'>"
+                     f"<i class='lamp lamp--{glamp}'></i>{e(gword + sats)}</span>")
     if st.get("alerts_open"):
         n = int(st["alerts_open"])
         parts.append(f"<a href='/health#alerts' class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)'>{n} alert{'s' if n != 1 else ''}</a>")
@@ -1063,6 +1098,15 @@ OVERLAY_JS = r"""<script>
   map.on('moveend',drawGrid);map.on('zoomend',drawGrid);
   var gridBox=document.getElementById('grid-on');if(gridBox){try{gridBox.checked=localStorage.getItem('mm-grid')==='1';}catch(e){}gridBox.addEventListener('change',function(){try{localStorage.setItem('mm-grid',gridBox.checked?'1':'0');}catch(e){}drawGrid();});}
   var overlay=L.layerGroup().addTo(map),fitted=false,lastJ=null,ownLL=null;
+  // Spec 033: /map#at=lat,lon opens on a place, so a fix read off a device on the bench can be
+  // looked at where it is. Only two numbers are ever taken from the hash, and the marker sits on
+  // a layer of its own because the overlay is cleared on every redraw.
+  var benchAt=null,benchLayer=L.layerGroup().addTo(map);
+  (function(){var m=/^#at=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(window.location.hash||'');if(!m)return;
+    var la=parseFloat(m[1]),lo=parseFloat(m[2]);if(!(la>=-90&&la<=90&&lo>=-180&&lo<=180))return;
+    benchAt=[la,lo];
+    L.circleMarker(benchAt,{radius:9,color:tok('--gold'),weight:2,fillColor:tok('--gold'),fillOpacity:0.5})
+      .bindTooltip('read on the bench',{permanent:true,direction:'bottom',className:'mm-node'}).addTo(benchLayer);})();
   // a map fitted while its container had no size (a background tab, a hidden view, a page still laying out) is the whole world at
   // zoom 0; so the first fit only counts once the container has a size, and a resize or the tab coming back refits it (0.2.12)
   function sized(){var r=document.getElementById('map-geo').getBoundingClientRect();return r.width>40&&r.height>40;}
@@ -1104,7 +1148,8 @@ OVERLAY_JS = r"""<script>
     L.circleMarker(c,{radius:9,color:tok('--gold'),weight:2,fillColor:tok('--accent'),fillOpacity:1}).bindTooltip(own.name||'this box',{permanent:true,direction:'bottom',className:'mm-node'}).addTo(overlay);
     var nopos=(J.nodes||[]).filter(function(n){return n.heard_here!==false&&(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined);});
     var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>No position, not placed:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
-    if(!fitted&&sized()){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}}
+    if(!fitted&&sized()&&!benchAt){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}
+    if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}}
   var last=0;
   window.mmOverlay=function(){var now=Date.now();if(now-last<1500)return;last=now;fetch('/api/links').then(function(r){return r.json();}).then(function(J){draw(J);fetchTrails(false);}).catch(function(){});};
   show(chosen);last=0;window.mmOverlay();
@@ -1310,6 +1355,8 @@ ICONS = {
     "request_position": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M8 14.5s-4.5-4.2-4.5-8A4.5 4.5 0 0 1 12.5 6.5c0 3.8-4.5 8-4.5 8z'/><circle cx='8' cy='6.5' r='1.6'/></svg>",
     # battery: a cell with its terminal
     "request_telemetry": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='1.5' y='4.5' width='11' height='7' rx='1.2'/><path d='M14.5 7v2M4 7.5v1M6.5 7.5v1'/></svg>",
+    # ask for its name: an identity badge with a refresh arc over it
+    "request_nodeinfo": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='1.5' y='4' width='13' height='9' rx='1.5'/><circle cx='5.6' cy='7.6' r='1.4'/><path d='M3.4 11.2c.5-1 1.3-1.5 2.2-1.5s1.7.5 2.2 1.5M10 7h3M10 9.6h3'/></svg>",
     # name: a tag
     "name": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M2 2h5.5l6.5 6.5-5.5 5.5L2 7.5z'/><circle cx='5.2' cy='5.2' r='1'/></svg>",
 }
@@ -1476,9 +1523,22 @@ WRITE_JS = r"""<script>
       .then(function(x){show(el,x[0],x[1]);return x;})
       .catch(function(){if(el){el.textContent='could not ask the box';el.className='res meta bad';}return [0,{}];});
   }
+  function fixText(p){ // Spec 033: what the device says about its own receiver
+    if(!p)return '';
+    if(p.enabled===false)return ' · position switched off on the device';
+    if(!p.fix)return ' · a receiver, but no fix';
+    return ' · fix '+p.lat.toFixed(5)+', '+p.lon.toFixed(5)+(p.mgrs?' ('+p.mgrs+')':'')
+      +(p.sats?' · '+p.sats+' sats':'')+(p.alt!==null&&p.alt!==undefined?' · '+p.alt+' m':'')
+      +(p.time?' · fixed '+window.mmHm(p.time):'');}
+  function mapLink(host,p){ // built as a node, never as markup: the device's own strings are untrusted
+    var old=host?host.querySelector('a[data-benchmap]'):null;if(old){old.remove();}
+    if(!host||!p||!p.fix)return;
+    var a=document.createElement('a');a.setAttribute('data-benchmap','');a.className='line';
+    a.href='/map#at='+p.lat.toFixed(6)+','+p.lon.toFixed(6);a.textContent='Show it on the map';
+    host.appendChild(a);}
   function device(j){if(j.error)return 'could not read it: '+j.error;
     var ch=(j.channels||[]).map(function(c){return c.index+' '+(c.name||'(unnamed)')+' '+(c.role||'')+(c.has_key?' (key set)':'');}).join(', ');
-    return (j.long_name||'?')+' ('+(j.short_name||'?')+') · '+(j.id||'?')+(j.hw?' · '+j.hw:'')+' · firmware '+(j.firmware||'unknown')+' · '+(j.region||'?')+' '+(j.modem_preset||'?')+' · role '+(j.role||'?')+(j.tx_power!==undefined&&j.tx_power!==null?' · '+j.tx_power+' dBm':'')+(j.position_broadcast_secs?' · position every '+j.position_broadcast_secs+' s':'')+' · '+(j.managed?'managed by this radio':'not managed ('+(j.admin_keys===null||j.admin_keys===undefined?'?':j.admin_keys)+' admin keys)')+' · channels: '+(ch||'none')+(j.missing&&j.missing.length?' · no answer for '+j.missing.join(', '):'')+(j.read_at?' · read '+window.mmHm(j.read_at):'');}
+    return (j.long_name||'?')+' ('+(j.short_name||'?')+') · '+(j.id||'?')+(j.hw?' · '+j.hw:'')+' · firmware '+(j.firmware||'unknown')+' · '+(j.region||'?')+' '+(j.modem_preset||'?')+' · role '+(j.role||'?')+(j.tx_power!==undefined&&j.tx_power!==null?' · '+j.tx_power+' dBm':'')+(j.position_broadcast_secs?' · position every '+j.position_broadcast_secs+' s':'')+' · '+(j.managed?'managed by this radio':'not managed ('+(j.admin_keys===null||j.admin_keys===undefined?'?':j.admin_keys)+' admin keys)')+' · channels: '+(ch||'none')+(j.missing&&j.missing.length?' · no answer for '+j.missing.join(', '):'')+fixText(j.position)+(j.read_at?' · read '+window.mmHm(j.read_at):'');}
   document.addEventListener('submit',function(ev){var f=ev.target.closest('form[data-method=get]');if(!f)return;
     (function(){ev.preventDefault();ev.stopImmediatePropagation();
       var q=new URLSearchParams(new FormData(f)).toString();var host=f.closest('.card')||f.closest('td')||f.parentNode;var out=f.querySelector('.out')||(host?host.querySelector('.out'):null);var btn=f.querySelector('button');if(btn){btn.disabled=true;}
@@ -1487,7 +1547,7 @@ WRITE_JS = r"""<script>
         .then(function(x){if(btn){btn.disabled=false;}if(!out)return;var j=x[1];
           if(x[0]>=400||j.error){out.textContent='not done: '+(j.error||x[0]);out.className='out meta bad';return;}
           out.textContent=(f.dataset.render==='device'?device(j):('export written at '+window.mmNow()+': '+(j.export||'')+' ('+(j.bytes||0)+' bytes)'));out.className='out meta ok';
-          if(f.dataset.render==='device'){document.dispatchEvent(new CustomEvent('mm-device',{detail:{card:host,device:j}}));}})
+          if(f.dataset.render==='device'){mapLink(host,j.position);document.dispatchEvent(new CustomEvent('mm-device',{detail:{card:host,device:j}}));}})
         .catch(function(){if(btn){btn.disabled=false;}if(out){out.textContent='could not ask the box';out.className='out meta bad';}});})();},true);
   document.addEventListener('submit',function(ev){var f=ev.target.closest('form[data-action]:not([data-method=get]):not([id=send])');if(!f)return;
     (function(){ev.preventDefault();
@@ -2041,8 +2101,68 @@ def history_box(web):
             f"<div class='tablewrap'><table><thead><tr><th>Table</th><th>Rows</th><th>Oldest</th><th>Newest</th></tr></thead><tbody>{rows}</tbody></table></div>")
 
 
+def bytesize(n):
+    """A size a person reads. A release tarball is about 21 MB, so KB alone is unreadable, and
+    a small file must not round to '0 KB'."""
+    n = int(n or 0)
+    if n >= 1 << 20:
+        return f"{n / (1 << 20):.1f} MB"
+    if n >= 1024:
+        return f"{n // 1024} KB"
+    return f"{n} bytes"
+
+
+def rollback_box(web):
+    """Spec 030: the releases still on the box, each one press away. A bad release arrives in
+    ten seconds, so the way back should not be an SSH session."""
+    rows = U.staged(web.state_dir, arch=web.arch, running=__version__)
+    back = [r for r in rows if not r.get("running")]
+    if not back:
+        return ("<div class='card' id='rollback-box'><div class='k'>Roll back</div>"
+                "<div class='v'>nothing to roll back to</div>"
+                "<p class='meta'>A roll back re-applies a release this box has already taken, from what is still "
+                "staged on disk. Only the running version is here, so there is nothing to return to yet.</p></div>")
+    auto = web.update_mode() == "auto"
+    items = "".join(
+        f"<div class='row-actions' style='justify-content:space-between'>"
+        f"<span><b>{e(r['version'])}</b> <span class='meta'>· staged <time datetime='{e(str(r.get('staged') or ''))}' data-age>{e(age(str(r.get('staged') or '')))}</time>"
+        f" · {e(bytesize(r['size']))}</span></span>"
+        f"<button type='button' class='line' data-rollback='{e(r['version'])}'>Roll back to {e(r['version'])}</button></div>"
+        for r in back)
+    warn = ("<p class='meta' style='color:var(--warn)'>Updates are on <b>auto</b>, so the checker will apply the newest "
+            "release again within the day. Put updates on manual in Settings if a roll back is to stand.</p>") if auto else ""
+    return (f"<div class='card' id='rollback-box'><div class='k'>Roll back</div><div class='v'>{len(back)} release"
+            f"{'s' if len(back) != 1 else ''} still on this box</div>"
+            "<p class='meta'>Re-applies a release the box already has, checking its hash first. It returns the "
+            "<b>code</b> and not the box's config, which the installer keeps either way. The bridge and this screen "
+            "restart, so the mesh is off TAK for about a minute.</p>"
+            f"{warn}{items}<div class='res meta' id='rollback-res' role='status'></div></div>")
+
+
+ROLLBACK_JS = r"""<script>
+(function(){
+  function res(t,c){var r=document.getElementById('rollback-res');if(r){r.textContent=t;r.className='res meta '+(c||'');}}
+  document.querySelectorAll('[data-rollback]').forEach(function(b){b.addEventListener('click',function(){
+    var v=b.getAttribute('data-rollback');
+    if(!window.confirm('Roll back to '+v+'? The bridge and this screen restart, so the mesh is off TAK for about a minute. This returns the code, not the box\'s settings.'))return;
+    b.disabled=true;res('rolling back to '+v);
+    fetch('/api/update/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})})
+      .then(function(r){return r.json();}).then(function(j){
+        if(j.error){b.disabled=false;res(j.error,'bad');return;}
+        res('rolling back to '+v+(j.warning?(' — '+j.warning):'')+'; waiting for the box to come back');
+        var t0=Date.now();(function poll(){setTimeout(function(){
+          fetch('/healthz').then(function(r){return r.json();}).then(function(h){
+            if(h.version&&h.version===v){window.location.href='/about';}
+            else if(Date.now()-t0<600000){poll();}
+            else{res('the screen is back but on '+h.version+': read the last update log below','bad');}
+          }).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: read journalctl -u mesh-manager-update on the box','bad');}});},3000);})();})
+      .catch(function(){b.disabled=false;res('could not ask the box','bad');});});});
+})();
+</script>"""
+
+
 def about_body(st, web):
-    return (f"{update_box(web)}{UPDATE_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
+    return (f"{update_box(web)}{rollback_box(web)}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
             f"{card('Licence', 'GPL-3.0-or-later')}{card('Health contract', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
             f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}</div>"
             f"{history_box(web)}"
@@ -2488,6 +2608,14 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     rec = U.check(web.config, web.github_token(), web.state_dir, api=web.config.get("UPDATE_API"))
                     K.audit(web.etc_dir, who="operator", event="update-check", version=rec.get("version"), available=rec.get("available"), error=rec.get("error"))
                     return self._json(200, rec)
+                if path == "/api/update/staged":
+                    return self._json(200, {"staged": U.staged(web.state_dir, arch=web.arch, running=__version__), "running": __version__})
+                if path == "/api/update/rollback":
+                    out = U.rollback(web.state_dir, str(body.get("version") or ""), running=__version__,
+                                     mode=web.update_mode(), arch=web.arch, start_unit=web.start_unit)
+                    K.audit(web.etc_dir, who="operator", event="update-rollback", version=body.get("version"),
+                            started=out.get("started"), error=out.get("error"))
+                    return self._json(400 if out.get("error") else 200, out)
                 if path == "/api/update/apply":
                     want = str(body.get("version") or "")
                     rec = U.last_check(web.state_dir)
