@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mesh-manager"
+description = "Manage a Meshtastic mesh and its devices from the box that carries the gateway radio, and bridge it into TAK."
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+requires-python = ">=3.10"
+dynamic = ["version"]
+# Runtime libraries come from the release's wheel set (the gateway wheel and the pinned
+# dependency set in release/cut-release.sh); install.sh installs both packages from it with
+# no index. Only what this package needs beyond the gateway's own dependencies is declared,
+# at the release's pin, because a wheel sitting in the bundle that nothing declares is not
+# installed (LESSONS 6; found again on the kit, 3 Sep 2026, when the QR route had no library).
+dependencies = ["PyQRCode==1.2.1"]
+
+[project.scripts]
+mesh-manager-bridge = "mesh_manager.bridge:main"
+mesh-manager-web = "mesh_manager.web:main"
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+packages = ["mesh_manager"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.package-data]
+mesh_manager = ["PINS.json", "mesh-lessons.md", "static/leaflet/*", "static/leaflet/images/*.png"]

@@ -1,0 +1,350 @@
+# Changelog
+
+## Unreleased
+
+## 0.4.3 (4 September 2026)
+
+- A release is one anyone can install, so a box checks the public repository by default; a box
+  that should take its releases from somewhere else names it in `UPDATE_REPO`. The previous
+  release pointed every installation at a repository only its author can read.
+- The public README pointed at five documents that do not travel with the product (the
+  decision records, the specs, the lessons, the contributing gates and the context note), so
+  its closing section now names what the tree actually carries. Its status line no longer
+  carries a version number that goes stale on the next release.
+- The banner sits at `assets/`, so it draws on the front page of the public repository, and
+  the public cut no longer carries build detritus.
+
+## 0.4.2 (4 September 2026)
+
+- The source repository is now `MilUX-Ltd/milux-mesh-manager`, so the firm's own repositories
+  carry the `milux-` prefix and the product's own name is free for the public one, as
+  `the MilUX gateway repository` is to `vantage`. A box looks there for its updates; the public repository
+  carries the product, not the update channel. A box installed before this keeps working
+  either way, because the old name redirects until the public repository takes it, and this
+  release moves the default before that happens.
+  The name had been written in two places, the config's defaults and the update module's, and
+  moving one left a box still checking the other. There is one now, and a check that says so.
+
+## 0.4.1 (4 September 2026)
+
+- The node rows carry three ask icons again. Adding the coverage survey as an action that
+  takes a node put a fifth button on every row with its title as the label, which broke the
+  layout; the row now takes only the quick asks, those whose one input is the node, and only
+  those with an icon. The survey's own form is on the Map page, where it was.
+- The map no longer abandons the imagery on one bad tile. A single transient error used to
+  switch to whichever of the box's own map sets came first, which on a box carrying sets for
+  another country left a blank map and no obvious way back. It now waits for several failures
+  in a row, picks a set whose bounds actually cover where you are looking, and says which one
+  it chose; if none covers you it says that instead and leaves the map alone.
+
+- The demo is part of the product: `python3 -m mesh_manager.demo` runs the screen with no
+  radio behind it, with made-up devices rather than a copy of anyone's estate. It was a test
+  file; it ships now, so the instruction to try it without hardware works from a clean
+  checkout.
+- `release/cut-public.sh` assembles the public tree, the product and its user documents, and
+  refuses to finish if the staged files still carry an estate address, a board reference, a
+  local path or the name of the private repository. `release/third-party.py` writes
+  `THIRD-PARTY.md` and `LICENSES/` from the release that actually ships, naming the three
+  dependencies whose wheels carry no licence text rather than passing over them.
+- Said plainly in the installer, the screen and the firmware pins: what used to name an
+  internal repository now names the thing itself. One of those lines was on the Bench page,
+  where it told an operator their firmware came from somewhere they have no access to.
+
+## 0.4.0 (4 September 2026)
+
+- The public face: a mark and a banner in the house style (four nodes, every link drawn, the
+  gateway radio at the centre in the accent colour), the strapline "Manage the mesh from the
+  box that carries the radio", and a README written for a reader who has never seen the
+  product, with what it does, what it needs, how to install and update it, how to try it
+  without a radio, the licence and why it is GPL, and the trademark position.
+
+## 0.3.9 (4 September 2026)
+
+- Map sources from TAK (Spec 029): any ATAK `<customMapSource>` XML in the box's map folder
+  becomes a layer, so imagery that works in ATAK works here without conversion (ATAK's
+  `{$z}/{$x}/{$y}` placeholders and its zoom and tile-type fields are honoured, and a
+  quadkey source is listed with the reason it cannot be drawn). A form on the Map page adds
+  one from a pasted XML or a tile URL template, saved on the box so every browser sees it;
+  `map_sources`, `map_source_add` and `map_source_remove` join the catalogue. Google hybrid
+  stays the default and the operator switches in the layer control.
+
+## 0.3.8 (4 September 2026)
+
+- Config drift (Spec 028): a fleet profile on the box (role, power, position interval,
+  region, preset; unset fields unenforced), every read of a device leaves a snapshot in the
+  register, and the Register page compares each device against the profile: in line,
+  drifted with each field's is and should, or never read; a press brings a managed device
+  into line over the air, power and interval by default, region, preset and role with the
+  confirm naming the device.
+
+## 0.3.7 (4 September 2026)
+
+- The key rotation checklist (Spec 027): a rotation from the screen marks itself, one done
+  elsewhere is marked by hand (`rotation_mark`), and the Channels page then counts every
+  expected device (the register plus anyone heard in the last week) back on the new key as
+  the radio hears it (`rotation_status`), refreshed as packets arrive.
+
+## 0.3.6 (4 September 2026)
+
+- Alerts that reach TAK (Spec 026): every minute the box judges four conditions, a
+  registered device silent past a threshold, a battery under a threshold, a node not in the
+  register, a node outside a fence around the box; each is one row in the history, one event
+  for the screen and one GeoChat to All Chat Rooms on the TAK Server (counted in observe
+  mode); thresholds set on the Health page (`alert_set`), a test button (`alert_test`), the
+  open count on the state strip.
+
+## 0.3.5 (4 September 2026)
+
+- Telemetry over time (Spec 025): a node page (`/node?id=`), reached from the node's name on
+  the Nodes table, with its facts, battery and voltage charts over 24 h or 7 d from the
+  history store (the 20% line drawn, on-charge stretches noted), its last messages and its
+  positions in the window.
+
+## 0.3.4 (4 September 2026)
+
+- Mesh health (Spec 024): a Health page (More) with the gateway's channel utilisation and
+  its verdict (quiet, normal, busy, saturated), its transmit air time against the region's
+  duty-cycle budget (10% on EU_868), packets per hour, nodes heard, a chart of utilisation
+  by the hour and a per-node table; `health` in the catalogue; a Mesh health card on the
+  overview.
+
+## 0.3.3 (4 September 2026)
+
+- MGRS and the grid (Spec 023): every position on the screen carries its MGRS beside the
+  degrees (the node rows, the map legend, a readout on the map following the mouse); a grid
+  control draws 1 km UTM lines from zoom 13 (10 km below) with the kilometre digits along
+  the edges. The arithmetic is in `mgrs.py` and mirrored in the overlay.
+
+## 0.3.2 (4 September 2026)
+
+- Coverage survey (Spec 022): a coverage layer on the map, every heard position as a dot
+  coloured by its signal band over a window (off, 3 h, 24 h, 7 d), hollow when it came
+  through a relay; and survey mode, which asks one node for its position on an interval while
+  someone walks it, so the layer fills in (`survey_start`, `survey_stop`, `survey_status`).
+
+## 0.3.1 (4 September 2026)
+
+- Track trails (Spec 021): each node's positions over a window (1, 3, 12 or 24 hours, or
+  off) drawn under the markers, fading with age, a colour per node, hover for the node and
+  the time; a jump over 2 km is not drawn.
+
+## 0.3.0 (4 September 2026)
+
+- The history store (Spec 020): positions, device telemetry, messages and packets the box
+  hears are kept in SQLite under the state directory (30 days, 200 000 rows a table) and
+  survive a restart; `history` and `history_summary` join the catalogue; the Messages page
+  seeds from the store after a restart; About shows what the box remembers. The first of the
+  0.3 kit slices.
+
+## 0.2.12 (4 September 2026)
+
+- A map fitted while its container had no size (a background tab, a hidden view, a page
+  still laying out) showed the whole world at zoom 0 and stayed there. The first fit now
+  waits for the container to have a size, and a resize, the tab coming back or the view
+  being shown refits it.
+- Centre on me (Matt): a button under the zoom control gives a one-kilometre view with this
+  box in the middle; disabled, with a tooltip saying so, while the box has no position.
+
+## 0.2.11 (4 September 2026)
+
+- The icon buttons say what they do the moment you hover or focus them (Matt): an instant
+  tooltip with the name and a one-line description, placed by script so no table clips it.
+
+## 0.2.10 (4 September 2026)
+
+- Shorter node rows, so more nodes fit without scrolling (Matt): the three asks and the
+  Name control are icon buttons with the words in their tooltips and labels; the battery's
+  voltage and age share one small line; the sparkline's last, best and worst figures are
+  its tooltip; an empty result line takes no room. A live refresh of the Nodes table now
+  keeps an open Name control and never replaces a row the operator is typing in.
+
+## 0.2.9 (3 September 2026)
+
+- A density pass on the screen (Matt: "everything is quite big"): base type 14 px, the tap
+  token 32 px (buttons, inputs, fold controls), table cells at 4/8 px, smaller headings,
+  labels, pills and sparklines. Spec 007's 44 px targets give way to the operator's ask; the
+  tokens make it one line to change back.
+
+## 0.2.8 (3 September 2026)
+
+- The range rings read better on imagery: a gold line of weight 2 over a deep-green halo, dashed 4/6, both under the slider.
+
+## 0.2.7 (3 September 2026)
+
+- Batteries that are current (Spec 019): the radio's node database is a fallback only for a node
+  heard in the last day, and the figure carries that time as its age; a node heard weeks ago
+  reads "no reading". The bridge's battery store survives a restart. "Ask for a battery" on every
+  row (`request_telemetry`), and the bridge asks every node heard in the last day on its own,
+  every half hour (`TELEMETRY_ASK_SECS`, 0 to turn it off).
+- "Forget the stale" on the Register page (`nodes_forget_stale`): every node not heard for a
+  number of days leaves the radio's database in one press.
+- The map in a window of its own: `/map/full` and a Pop out control on the Map page.
+- The range rings follow the zoom (three rings inside the view, at 1, 2 or 5 x 10^n metres) and a
+  slider sets their opacity from solid to invisible.
+
+## 0.2.6 (3 September 2026)
+
+- Battery truth (Spec 018): the bridge keeps each node's battery from the telemetry it hears,
+  newest wins (the vendored gateway kept the highest of two records), with the voltage and
+  the time; the library's node database and the gateway's figure are the fallbacks; a level
+  above 100 means on external power and reads "on charge", never "101%".
+- A stored or manually set radio position is no longer a source for the box's own position:
+  nothing real means no position, and the plan view places nodes by hops.
+
+## 0.2.5 (3 September 2026)
+
+- gpsd's answer stands, fix or no fix: a reachable gpsd without a fix (indoors) no longer sends
+  the bridge to open the port gpsd holds, so the once-a-minute "multiple access" warning goes;
+  the map says "GPS receiver connected, no fix yet (N satellites seen, M used): placed among
+  the devices it hears". A receiver that loses its fix stops placing the box after two misses.
+
+## 0.2.4 (3 September 2026)
+
+- Forget a node (Spec 017): a duplicate or a radio no longer used leaves the gateway radio's
+  database and the box's lists from the Register page, its label and holder kept or dropped.
+- Every Ask control says "asking the box" the moment it is pressed; a position request no
+  longer blocks the bridge (the library's blocking wait, as with traceroute) and the answer
+  lands in the row as "position received".
+- The receiver is read through gpsd when the box runs it (the kit does, and it holds the
+  port), else from the port as before.
+- The screen's unit can write under /etc/mesh-manager and the state directory (ProtectSystem
+  had made /etc read-only: the audit, the brief, minted connections and the GitHub token could
+  not be written on a real box).
+- Leaflet's images ship in the wheel, so the layer control has its icon.
+
+## 0.2.3 (3 September 2026)
+
+- Updates from GitHub (Spec 015): the screen checks the repository's releases daily with a
+  read-only token entered on Settings (or `--github-token-file` at install), shows an update
+  in the header and on About with its notes, and on Update now downloads the release, checks
+  its hash and starts `mesh-manager-update.service`, a root helper the installer adds under a
+  polkit rule that names that one unit, which installs it with the box's config kept; `auto`
+  does the same on its own; `off` never talks to GitHub. `release/publish-release.sh`
+  publishes every merged version as a pre-release with the three files.
+- Display names (Spec 016): the register's label is shown wherever a node is named, with the
+  radio's own name kept in the second line; a Name control on every node row.
+- Google satellite and terrain join hybrid and roads on the map's layer control.
+- The screen's directory under /etc is writable by the screen's user, so connections, the
+  brief, the audit and the token can be written on a real box.
+
+## 0.2.2 (3 September 2026)
+
+- The box knows where it is (Spec 014): a fix from the box's own GPS receiver (found by its
+  by-id name, or `--gps`), else the gateway radio's own GPS fix, else the position declared at
+  install, else an estimate among the devices it hears, else the radio's stored position; the
+  map says which. The receiver is never a bench device. `install.sh --no-map-position` clears a
+  declared position so the receiver or the devices place the box.
+
+## 0.2.1 (3 September 2026), the first beta
+
+- The map overlay (Spec 013): the mesh drawn over tiles, Google hybrid by default, Google roads
+  and OpenStreetMap on the layer control, and the box's own MBTiles sets served by the screen
+  from `MAP_MBTILES_DIR` (`/opt/tak-maps` on the kit) with their attribution; the map switches
+  to the box's own tiles when the internet ones fail; the plan view stays one press away and is
+  what shows when the box has no position. Leaflet 1.9.4 vendored (BSD-2-Clause). The installer
+  takes `--tiles` and `--mbtiles-dir`.
+
+- The position declared at install (`--map-lat`/`--map-lon`) beats the gateway radio's own
+  stored fix on the map; the kit's Heltec, with no GPS, carried a fix 330 km from the bench.
+- The bench names the box's GPS receiver as what it is and offers nothing on it.
+- A new release restarts the bridge (LESSONS 22).
+
+- The Help page (Spec 012): the kit guide, the region check against what the installer
+  declared, the shelf with the recovery images marked, the mesh lessons from the file the
+  agent reads (shipped in the package), the four states of a write, where things are.
+
+- Restore and firmware on the bench (Spec 010): a device's exports listed and restored to it
+  (owner, channels, lora, device and position, each read back; its own keys untouched; an
+  export from another device only as a deliberate clone); the firmware shelf from the
+  release's pins (`firmware/PINS.json`: T1000-E 2.6.11 and 2.7.26, Heltec V3 and V4 2.7.26
+  with their factory images, the nRF52 factory-erase images), each verified against its
+  sha256 on the box; a flash from the Bench page that exports first, refuses a pin for other
+  hardware, an unverified image or a missing confirm, then writes nRF52 devices through
+  their UF2 bootloader (udisks, with a polkit rule the installer adds for the bridge's
+  user) or ESP32 devices with esptool from the release's wheels, and reads the version back;
+  a flash that does not come back names the recovery step and never reads as done.
+
+## 0.2.0 (3 September 2026)
+
+- Over the air (Spec 011): a managed device is read and written from the box through the
+  gateway radio under its admin key. `node_read` asks the device itself for names, region,
+  preset, role, power, position interval, whether our key is still among its admin keys and
+  its first channel slots; `node_set`, `node_set_region`, `node_channel_push` and
+  `node_reboot` write and read back from the device's own answers, the session passkey asked
+  for first, every answer in the four states; an unmanaged device gets "bring it to the
+  bench" and nothing on the air; region, slot 0 and reboot confirm by naming the device.
+  The Register page opens Manage on a managed row; several admin round trips to one device
+  now go out together and are waited for in one window.
+
+- The register and the bench (Spec 009): a fleet register on the box (label, holder, note,
+  hardware, firmware, role, managed) joined with the radio's node list on radio id and nothing
+  else, the node's own name beside the operator's label; a Bench page listing the USB devices
+  by their by-id name with the gateway's own radio never offered and a bootloader device
+  flagged with its recovery step; Read, Export (owner, config and channels with keys, under
+  the state directory at 0600) and Onboard (names, role, the gateway's primary channel and
+  key, its region and preset, its public key as an admin key, every one read back from the
+  device, the register updated, refused when three foreign keys fill the list). Six new
+  catalogue actions, so agents get them as tools.
+
+- The map and the link bar (Spec 008): the Mesh page opens on the mesh as a picture, this box
+  at the centre, every heard node about it by geography when the box has a position (the
+  radio's fix, or MAP_LAT/MAP_LON set at install with `--map-lat` and `--map-lon`) and by hop
+  rings when it has not; links coloured by the SNR of the last direct packet with the figure on
+  them, dashed for relayed-only nodes, none for database-only ones; each traceroute answer
+  drawn hop to hop; a Map page under More; `/fragment/map` and `/fragment/route/<id>`.
+- Traceroute no longer blocks: the bridge sends the request with its own handler and answers
+  "asked" at once; the answer becomes a route record (hops out and back with quarter-dB
+  figures, unknown as null) and a `route` event; the node row shows it as a link bar.
+- The bridge keeps a link store: 200 SNR readings per node and the last direct SNR; `links`
+  and `route` join the catalogue as read actions, so agents get them as tools.
+- A sparkline of the last 40 readings beside each heard node's signal glyph, with last, best
+  and worst.
+
+**Slices 1 to 3 built overnight, 3 September 2026**.
+
+- **The bridge carried in.** The patched TAK-Meshtastic-Gateway tree from the MilUX gateway repository's V2
+  branch (commit 6e072c7) lives under `bridge/` as three patches with provenance headers,
+  plus the TAK V2 dictionaries with pinned hashes. `release/cut-release.sh` cuts
+  `mesh-manager-<ver>+milux.<rev>-<arch>.tgz` (the gateway wheel and the product's wheel built
+  here, every dependency wheel at the estate-proven pins, licences, `RELEASE.json`);
+  `--check` verifies the tree with no network. `install/install.sh` installs with no
+  network, creates the TAK input with its filter group only if absent, keeps the heartbeat
+  path as the health contract, adopts a box running the earlier gateway (stops and disables
+  the old unit, keeps its file as the rollback), and never runs a firewall tool. Rehearsed
+  offline on the deployable kit in a throwaway venv: the venv built from the bundled wheels
+  alone and the live V2 capture decoded on the box.
+- **The bridge as a package.** `mesh-manager-bridge` subclasses the gateway, runs its loop on a
+  thread, waits for an absent radio instead of crashing, keeps a log ring, writes the
+  heartbeat to a configurable state directory, and answers on a unix socket: status, nodes,
+  channels (never the key), config, log, send_text, traceroute, request_position, and a live
+  event stream. Liveness is measured at the serial read loop and reported to systemd's
+  watchdog; a radio that is absent or in bootloader mode is waited for, not restarted into.
+  Observe mode listens only. Proven live on the kit's second radio as an unprivileged user:
+  ten nodes with fresh signal, the database-only node flagged as not heard, the running
+  gateway untouched.
+- **The screen.** `mesh-manager-web`, loopback by default: sign-in with a PBKDF2 hash and a
+  signed cookie, throttling, Overview, Nodes, Log and Channels live over SSE, the primary
+  channel's QR rendered server-side with the key and the join URL in no page, URL or log,
+  About, a JSON API. MilUX palette. Proven on the kit on loopback and in a browser on this
+  machine against a fake bridge.
+- **Messages and on-air requests from the screen (slice 5, the on-air half).** A Messages
+  page with the chat the bridge has heard or sent and a form to send to a channel or a node,
+  200 bytes at most, with the every-device confirm; Traceroute and Ask-position controls per
+  node; a Radio page showing this radio's settings, read only. Proven on the kit: a message
+  sent from the screen path went out on the primary channel from the second radio, and a
+  traceroute was asked of a live tracker.
+- **The AI surface (slice 8).** One catalogue drives the screen's routes and forms and the
+  MCP's tools, with a parity test. `/mcp` (JSON-RPC 2.0) with hashed bearer tokens minted on
+  the Connections page or by `mesh-manager-web --mint-connection` at an operator-set
+  autonomy: observe sees the reads and `mesh_context`; propose adds the on-air actions and
+  `propose`, which queues anything for a person on the Activity page; act everything the
+  catalogue carries. Every call, proposal, run and dismissal is audited under the connection's
+  name and shown on Activity. Settings holds the standing brief served as `mesh_context`.
+  The role and the first two skills are in the repository, unaudited and held back from the
+  release until Matt audits them. Proven on the kit: a connection minted, `initialize`,
+  `tools/list` (twelve tools at propose), `status`, `mesh_context` and `nodes` called, a
+  message proposed by the agent and run by a person from the Activity path, all audited.
+- **Found by the rehearsal, not the suites.** The bridge subscribed to pubsub before the
+  gateway and declared the topic differently, so the gateway's own subscription failed
+  (LESSONS 16). The QR library sat in the wheel set with nothing declaring it (LESSONS 6,
+  again). The radio's debug log arrives with colour codes; they are stripped.

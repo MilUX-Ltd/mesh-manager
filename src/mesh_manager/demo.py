@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""A demo bridge: the screen with no radio behind it (docs/DEMO.md).
+
+It answers every action the real bridge does, with made-up devices and a few hours of one
+tracker's morning, so the map, the node pages and the health page have something to show.
+Nothing here touches hardware; every write is answered, none is sent.
+
+    python3 -m mesh_manager.demo /tmp/mm-demo.sock
+"""
+import json
+import os
+import random
+import socket
+import sys
+import threading
+import time
+
+PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/fake-bridge.sock"
+NODES = [
+    {"id": "!dc0a12a5", "name": "Tracker 4", "battery": 81, "lat": 51.500000, "lon": -0.120000, "heard": "2026-09-03T01:23:55Z", "snr": 13.0, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR4"},
+    {"id": "!57d9f894", "name": "Tracker 2", "battery": 9, "lat": 51.500180, "lon": -0.119700, "heard": "2026-09-03T01:20:11Z", "snr": 9.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR2"},
+    {"id": "!8b96768b", "name": "Handset", "battery": 29, "lat": 51.499910, "lon": -0.120400, "heard": "2026-09-03T01:22:16Z", "snr": 11.25, "hops": 0, "heard_here": True, "hw": "RAK4631", "short": "S413"},
+    {"id": "!932f7d09", "name": "Relay 2", "battery": None, "heard": None, "snr": None, "hops": None, "heard_here": False, "hw": "TRACKER_T1000_E", "short": "T2"},
+]
+STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_A4:CB:8F:A7:C4:0C-if00",
+          "radio_present": True, "bootloader": False, "connected": True, "last_activity": "2026-09-03T01:24:06Z",
+          "last_forwarded": "2026-09-03T01:24:06Z", "nodes_seen": sum(1 for n in NODES if n.get("heard_here", True)), "nodes_db": len(NODES), "observe": False,
+          "own": {"id": "!a7c40c00", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
+          "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
+CHANNELS = {"channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True},
+                         {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
+            "url": "https://meshtastic.org/e/#CgcSAQEoATABEg8IATgBQANIAVAeaAHABgE"}
+LOG = ["[01:23:55] INFO Sending <event uid=\"!dc0a12a5\" type=\"a-f-G-U-C\"> Tracker 4",
+       "[01:24:02] INFO [radio] AGC reset (fixed) DC Cal. Mode 1",
+       "[01:24:06] INFO Sending <event uid=\"ANDROID-7b40d9b887a4ec20\" callsign=\"MilUX\"> (TAK V2, port 78)"]
+clients = []
+HISTORY = {n["id"]: [] for n in NODES}
+for _n in NODES[:3]:
+    for _k in range(12):
+        HISTORY[_n["id"]].append([time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - (12 - _k) * 60)), round(random.uniform(5, 13), 1), 0])
+ROUTES = {"!dc0a12a5": {"dest": "!dc0a12a5", "ts": "2026-09-03T01:20:00Z", "hops": 1,
+                        "towards": [{"id": "!57d9f894", "name": "Tracker 2", "snr": 9.5}, {"id": "!dc0a12a5", "name": "Tracker 4", "snr": 6.25}],
+                        "back": [{"id": "!57d9f894", "name": "Tracker 2", "snr": 8.0}, {"id": "!a7c40c00", "name": "Gateway", "snr": None}]}}
+
+
+REG = {"!dc0a12a5": {"label": "Tracker 4", "holder": "the operator", "managed": True, "firmware": "2.6.11", "role": "TRACKER", "managed_at": "2026-09-02T10:00:00Z"},
+       "!8b96768b": {"label": "Handset", "holder": "the operator", "managed": False}}
+
+
+def register():
+    rows = []
+    for n in NODES:
+        r = REG.get(n["id"], {})
+        rows.append(dict(n, label=r.get("label", ""), holder=r.get("holder", ""), firmware=r.get("firmware"), role=r.get("role"), managed=bool(r.get("managed")), managed_at=r.get("managed_at")))
+    for nid, r in REG.items():
+        if nid not in {n["id"] for n in NODES}:
+            rows.append({"id": nid, "name": r.get("name") or nid, "heard_here": False, "heard": None, "label": r.get("label", ""), "holder": r.get("holder", ""), "hw": r.get("hw"),
+                         "firmware": r.get("firmware"), "role": r.get("role"), "managed": bool(r.get("managed")), "managed_at": r.get("managed_at"), "bench_only": True})
+    return {"rows": rows, "count": len(rows)}
+
+
+def links():
+    nodes = [dict(n, direct_snr=(n.get("snr") if n.get("hops") == 0 else None), history=HISTORY.get(n["id"], [])) for n in NODES]
+    return {"own": {"id": "!a7c40c00", "name": "Gateway", "lat": 51.5000, "lon": -0.1200, "position_source": "config"}, "nodes": nodes, "routes": ROUTES}
+
+
+def answer_traceroute(dest):
+    time.sleep(2.5)
+    node = next((n for n in NODES if n["id"] == dest), None)
+    rec = {"dest": dest, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "hops": 0,
+           "towards": [{"id": dest, "name": node["name"] if node else dest, "snr": round(random.uniform(4, 13), 2)}],
+           "back": [{"id": "!a7c40c00", "name": "Gateway", "snr": round(random.uniform(4, 13), 2)}]}
+    ROUTES[dest] = rec
+    for c in list(clients):
+        try:
+            c.sendall((json.dumps(dict(rec, kind="route")) + "\n").encode())
+        except OSError:
+            clients.remove(c)
+
+
+import math as _math
+def _demo_history():
+    """A morning's worth: Tracker 4 walking a loop, telemetry every ten minutes, a few messages."""
+    pos, tel, msg, pk = [], [], [], []
+    t0 = time.time() - 3 * 3600
+    for i in range(0, 180):
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t0 + i * 60))
+        a = i / 180 * 2 * _math.pi
+        lat, lon = 51.50000 + 0.004 * _math.sin(a), -0.12001 + 0.006 * _math.cos(a)
+        snr = 12 - 9 * abs(_math.sin(a * 2))
+        pos.append({"ts": ts, "node": "!dc0a12a5", "lat": round(lat, 6), "lon": round(lon, 6), "snr": round(snr, 1), "hops": 0})
+        pk.append({"ts": ts, "node": "!dc0a12a5", "port": "POSITION_APP", "snr": round(snr, 1), "hops": 0, "size": 24})
+        if i % 10 == 0:
+            tel.append({"ts": ts, "node": "!dc0a12a5", "level": max(5, 90 - i // 2), "voltage": round(4.1 - i * 0.003, 2), "chutil": round(2 + 3 * abs(_math.sin(a)), 1), "airutil": round(0.3 + 0.5 * abs(_math.cos(a)), 2), "uptime": 3600 + i * 60})
+        if i in (5, 60, 120):
+            msg.append({"ts": ts, "node": "!dc0a12a5", "name": "Tracker 4", "dest": "^all", "channel": 0, "text": ["at the start point", "halfway, all well", "heading back"][[5, 60, 120].index(i)], "snr": round(snr, 1)})
+    return {"positions": pos, "telemetry": tel, "messages": msg, "packets": pk}
+DEMO_HISTORY = _demo_history()
+
+
+def serve_one(c):
+    f = c.makefile("rb")
+    try:
+        req = json.loads(f.readline().decode())
+    except Exception:  # noqa: BLE001
+        c.sendall(b'{"error": "bad request"}\n'); c.close(); return
+    op = req.get("op")
+    if op == "events":
+        c.sendall(b'{"kind": "hello"}\n'); clients.append(c); return
+    if op == "traceroute":
+        threading.Thread(target=answer_traceroute, args=(req.get("dest"),), daemon=True).start()
+        c.sendall((json.dumps({"requested": "traceroute", "dest": req.get("dest"), "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n").encode()); c.close(); return
+    if op == "request_telemetry":
+        c.sendall((json.dumps({"requested": "telemetry", "dest": req.get("dest")}) + "\n").encode()); c.close(); return
+    if op in ("survey_start", "survey_stop", "survey_status"):
+        rep = {"survey_start": {"started": True, "dest": req.get("dest"), "interval": int(req.get("interval") or 15), "minutes": int(req.get("minutes") or 10)},
+               "survey_stop": {"stopped": True, "dest": "!dc0a12a5", "asked": 4}, "survey_status": {"running": False}}[op]
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "health":
+        tel = DEMO_HISTORY["telemetry"]; hourly = {}
+        for r in tel: hourly.setdefault(r["ts"][:13], []).append(r["chutil"])
+        c.sendall((json.dumps({"hours": 24, "region": "EU_868", "budget_pct": 10.0, "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "verdict": "normal", "air_share": round(tel[-1]["airutil"] / 10 * 100, 1), "packets": len(DEMO_HISTORY["packets"]), "packets_per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "nodes_heard": 1,
+                               "nodes": [{"id": "!dc0a12a5", "name": "Tracker 4", "packets": len(DEMO_HISTORY["packets"]), "per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "battery": tel[-1]["level"], "last_telemetry": tel[-1]["ts"], "own": False}],
+                               "hourly": [{"hour": k + ":00Z", "chutil": round(sum(v) / len(v), 1)} for k, v in sorted(hourly.items())]}) + "\n").encode()); c.close(); return
+    if op in ("profile", "profile_set", "drift", "drift_fix"):
+        prof = {"role": "TRACKER", "tx_power": 20, "position_broadcast_secs": 900, "region": "EU_868", "modem_preset": "SHORT_FAST"}
+        rep = {"profile": prof, "profile_set": {"written": {k: req.get(k) for k in prof}, "confirmed": True},
+               "drift": {"profile": prof, "enforced": list(prof), "counts": {"in_line": 1, "drifted": 1, "unread": 2},
+                         "devices": [{"id": "!dc0a12a5", "name": "Tracker 4", "state": "in line", "diffs": [], "read_at": "2026-09-03T10:00:00Z", "managed": True},
+                                     {"id": "!57d9f894", "name": "Tracker 2", "state": "drifted", "diffs": [{"field": "tx_power", "is": 27, "should": 20}, {"field": "position_broadcast_secs", "is": 300, "should": 900}], "read_at": "2026-09-03T10:05:00Z", "managed": True},
+                                     {"id": "!8b96768b", "name": "Handset", "state": "unread", "diffs": [], "managed": False},
+                                     {"id": "!932f7d09", "name": "Relay 2", "state": "unread", "diffs": [], "managed": False}]},
+               "drift_fix": {"id": req.get("id"), "safe": {"written": ["tx_power", "position_broadcast_secs"], "confirmed": True, "read_back": {"tx_power": 20, "position_broadcast_secs": 900}}, "hard": None, "skipped": [], "confirmed": True}}[op]
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op in ("rotation_status", "rotation_mark"):
+        rep = {"rotation_status": {"rotation": {"ts": DEMO_HISTORY["messages"][0]["ts"], "index": 0, "name": "MESH-DEMO", "source": "rotated from the screen", "note": None},
+                                   "back": [{"id": "!dc0a12a5", "name": "Tracker 4", "heard": DEMO_HISTORY["messages"][1]["ts"]}, {"id": "!8b96768b", "name": "Handset", "heard": DEMO_HISTORY["messages"][2]["ts"]}],
+                                   "waiting": [{"id": "!57d9f894", "name": "Tracker 2"}, {"id": "!932f7d09", "name": "Relay 2"}], "counts": {"expected": 4, "back": 2, "waiting": 2}},
+               "rotation_mark": {"marked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "index": int(req.get("index") or 0), "name": "MESH-DEMO", "expected": 4, "confirmed": True}}[op]
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op in ("alerts", "alert_settings", "alert_set", "alert_test"):
+        rep = {"alerts": {"open": [], "recent": [{"ts": DEMO_HISTORY["telemetry"][-1]["ts"], "node": "!dc0a12a5", "kind": "battery", "text": "Tracker 4 battery 5%", "state": "open", "cleared": None}], "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
+               "alert_settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True},
+               "alert_set": {"written": {k: req.get(k) for k in ("silent_min", "battery_pct", "unknown", "fence_m", "to_tak") if req.get(k) is not None}, "confirmed": True},
+               "alert_test": {"sent": True, "observe": False, "note": "a GeoChat to All Chat Rooms"}}[op]
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "history":
+        kind = req.get("kind") or "positions"
+        rows = DEMO_HISTORY.get(kind, [])
+        if req.get("node"): rows = [r for r in rows if r.get("node") == req.get("node")]
+        c.sendall((json.dumps({"kind": kind, "rows": rows[-int(req.get("limit") or 500):], "count": len(rows)}) + "\n").encode()); c.close(); return
+    if op == "history_summary":
+        c.sendall((json.dumps({"ok": True, "path": "/var/lib/vantage-mesh/history.db", "days": 30, "bytes": 1200000, "tables": {k: {"rows": len(v), "oldest": (v[0]["ts"] if v else None), "newest": (v[-1]["ts"] if v else None)} for k, v in DEMO_HISTORY.items()}}) + "\n").encode()); c.close(); return
+    if op == "request_position":
+        c.sendall((json.dumps({"requested": "position", "dest": req.get("dest")}) + "\n").encode()); c.close(); return
+    if op == "register_set":
+        REG.setdefault(req.get("id"), {}).update({k: req.get(k) for k in ("label", "holder", "note") if req.get(k) is not None})
+        c.sendall((json.dumps({"written": {"id": req.get("id"), **REG.get(req.get("id"), {})}, "confirmed": True}) + "\n").encode()); c.close(); return
+    if op == "bench_onboard":
+        time.sleep(3)
+        rep = {"written": ["long_name", "short_name", "role", "channel0", "lora", "admin_key"], "confirmed": True, "sent": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "read_back": {"long_name": req.get("long_name"), "short_name": req.get("short_name"), "role": req.get("role"), "channel0": "MESH-DEMO", "region": "EU_868", "modem_preset": "SHORT_FAST", "managed": True, "admin_keys": 1},
+               "export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json", "register": {"id": "!ee000005", "managed": True, "label": req.get("long_name")}}
+        REG["!ee000005"] = {"label": req.get("long_name"), "holder": "", "managed": True, "name": req.get("long_name"), "hw": "TRACKER_T1000_E", "firmware": "2.6.11", "role": req.get("role"), "onboarded_at": rep["sent"], "managed_at": rep["sent"]}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "node_read":
+        time.sleep(2.5)
+        node = next((n for n in NODES if n["id"] == req.get("id")), None)
+        rep = ({"id": req.get("id"), "long_name": node["name"], "short_name": node.get("short") or node["name"][:4].upper(), "region": "EU_868", "modem_preset": "SHORT_FAST", "role": "TRACKER",
+                "tx_power": 27, "position_broadcast_secs": 900, "managed": bool(REG.get(req.get("id"), {}).get("managed")), "admin_keys": 1, "firmware": "2.6.11",
+                "read_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True}], "missing": []}
+               if node else {"error": f"{req.get('id')} did not answer over the air within 30 s"})
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op in ("node_set", "node_set_region", "node_channel_push", "node_reboot"):
+        if not REG.get(req.get("id"), {}).get("managed"):
+            c.sendall((json.dumps({"error": f"{req.get('id')} is not managed: bring it to the bench first"}) + "\n").encode()); c.close(); return
+        time.sleep(4)
+        sent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if op == "node_reboot":
+            rep = {"asked": sent, "id": req.get("id"), "secs": 10, "note": "asked; watch for it to be heard again"}
+        else:
+            fields = {"node_set": ("long_name", "short_name", "tx_power", "position_broadcast_secs"), "node_set_region": ("region", "modem_preset", "role"), "node_channel_push": ("index",)}[op]
+            written = [k for k in fields if req.get(k) not in (None, "")]
+            if op == "node_set" and req.get("long_name"):
+                for n in NODES:
+                    if n["id"] == req.get("id"):
+                        n["name"] = req["long_name"]
+            rb = {k: req.get(k) for k in written}
+            if op == "node_channel_push":
+                rb = {"index": req.get("index"), "name": "MESH-DEMO" if int(req.get("index") or 0) == 0 else "DEMO-2", "role": "PRIMARY" if int(req.get("index") or 0) == 0 else "SECONDARY", "has_key": True}
+            rep = {"written": written, "sent": sent, "confirmed": True, "read_back": rb, "unconfirmed": None}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "firmware_shelf":
+        rep = {"dir": "/var/lib/vantage-mesh/firmware", "images": [
+            {"id": "t1000e-2.6.11", "hw": ["TRACKER_T1000_E"], "version": "2.6.11", "method": "uf2", "file": "firmware-tracker-t1000-e-2.6.11.60ec05e.uf2", "recommended": True, "state": "verified", "path": "/var/lib/vantage-mesh/firmware/firmware-tracker-t1000-e-2.6.11.60ec05e.uf2", "note": "The fleet's tracker firmware. Later versions lost the GPS fix on the T1000-E (the regression check of LG9); stay here until a version is proven on the map."},
+            {"id": "t1000e-2.7.26", "hw": ["TRACKER_T1000_E"], "version": "2.7.26", "method": "uf2", "file": "firmware-tracker-t1000-e-2.7.26.54e0d8d.uf2", "recommended": False, "state": "missing", "path": "/var/lib/vantage-mesh/firmware/firmware-tracker-t1000-e-2.7.26.54e0d8d.uf2", "note": "Held for the regression check only."},
+            {"id": "heltec-v4-2.7.26", "hw": ["HELTEC_V4"], "version": "2.7.26", "method": "esptool", "file": "firmware-heltec-v4-2.7.26.54e0d8d.bin", "recommended": True, "state": "verified", "path": "/var/lib/vantage-mesh/firmware/firmware-heltec-v4-2.7.26.54e0d8d.bin"},
+            {"id": "factory-erase-s140-7.3.0", "hw": ["TRACKER_T1000_E", "RAK4631"], "version": "erase 7.3.0", "method": "uf2", "file": "factory-erase-S140-7.3.0.uf2", "recommended": False, "state": "wrong", "path": "/var/lib/vantage-mesh/firmware/factory-erase-S140-7.3.0.uf2", "note": "The nRF52 factory erase: the recovery step before the pinned image."}]}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "bench_exports":
+        rep = {"id": req.get("id"), "exports": [{"path": f"/var/lib/vantage-mesh/exports/{req.get('id')}/2026-09-03T03-00-00Z.json", "when": "2026-09-03T03-00-00Z", "bytes": 1840},
+                                                {"path": f"/var/lib/vantage-mesh/exports/{req.get('id')}/2026-09-02T18-20-00Z.json", "when": "2026-09-02T18-20-00Z", "bytes": 1812}]}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "bench_restore":
+        time.sleep(3)
+        rep = {"written": ["owner", "lora", "device", "position", "channels"], "confirmed": True, "sent": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "read_back": {"long_name": "New Device", "short_name": "NEW", "region": "EU_868", "modem_preset": "SHORT_FAST", "role": "TRACKER", "channels": 2}, "unconfirmed": None}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "bench_flash":
+        def flash_answer():
+            time.sleep(8)
+            try:
+                c.sendall((json.dumps({"stages": ["exported", "in bootloader", "copied", "back", "version read"], "confirmed": True, "sent": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                       "version": "2.6.11", "export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json"}) + "\n").encode())
+            except OSError:
+                pass
+            c.close()
+        threading.Thread(target=flash_answer, daemon=True).start()
+        for stage in ("exported", "in bootloader", "copied", "back", "version read"):
+            time.sleep(1.5)
+            ev = {"kind": "flash", "id": "!ee000005", "stage": stage, "image": req.get("image")}
+            if stage == "version read":
+                ev["version"] = "2.6.11"
+            for cc in list(clients):
+                try:
+                    cc.sendall((json.dumps(ev) + "\n").encode())
+                except OSError:
+                    clients.remove(cc)
+        return
+    if op in ("bench_read", "bench_export"):
+        time.sleep(2)
+        rep = ({"path": req.get("path"), "id": "!ee000005", "long_name": REG.get("!ee000005", {}).get("name") or "New Device", "short_name": "NEW", "hw": "TRACKER_T1000_E", "firmware": "2.6.11",
+                "region": "UNSET", "modem_preset": "LONG_FAST", "role": "CLIENT", "managed": bool(REG.get("!ee000005", {}).get("managed")), "admin_keys": 1 if REG.get("!ee000005", {}).get("managed") else 0,
+                "channels": [{"index": 0, "name": "LongFast", "role": "PRIMARY", "has_key": True}]}
+               if op == "bench_read" else {"export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json", "bytes": 1840, "id": "!ee000005"})
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),
+           "bench_devices": {"gateway": STATUS["radio"], "devices": [
+               {"path": "/dev/serial/by-id/usb-Seeed_T1000-E_9F3A-if00", "tty": "ttyACM3", "bootloader": False},
+               {"path": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_BOOT-if00", "tty": "ttyACM4", "bootloader": True,
+                "recovery": "double-press reset, copy the pinned firmware UF2 onto the volume that appears, wait for it to come back"}]},
+           "route": {"route": ROUTES.get(str(req.get("id") or ""))},
+           "config": {"long_name": "Gateway", "short_name": "TAKG", "role": "CLIENT", "region": "EU_868", "modem_preset": "SHORT_FAST", "tx_power": 14},
+           "log": {"lines": LOG, "total": len(LOG)}}.get(op, {"error": f"unknown op {op}"})
+    c.sendall((json.dumps(rep) + "\n").encode()); c.close()
+
+
+def ticker():
+    while True:
+        time.sleep(4)
+        n = random.choice(NODES[:3])
+        n["snr"] = round(random.uniform(6, 14), 1)
+        n["heard"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        HISTORY[n["id"]].append([n["heard"], n["snr"], 0]); del HISTORY[n["id"]][:-200]
+        line = f"[{time.strftime('%H:%M:%S')}] INFO Sending <event uid=\"{n['id']}\"> {n['name']}"
+        LOG.append(line)
+        for ev in ({"kind": "packet", "from": n["id"], "port": "POSITION_APP", "snr": n["snr"], "hops": 0}, {"kind": "log", "line": line}, {"kind": "forwarded"}):
+            for c in list(clients):
+                try:
+                    c.sendall((json.dumps(ev) + "\n").encode())
+                except OSError:
+                    clients.remove(c)
+
+
+if os.path.exists(PATH):
+    os.unlink(PATH)
+srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); srv.bind(PATH); srv.listen(8)
+threading.Thread(target=ticker, daemon=True).start()
+print("fake bridge on", PATH, flush=True)
+while True:
+    c, _ = srv.accept()
+    threading.Thread(target=serve_one, args=(c,), daemon=True).start()

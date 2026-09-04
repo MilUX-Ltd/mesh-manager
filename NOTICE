@@ -1,0 +1,23 @@
+Mesh Manager
+Copyright (C) 2026 MilUX Ltd
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3 of
+the License, or (at your option) any later version. See LICENSE.
+
+Third-party work this program stands on, each under its own licence, with attribution kept:
+
+- Meshtastic Python library and Meshtastic protobuf definitions (Meshtastic LLC and
+  contributors), GPL-3.0-or-later.
+- TAK-Meshtastic-Gateway 1.1.0 (OpenTAKServer / brian7704), GPL-3.0-or-later. The bridge
+  derives from it; MilUX's changes are carried as marked patch files with provenance headers
+  until they are accepted upstream.
+- TAKPacket-SDK zstd dictionaries (Meshtastic), GPL-3.0-or-later, pinned by commit and sha256.
+- Manrope, Roboto Mono and the third typeface embedded in the screen, SIL Open Font Licence 1.1,
+  licence text alongside.
+
+Meshtastic is a registered trademark of Meshtastic LLC. TAK is a product of the TAK Product
+Center. Neither endorses this program.
+
+Leaflet 1.9.4 (https://leafletjs.com), BSD-2-Clause, (c) 2010-2023 Volodymyr Agafonkin, vendored
+under src/mesh_manager/static/leaflet/ with its LICENSE beside it and served by the screen for the map overlay.
