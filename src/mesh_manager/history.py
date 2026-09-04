@@ -12,6 +12,9 @@ TABLES = {
     "messages": "ts TEXT NOT NULL, node TEXT, name TEXT, dest TEXT, channel INTEGER, text TEXT NOT NULL, snr REAL",
     "packets": "ts TEXT NOT NULL, node TEXT, port TEXT, snr REAL, hops INTEGER, size INTEGER",
     "alerts": "ts TEXT NOT NULL, node TEXT, kind TEXT NOT NULL, text TEXT NOT NULL, state TEXT NOT NULL, cleared TEXT",
+    "environment": "ts TEXT NOT NULL, node TEXT NOT NULL, temperature REAL, humidity REAL, pressure REAL, gas REAL, lux REAL, iaq REAL, wind_dir REAL, wind_speed REAL",
+    "waypoints": "ts TEXT NOT NULL, node TEXT, wid INTEGER, name TEXT, description TEXT, lat REAL, lon REAL, expire INTEGER, gone INTEGER",
+    "neighbors": "ts TEXT NOT NULL, node TEXT NOT NULL, neighbor TEXT NOT NULL, snr REAL",
 }
 CAP = 200_000
 
@@ -35,6 +38,12 @@ class History:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             for name, cols in TABLES.items():
                 self._conn.execute(f"CREATE TABLE IF NOT EXISTS {name} (id INTEGER PRIMARY KEY, {cols})")
+            # Spec 034: columns added after the store first shipped; a store that predates them
+            # gains them here, once. SQLite cannot add a column that exists, so check first.
+            have = {r[1] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
+            for col, typ in (("mid", "INTEGER"), ("ack", "TEXT")):
+                if col not in have:
+                    self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typ}")
                 self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name}_ts ON {name}(ts)")
                 self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name}_node ON {name}(node, ts)")
             self._conn.commit()
@@ -71,11 +80,33 @@ class History:
     def telemetry(self, node, level=None, voltage=None, chutil=None, airutil=None, uptime=None, ts=None):
         return self._write("telemetry", {"ts": ts or utc(), "node": node, "level": level, "voltage": voltage, "chutil": chutil, "airutil": airutil, "uptime": uptime})
 
-    def message(self, node, text, name=None, dest=None, channel=0, snr=None, ts=None):
-        return self._write("messages", {"ts": ts or utc(), "node": node, "name": name, "dest": dest, "channel": channel, "text": str(text), "snr": snr})
+    def message(self, node, text, name=None, dest=None, channel=0, snr=None, ts=None, mid=None, ack=None):
+        return self._write("messages", {"ts": ts or utc(), "node": node, "name": name, "dest": dest, "channel": channel, "text": str(text), "snr": snr, "mid": mid, "ack": ack})
+
+    def set_ack(self, mid, ack):
+        """Spec 034: the radio said whether a sent message arrived; keep that with the message."""
+        if not self._conn or mid is None:
+            return False
+        try:
+            with self._lock:
+                self._conn.execute("UPDATE messages SET ack=? WHERE mid=?", (str(ack), int(mid)))
+                self._conn.commit()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def packet(self, node, port=None, snr=None, hops=None, size=None, ts=None):
         return self._write("packets", {"ts": ts or utc(), "node": node, "port": port, "snr": snr, "hops": hops, "size": size})
+
+    def environment(self, node, temperature=None, humidity=None, pressure=None, gas=None, lux=None, iaq=None, wind_dir=None, wind_speed=None, ts=None):
+        return self._write("environment", {"ts": ts or utc(), "node": node, "temperature": temperature, "humidity": humidity, "pressure": pressure,
+                                           "gas": gas, "lux": lux, "iaq": iaq, "wind_dir": wind_dir, "wind_speed": wind_speed})
+
+    def waypoint(self, node, wid, name=None, description=None, lat=None, lon=None, expire=None, gone=0, ts=None):
+        return self._write("waypoints", {"ts": ts or utc(), "node": node, "wid": wid, "name": name, "description": description, "lat": lat, "lon": lon, "expire": expire, "gone": int(gone)})
+
+    def neighbor(self, node, neighbor, snr=None, ts=None):
+        return self._write("neighbors", {"ts": ts or utc(), "node": node, "neighbor": neighbor, "snr": snr})
 
     def alert(self, node, kind, text, ts=None):
         return self._write("alerts", {"ts": ts or utc(), "node": node, "kind": kind, "text": str(text), "state": "open", "cleared": None})

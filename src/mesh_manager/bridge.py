@@ -3,6 +3,7 @@ does that), and adds what the product needs: a local socket API, an event stream
 the heartbeat to a configurable state directory, and liveness measured at the serial read
 loop for systemd's watchdog (Spec 002)."""
 import argparse
+import calendar
 import collections
 import re
 import datetime
@@ -203,6 +204,9 @@ class Bridge(TAKMeshtasticGateway):
         self.pins = None                      # firmware pins (Spec 010); the release's PINS.json by default
         self.gps_fix = None                   # the box's own receiver's last fix (Spec 014)
         self.gps_state = None                 # what the last read of the receiver established: reachable, fix, satellites
+        self.outbox = {}                      # Spec 034: sent messages by packet id, and what the radio said became of them
+        self.waypoints = {}                   # Spec 041: waypoints heard on the mesh, by id, the live ones
+        self.neighbor_edges = {}              # Spec 042: (reporter, neighbour) -> {snr, ts}, from NeighborInfo
         self.gps_port_factory = None          # opens the receiver's port; pyserial by default
         self._gps_reader = gps_reader
         self.flash_hooks = {}                 # the block layer and esptool, replaceable by the suite
@@ -291,6 +295,13 @@ class Bridge(TAKMeshtasticGateway):
             dm = (d.get("telemetry") or {}).get("deviceMetrics") or {}
             if dm.get("batteryLevel") is not None or dm.get("voltage") is not None:
                 self._battery_note(fr, dm.get("batteryLevel"), dm.get("voltage"))
+            em = (d.get("telemetry") or {}).get("environmentMetrics") or {}
+            if em:
+                self._env_note(fr, em)
+        if fr and d.get("portnum") == "WAYPOINT_APP":
+            self._waypoint_note(fr, d)
+        if fr and d.get("portnum") == "NEIGHBORINFO_APP":
+            self._neighbors_note(fr, d)
         snr = packet.get("rxSnr") if isinstance(packet, dict) else None
         hops = ((packet.get("hopStart", 0) - packet.get("hopLimit", 0))
                 if isinstance(packet, dict) and "hopStart" in packet and "hopLimit" in packet else None)
@@ -354,12 +365,58 @@ class Bridge(TAKMeshtasticGateway):
             if hasattr(self, "logger"):
                 self.logger.debug(f"history note skipped: {type(e).__name__}: {e}")
 
+    def op_availability(self, hours=24, **_):
+        """Spec 036: how much of the window each node was actually heard for. Hourly buckets up
+        to two days, daily beyond; a bucket counts if any packet from the node landed in it. A
+        node with nothing in the window is 0%, listed, never dropped."""
+        try:
+            hours = max(1, min(int(hours or 24), 24 * 30))
+        except (TypeError, ValueError):
+            hours = 24
+        bucket = 3600 if hours <= 48 else 86400
+        nb = max(1, int(round(hours * 3600 / bucket)))
+        now = time.time(); start = now - nb * bucket
+        h = getattr(self, "history", None)
+        rows = h.query("packets", since=utc(start), limit=5000) if h and h.ok else []
+        seen = {}
+        for r in rows:
+            try:
+                t = calendar.timegm(time.strptime(str(r.get("ts"))[:19], "%Y-%m-%dT%H:%M:%S"))
+            except (TypeError, ValueError):
+                continue
+            i = int((t - start) // bucket)
+            if 0 <= i < nb and r.get("node"):
+                seen.setdefault(r["node"], set()).add(i)
+        names = {}
+        try:
+            for n in self.mesh_nodes():
+                names[n.get("id")] = n.get("name") or n.get("id")
+        except Exception:  # noqa: BLE001
+            pass
+        for nid, rec in (getattr(self.interface, "nodes", {}) or {}).items():
+            if isinstance(rec, dict):
+                ln = (rec.get("user") or {}).get("longName")
+                if ln or nid not in names:
+                    names[nid] = ln or names.get(nid) or nid
+        labels = {k: str(v.get("label") or "") for k, v in self._register_load().items()} if hasattr(self, "_register_load") else {}
+        own = (self._own() or {}).get("id")
+        out = []
+        for nid in sorted(set(names) | set(seen)):
+            if not nid or nid == own:
+                continue
+            got = seen.get(nid, set())
+            out.append({"id": nid, "name": labels.get(nid) or names.get(nid) or nid, "buckets": nb, "heard": len(got),
+                        "pct": int(round(100.0 * len(got) / nb)), "bucket_secs": bucket,
+                        "series": [1 if i in got else 0 for i in range(nb)]})
+        out.sort(key=lambda r: (-r["pct"], r["name"]))
+        return {"hours": hours, "bucket_secs": bucket, "buckets": nb, "nodes": out}
+
     def op_history(self, kind="positions", node=None, since=None, limit=500, **_):
         h = getattr(self, "history", None)
         if not h or not h.ok:
             return {"error": "the history store is not available on this box", "rows": []}
-        if kind not in ("positions", "telemetry", "messages", "packets"):
-            return {"error": "kind must be positions, telemetry, messages or packets"}
+        if kind not in ("positions", "telemetry", "messages", "packets", "environment", "waypoints", "neighbors"):
+            return {"error": "kind must be positions, telemetry, messages, packets, environment, waypoints or neighbors"}
         rows = h.query(kind, node=node or None, since=since or None, limit=limit or 500)
         return {"kind": kind, "node": node, "since": since, "rows": rows, "count": len(rows)}
 
@@ -544,17 +601,25 @@ class Bridge(TAKMeshtasticGateway):
         if len(text.encode()) > 200:
             return {"error": "a mesh message is 200 bytes at most"}
         dest = to or "^all"
-        self.interface.sendText(text, destinationId=dest, channelIndex=int(channel or 0))
+        # Spec 034: wantAck asks the radio to report delivery; the answer arrives on ROUTING_APP at
+        # the handler, never by waiting. The id is how the answer finds the message again.
+        pkt = self.interface.sendText(text, destinationId=dest, channelIndex=int(channel or 0), wantAck=True, onResponse=self._on_ack)
+        pid = getattr(pkt, "id", None)
+        if pid is not None:
+            self.outbox[int(pid)] = {"ts": utc(time.time()), "text": text, "to": dest, "channel": int(channel or 0), "ack": None}
+        own0 = self._own() or {}
+        self._emit("text", **{"from": own0.get("id"), "name": own0.get("name") or "this box", "to": dest, "channel": int(channel or 0),
+                              "text": text, "mid": pid, "sent": True})
         try:
             own = (self._own() or {})
             if getattr(self, "history", None) and self.history.ok:
-                self.history.message(own.get("id"), text, name=own.get("name") or "this box", dest=dest, channel=int(channel or 0))
+                self.history.message(own.get("id"), text, name=own.get("name") or "this box", dest=dest, channel=int(channel or 0), mid=pid)
         except Exception:  # noqa: BLE001
             pass
         own = self._own()
         self._emit("text", **{"from": own.get("id"), "name": own.get("name") or "this radio", "to": dest,
                               "channel": int(channel or 0), "text": text, "sent": True})
-        return {"sent": text, "to": dest, "channel": int(channel or 0)}
+        return {"id": pid, "sent": text, "to": dest, "channel": int(channel or 0)}
 
     def op_traceroute(self, dest=None, **_):
         if not dest:
@@ -1798,6 +1863,193 @@ class Bridge(TAKMeshtasticGateway):
         except Exception as e:  # noqa: BLE001
             self.logger.warning(f"a nodeinfo answer could not be read: {type(e).__name__}: {e}")
 
+    # ---- Spec 041: waypoints across the bridge ---------------------------------------------------
+    def _waypoint_note(self, fr, d):
+        try:
+            from meshtastic.protobuf import mesh_pb2
+            wp = mesh_pb2.Waypoint()
+            if d.get("payload"):
+                wp.ParseFromString(d.get("payload"))
+            else:
+                w = d.get("waypoint") or {}
+                wp.id = int(w.get("id") or 0); wp.latitude_i = int(w.get("latitudeI") or 0); wp.longitude_i = int(w.get("longitudeI") or 0)
+                wp.expire = int(w.get("expire") or 0); wp.name = str(w.get("name") or ""); wp.description = str(w.get("description") or "")
+            wid = int(wp.id)
+            if not wid:
+                return
+            lat, lon = wp.latitude_i / 1e7, wp.longitude_i / 1e7
+            now = int(time.time())
+            gone = (wp.expire and int(wp.expire) < now) or (wp.latitude_i == 0 and wp.longitude_i == 0)
+            rec = {"wid": wid, "node": fr, "name": wp.name or f"waypoint {wid}", "description": wp.description or "", "lat": round(lat, 6), "lon": round(lon, 6),
+                   "expire": int(wp.expire) if wp.expire else None, "ts": utc(time.time())}
+            if gone:
+                self.waypoints.pop(wid, None)
+            else:
+                self.waypoints[wid] = rec
+            h = getattr(self, "history", None)
+            if h and h.ok:
+                h.waypoint(fr, wid, name=rec["name"], description=rec["description"], lat=rec["lat"], lon=rec["lon"], expire=rec["expire"], gone=1 if gone else 0)
+            self._emit("waypoint", gone=bool(gone), **rec)
+            if not gone:
+                self._tak_waypoint(rec)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"a waypoint could not be read: {type(e).__name__}: {e}")
+
+    def _tak_waypoint(self, rec):
+        """A Meshtastic waypoint as a TAK spot marker (b-m-p-s-m), on the socket the bridge forwards CoT on."""
+        import datetime as _dt
+        from xml.etree.ElementTree import Element, SubElement, tostring
+        sock = getattr(self, "socket_client", None)
+        if sock is None:
+            return False
+        now = _dt.datetime.utcnow()
+        stale = _dt.datetime.utcfromtimestamp(rec["expire"]) if rec.get("expire") else now + _dt.timedelta(days=1)
+        ev = Element("event", {"version": "2.0", "uid": f"MESH-WP-{rec['wid']}", "type": "b-m-p-s-m", "how": "h-g-i-g-o",
+                               "time": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "start": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "stale": stale.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        SubElement(ev, "point", {"lat": str(rec["lat"]), "lon": str(rec["lon"]), "hae": "0.0", "ce": "9999999.0", "le": "9999999.0"})
+        det = SubElement(ev, "detail")
+        SubElement(det, "contact", {"callsign": str(rec.get("name") or "")})
+        rem = SubElement(det, "remarks"); rem.text = str(rec.get("description") or "") + f" (via mesh, from {rec.get('node') or '?'})"
+        SubElement(det, "color", {"argb": "-16776961"})
+        try:
+            sock.send(tostring(ev))
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"the waypoint did not reach TAK: {type(e).__name__}: {e}")
+            return False
+
+    def op_waypoints(self, **_):
+        now = int(time.time())
+        live = [w for w in self.waypoints.values() if not (w.get("expire") and w["expire"] < now)]
+        return {"waypoints": sorted(live, key=lambda w: w.get("ts") or "", reverse=True), "count": len(live)}
+
+    def op_waypoint_send(self, name="", description="", lat=None, lon=None, expire_min=60, **_):
+        import random
+        name = str(name or "").strip()
+        if not name or len(name.encode()) > 30:
+            return {"error": "a waypoint name is 1 to 30 bytes"}
+        description = str(description or "").strip()
+        if len(description.encode()) > 100:
+            return {"error": "a waypoint description is 100 bytes at most"}
+        try:
+            lat, lon = float(lat), float(lon)
+        except (TypeError, ValueError):
+            return {"error": "lat and lon are required, as decimal degrees"}
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
+            return {"error": "lat and lon must be a real position"}
+        try:
+            mins = max(1, min(int(expire_min or 60), 7 * 24 * 60))
+        except (TypeError, ValueError):
+            mins = 60
+        expire = int(time.time()) + mins * 60
+        wid = random.randint(1, 2**31 - 1)
+        pkt = self.interface.sendWaypoint(name, description, 0, expire, waypoint_id=wid, latitude=lat, longitude=lon, wantAck=True)
+        own = (self._own() or {}).get("id")
+        rec = {"wid": wid, "node": own, "name": name, "description": description, "lat": round(lat, 6), "lon": round(lon, 6), "expire": expire, "ts": utc(time.time())}
+        self.waypoints[wid] = rec
+        h = getattr(self, "history", None)
+        if h and h.ok:
+            h.waypoint(own, wid, name=name, description=description, lat=rec["lat"], lon=rec["lon"], expire=expire, gone=0)
+        self._emit("waypoint", gone=False, **rec)
+        self._tak_waypoint(rec)
+        return {"sent": True, "wid": wid, "name": name, "expire": expire, "id": getattr(pkt, "id", None), "asked": utc(time.time())}
+
+    # ---- Spec 042: the mesh as a graph -----------------------------------------------------------
+    def _neighbors_note(self, fr, d):
+        try:
+            from meshtastic.protobuf import mesh_pb2
+            ni = mesh_pb2.NeighborInfo()
+            if d.get("payload"):
+                ni.ParseFromString(d.get("payload"))
+            else:
+                for n in (d.get("neighborinfo") or {}).get("neighbors") or []:
+                    x = ni.neighbors.add(); x.node_id = int(n.get("nodeId") or 0); x.snr = float(n.get("snr") or 0)
+            now = utc(time.time()); h = getattr(self, "history", None); n_edges = 0
+            for n in ni.neighbors:
+                if not n.node_id:
+                    continue
+                nid = f"!{int(n.node_id):08x}"
+                snr = round(float(n.snr), 2) if n.snr is not None else None
+                self.neighbor_edges[(fr, nid)] = {"snr": snr, "ts": now}
+                if h and h.ok:
+                    h.neighbor(fr, nid, snr=snr)
+                n_edges += 1
+            self._emit("neighbors", id=fr, edges=n_edges, ts=now)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"a neighbour report could not be read: {type(e).__name__}: {e}")
+
+    def op_neighbors(self, hours=24, **_):
+        try:
+            hours = max(1, min(int(hours or 24), 24 * 30))
+        except (TypeError, ValueError):
+            hours = 24
+        since = utc(time.time() - hours * 3600)
+        if not self.neighbor_edges:
+            h = getattr(self, "history", None)
+            for r in (h.query("neighbors", since=since, limit=5000) if h and h.ok else []):
+                self.neighbor_edges[(r.get("node"), r.get("neighbor"))] = {"snr": r.get("snr"), "ts": r.get("ts")}
+        names = {}
+        for n in (self.mesh_nodes() if hasattr(self, "mesh_nodes") else []):
+            names[n.get("id")] = n.get("name") or n.get("id")
+        for nid, rec in (getattr(self.interface, "nodes", {}) or {}).items():
+            if isinstance(rec, dict):
+                ln = (rec.get("user") or {}).get("longName")
+                if ln or nid not in names:
+                    names[nid] = ln or names.get(nid) or nid
+        own = self._own() or {}
+        if own.get("id"):
+            names[own["id"]] = own.get("name") or "this box"
+        labels = {k: str(v.get("label") or "") for k, v in self._register_load().items()} if hasattr(self, "_register_load") else {}
+        edges = []
+        for (a, b), rec in self.neighbor_edges.items():
+            if (rec.get("ts") or "") < since:
+                continue
+            edges.append({"from": a, "from_name": labels.get(a) or names.get(a) or a, "to": b, "to_name": labels.get(b) or names.get(b) or b, "snr": rec.get("snr"), "ts": rec.get("ts")})
+        edges.sort(key=lambda x: x.get("ts") or "", reverse=True)
+        return {"hours": hours, "edges": edges, "own": own.get("id"), "count": len(edges)}
+
+    def _env_note(self, nid, em):
+        """Spec 035: what a sensor node says about the air around it, kept and told."""
+        if not nid or not em:
+            return
+        def f(k):
+            v = em.get(k)
+            try:
+                return round(float(v), 2) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+        rec = {"temperature": f("temperature"), "humidity": f("relativeHumidity"), "pressure": f("barometricPressure"), "gas": f("gasResistance"),
+               "lux": f("lux"), "iaq": f("iaq"), "wind_dir": f("windDirection"), "wind_speed": f("windSpeed")}
+        if all(v is None for v in rec.values()):
+            return
+        h = getattr(self, "history", None)
+        if h and h.ok:
+            h.environment(nid, **rec)
+        self._emit("environment", id=nid, ts=utc(time.time()), **rec)
+
+    def _on_ack(self, p):
+        """Spec 034: the radio's word on a sent message. NONE is delivered; anything else is the
+        reason in the radio's own words. An id nobody sent is logged and dropped."""
+        try:
+            d = p.get("decoded", {}) if isinstance(p, dict) else {}
+            pid = d.get("requestId")
+            if pid is None:
+                return
+            pid = int(pid)
+            rec = self.outbox.get(pid)
+            if rec is None:
+                self.logger.debug(f"an ack for packet {pid} that this bridge did not send")
+                return
+            why = str((d.get("routing") or {}).get("errorReason") or "NONE")
+            ok = why == "NONE"
+            rec["ack"] = "delivered" if ok else why
+            h = getattr(self, "history", None)
+            if h and h.ok:
+                h.set_ack(pid, rec["ack"])
+            self._emit("ack", request_id=pid, ok=ok, reason=None if ok else why, to=rec.get("to"), text=rec.get("text"))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"an ack could not be read: {type(e).__name__}: {e}")
+
     def _on_telemetry_answer(self, p):
         try:
             from meshtastic.protobuf import telemetry_pb2
@@ -1810,6 +2062,12 @@ class Bridge(TAKMeshtasticGateway):
                 level = dm.battery_level if dm.HasField("battery_level") else None
                 volts = dm.voltage if dm.HasField("voltage") else None
                 self._battery_note(nid, level, volts)
+            elif t.HasField("environment_metrics"):
+                em = t.environment_metrics
+                self._env_note(nid, {k: getattr(em, f) for k, f in (("temperature", "temperature"), ("relativeHumidity", "relative_humidity"),
+                                                                    ("barometricPressure", "barometric_pressure"), ("gasResistance", "gas_resistance"),
+                                                                    ("lux", "lux"), ("iaq", "iaq"), ("windDirection", "wind_direction"), ("windSpeed", "wind_speed"))
+                                     if em.HasField(f)})
             else:
                 self._emit("telemetry", id=nid, battery=None, charging=False, voltage=None, ts=utc(time.time()), note="answered without device metrics")
         except Exception as e:  # noqa: BLE001

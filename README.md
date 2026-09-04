@@ -44,8 +44,15 @@ version line stays 0.x until the interface settles; the
   the region's duty-cycle budget, packets per hour. A device gone quiet, a flat battery, an
   unknown node on the channel or a node outside a fence each raise an alert on the screen and
   a chat message into TAK.
+- **The mesh as a graph.** Who hears whom, at what SNR, from the neighbour-info reports nodes
+  broadcast; drawn on its own page and as edges on the map.
+- **Receipts, sensors and history.** A text reads delivered or says why not. Temperature,
+  humidity and pressure from sensor nodes. How much of the day each node was actually heard for.
+  A packet inspector. Playback of the last hours on the map. Export as GPX, KML or CSV.
+- **Waypoints across the bridge.** A pin dropped on the mesh reaches TAK as a marker, and the
+  screen can drop one.
 - **Updates.** The screen checks for a release, verifies its hash, and applies it on one
-  press. The box downloads nothing else.
+  press, and can roll back to any release still on the box. The box downloads nothing else.
 - **An AI surface.** An MCP endpoint, an agent role and a set of skills, all derived from the
   same action catalogue the screen uses. Anything a person can do on the screen an agent can
   do through a connector, at the autonomy you set, and nothing else.

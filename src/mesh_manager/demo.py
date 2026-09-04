@@ -99,6 +99,10 @@ def _demo_history():
 DEMO_HISTORY = _demo_history()
 
 
+DEMO_HISTORY.setdefault("environment", [{"ts": f"2026-09-03T{h:02d}:10:00Z", "node": "!ee000003", "temperature": round(14 + 5 * ((h % 12) / 12), 1), "humidity": float(70 - h), "pressure": 1011.0 + (h % 3), "gas": None, "lux": None, "iaq": None, "wind_dir": None, "wind_speed": None} for h in range(1, 24)])
+DEMO_HISTORY.setdefault("waypoints", [])
+DEMO_HISTORY.setdefault("neighbors", [])
+
 def answer_nodeinfo(dest):
     """Spec 032: the node answers with what it calls itself, a couple of seconds later."""
     time.sleep(2.0)
@@ -163,6 +167,25 @@ def serve_one(c):
                "alert_set": {"written": {k: req.get(k) for k in ("silent_min", "battery_pct", "unknown", "fence_m", "to_tak") if req.get(k) is not None}, "confirmed": True},
                "alert_test": {"sent": True, "observe": False, "note": "a GeoChat to All Chat Rooms"}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "availability":
+        rep = {"hours": int(req.get("hours") or 24), "bucket_secs": 3600, "buckets": 24, "nodes": [
+            {"id": "!ee000004", "name": "Tracker 4", "buckets": 24, "heard": 23, "pct": 96, "bucket_secs": 3600, "series": [1] * 23 + [0]},
+            {"id": "!ee000002", "name": "Tracker 2", "buckets": 24, "heard": 15, "pct": 62, "bucket_secs": 3600, "series": [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1, 0]},
+            {"id": "!ee000003", "name": "Handset", "buckets": 24, "heard": 6, "pct": 25, "bucket_secs": 3600, "series": [0] * 18 + [1] * 6},
+            {"id": "!ee000006", "name": "Relay 2", "buckets": 24, "heard": 0, "pct": 0, "bucket_secs": 3600, "series": [0] * 24}]}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "neighbors":
+        rep = {"hours": 24, "own": "!ee000001", "edges": [{"from": "!ee000004", "from_name": "Tracker 4", "to": "!ee000001", "to_name": "Gateway", "snr": 9.5, "ts": "2026-09-03T01:20:00Z"},
+                                                          {"from": "!ee000004", "from_name": "Tracker 4", "to": "!ee000002", "to_name": "Tracker 2", "snr": 4.0, "ts": "2026-09-03T01:20:00Z"},
+                                                          {"from": "!ee000002", "from_name": "Tracker 2", "to": "!ee000003", "to_name": "Handset", "snr": 6.25, "ts": "2026-09-03T01:18:00Z"},
+                                                          {"from": "!ee000003", "from_name": "Handset", "to": "!ee000001", "to_name": "Gateway", "snr": 11.0, "ts": "2026-09-03T01:22:00Z"},
+                                                          {"from": "!ee000002", "from_name": "Tracker 2", "to": "!ee000001", "to_name": "Gateway", "snr": 1.5, "ts": "2026-09-03T01:19:00Z"}]}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "waypoints":
+        rep = {"waypoints": [{"wid": 4242, "node": "!ee000003", "name": "RV Alpha", "description": "meet here", "lat": 51.5012, "lon": -0.1188, "expire": 4102444800, "ts": "2026-09-03T01:15:00Z"}], "count": 1}
+        c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "waypoint_send":
+        c.sendall((json.dumps({"sent": True, "name": req.get("name"), "wid": 5151, "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n").encode()); c.close(); return
     if op == "history":
         kind = req.get("kind") or "positions"
         rows = DEMO_HISTORY.get(kind, [])

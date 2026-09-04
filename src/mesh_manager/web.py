@@ -225,6 +225,15 @@ class Web:
                 self.messages.append(json.loads(line))
             except ValueError:
                 pass
+        elif '"kind": "ack"' in line:
+            # Spec 034: the radio's word on a message this box sent; find it by packet id
+            try:
+                ev = json.loads(line)
+                for m in self.messages:
+                    if m.get("mid") is not None and m.get("mid") == ev.get("request_id"):
+                        m["ack"] = "delivered" if ev.get("ok") else (ev.get("reason") or "failed")
+            except ValueError:
+                pass
         with self.lock:
             for q in list(self.subs):
                 try:
@@ -285,6 +294,15 @@ def run_action(web, aid, args, who):
         return 400, {"error": err}
     if action["op"] == "web:messages":
         return 200, {"messages": list(web.messages)}
+    if action["op"] == "web:quick_messages":
+        return 200, {"messages": quick_load(web.etc_dir)}
+    if action["op"] == "web:quick_messages_set":
+        out, err = quick_save(web.etc_dir, clean.get("messages"))
+        if err:
+            K.audit(web.etc_dir, who=who, event="refused", action=aid, error=err)
+            return 400, {"error": err}
+        K.audit(web.etc_dir, who=who, event="ran", action=aid, result=len(out))
+        return 200, {"written": len(out), "messages": out, "confirmed": True}
     if action["op"] == "web:update_staged":
         return 200, {"staged": U.staged(web.state_dir, arch=web.arch, running=__version__)}
     if action["op"] == "web:update_rollback":
@@ -414,11 +432,11 @@ CSS = """
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D}}
 *{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);font:14px/1.45 Manrope,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 input,select,textarea,button{font:inherit}
-header{background:var(--accent);color:var(--accent-ink);padding:0 var(--s4);display:flex;align-items:center;gap:var(--s4);min-height:var(--tap)}
+header{background:var(--accent);color:var(--accent-ink);padding:0 var(--s4);display:flex;align-items:center;gap:var(--s4);min-height:var(--tap);position:relative;z-index:1100}
 header .brand{font-weight:700;letter-spacing:.02em;white-space:nowrap}header .brand small{font-weight:400;opacity:.8;margin-left:var(--s2)}
 nav{display:flex;flex-wrap:nowrap;gap:var(--s1)}nav a{color:var(--accent-ink);text-decoration:none;opacity:.85;padding:0 var(--s3);min-height:var(--tap);display:inline-flex;align-items:center;border-bottom:3px solid transparent;white-space:nowrap}nav a.on{opacity:1;border-bottom-color:var(--gold)}nav a:hover{opacity:1}
 details.more{position:relative;margin-left:auto}details.more summary{list-style:none;cursor:pointer;min-height:var(--tap);display:inline-flex;align-items:center;gap:var(--s2);padding:0 var(--s3);color:var(--accent-ink)}details.more summary::-webkit-details-marker{display:none}
-details.more nav{position:absolute;right:0;top:100%;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);flex-direction:column;z-index:6;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.18)}details.more nav a{color:var(--ink);border-bottom:0;padding:0 var(--s4);opacity:1}details.more nav a.on{background:var(--surface-sunken)}
+details.more nav{position:absolute;right:0;top:100%;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);flex-direction:column;z-index:1100;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.18)}details.more nav a{color:var(--ink);border-bottom:0;padding:0 var(--s4);opacity:1}details.more nav a.on{background:var(--surface-sunken)}
 button.theme{background:transparent;color:var(--accent-ink);border:1px solid var(--live);min-width:var(--tap);padding:0 var(--s2)}
 .state{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s4);align-items:center;background:var(--surface-raised);border-bottom:1px solid var(--line);padding:var(--s1) var(--s4);font-size:.85rem}
 .state .body{display:contents}.lamp{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--ink-muted);margin-right:var(--s2);vertical-align:-1px}.lamp--ok{background:var(--ok)}.lamp--warn{background:var(--warn)}.lamp--bad{background:var(--bad)}
@@ -436,7 +454,7 @@ pre.log .ln{display:block}pre.log .ln--radio{color:var(--ink-muted-strong)}pre.l
 .sig{display:inline-flex;align-items:center;gap:var(--s2);white-space:nowrap}td time,td .pill{white-space:nowrap}.sig__bars{width:22px;height:16px;flex:none}.sig__bars rect{fill:var(--line)}.sig--4 rect,.sig--3 .b1,.sig--3 .b2,.sig--3 .b3{fill:var(--ok)}.sig--2 .b1,.sig--2 .b2{fill:var(--warn)}.sig--1 .b1{fill:var(--bad)}
 .batt--low{color:var(--bad);font-weight:600}
 button{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:6px;padding:0 var(--s3);min-height:var(--tap);font-size:.9rem;cursor:pointer}button:hover{filter:brightness(1.15)}button.line{background:transparent;color:var(--ink);border-color:var(--line-strong)}button.danger{background:var(--bad)}button.quiet{background:var(--surface-sunken);color:var(--ink);border-color:var(--line)}
-button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:inherit;text-decoration:none;border-bottom:1px dotted var(--line-strong)}a.plain:hover{border-bottom-style:solid}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:50;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
+button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:inherit;text-decoration:none;border-bottom:1px dotted var(--line-strong)}a.plain:hover{border-bottom-style:solid}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}.chart.avail{max-width:none;height:20px;padding:0;border:0;background:transparent}.chart.graph line{stroke-dasharray:none}.chart.graph text{fill:var(--ink);font-size:12px}.chart.graph{max-width:100%}.chart.avail rect.on{fill:var(--ok)}.chart.avail rect.off{fill:var(--line-strong)}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:1200;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
 input[type=text],input[type=number],input[type=password],select,textarea{width:100%;padding:var(--s1) var(--s2);min-height:var(--tap);font-size:.9rem;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface-raised);color:var(--ink);margin:var(--s1) 0 var(--s3)}
 label{display:block}label.check{display:flex;gap:var(--s2);align-items:flex-start;min-height:var(--tap);margin:var(--s2) 0}label.check input{width:18px;height:18px;margin-top:2px;flex:none}
 form.card{max-width:560px}form.login{max-width:360px;margin:3rem auto}form.card.danger{border-color:var(--bad)}form.card.danger h2{color:var(--bad)}
@@ -454,10 +472,10 @@ details.fold{margin-top:var(--s4)}details.fold summary{cursor:pointer;min-height
 .linkbar .dir{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1);margin:var(--s1) 0}.linkbar .hop{display:inline-block;padding:0 var(--s2);border-left:6px solid var(--line);background:var(--surface-sunken);border-radius:0 4px 4px 0;white-space:nowrap}
 .linkbar .hop.band-4,.linkbar .hop.band-3{border-color:var(--ok)}.linkbar .hop.band-2{border-color:var(--warn)}.linkbar .hop.band-1,.linkbar .hop.band-0{border-color:var(--bad)}.linkbar .hop.origin{border-color:var(--accent)}
 .spark{width:72px;height:18px;vertical-align:middle}.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5}.spark line{stroke:var(--line)}.sparkfig{font-size:.8rem;color:var(--ink-muted);white-space:nowrap}
-@media (max-width:700px){header nav.primary{position:fixed;bottom:0;left:0;right:0;background:var(--accent);justify-content:space-around;z-index:5;border-top:1px solid var(--live)}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}}
+@media (max-width:700px){header nav.primary{position:fixed;bottom:0;left:0;right:0;background:var(--accent);justify-content:space-around;z-index:1100;border-top:1px solid var(--live)}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}}
 """
 NAV_PRIMARY = [("/", "Mesh"), ("/messages", "Messages"), ("/channels", "Channels"), ("/radio", "Radio")]
-NAV_MORE = [("/map", "Map"), ("/nodes", "Nodes"), ("/health", "Health"), ("/register", "Register"), ("/bench", "Bench"), ("/log", "Log"), ("/activity", "Activity"), ("/connections", "Connections"), ("/settings", "Settings"), ("/help", "Help"), ("/about", "About")]
+NAV_MORE = [("/map", "Map"), ("/nodes", "Nodes"), ("/graph", "Graph"), ("/packets", "Packets"), ("/health", "Health"), ("/register", "Register"), ("/bench", "Bench"), ("/log", "Log"), ("/activity", "Activity"), ("/connections", "Connections"), ("/settings", "Settings"), ("/help", "Help"), ("/about", "About")]
 NAV = NAV_PRIMARY + NAV_MORE
 e = html.escape
 WRITE_TIMEOUT_S = 45   # above the bridge's read-back window, so a slow radio is never called a failure
@@ -1051,7 +1069,8 @@ OVERLAY_JS = r"""<script>
   var trails_=L.layerGroup().addTo(map),trailLast=0;
   var TRAIL_COLOURS=['--gold','--ok','--line-strong','--accent'];
   function trailHours(){var el=document.getElementById('trail-hours');var v=el?el.value:'3';try{if(!el){v=localStorage.getItem('mm-trails')||'3';}}catch(e){}return v;}
-  function drawTrails(rows){trails_.clearLayers();var hrs=parseFloat(trailHours());if(!(hrs>0)||!rows||!rows.length)return;var now=Date.now(),win=hrs*3600*1000;
+  var lastRows=[];
+  function drawTrails(rows){lastRows=rows||[];trails_.clearLayers();var hrs=parseFloat(trailHours());if(!(hrs>0)||!rows||!rows.length)return;var now=Date.now(),win=hrs*3600*1000;
     var byNode={};rows.forEach(function(r){if(r.lat===null||r.lon===null)return;(byNode[r.node]=byNode[r.node]||[]).push(r);});
     var names={};(lastJ&&lastJ.nodes||[]).forEach(function(n){names[n.id]=n.label||n.name||n.id;});
     Object.keys(byNode).forEach(function(id,idx){var pts=byNode[id];pts.sort(function(a,b){return a.ts<b.ts?-1:1;});var stride=Math.max(1,Math.floor(pts.length/600));var col=tok(TRAIL_COLOURS[idx%TRAIL_COLOURS.length]);
@@ -1136,7 +1155,7 @@ OVERLAY_JS = r"""<script>
   function band(v){if(v===null||v===undefined)return 0;return v>=10?4:v>=5?3:v>=-7?2:v>=-12?1:0;}
   function bandTok(b){return b>=3?'--ok':b===2?'--warn':'--bad';}
   function dist(m){return m>=1000?(m/1000).toFixed(m>=10000?0:1)+' km':Math.round(m)+' m';}
-  function draw(J){lastJ=J;overlay.clearLayers();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
+  function draw(J){lastJ=J;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
     var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;if(n.heard_here===false)return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
     centre=c;rings();
     pts.forEach(function(n){var ll=[n.lat,n.lon],ds=n.direct_snr;
@@ -1150,6 +1169,33 @@ OVERLAY_JS = r"""<script>
     var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>No position, not placed:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
     if(!fitted&&sized()&&!benchAt){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}
     if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}}
+  // Spec 040: playback. Every node where it last was at instant t, and the trail it had walked by then,
+  // from the trails rows the map already holds. The live overlay hides while the slider is off "now".
+  var play_=L.layerGroup().addTo(map),playT=document.getElementById('play-t'),playGo=document.getElementById('play-go'),playAt=document.getElementById('play-at'),playing=null;
+  function posAt(rows,node,t){var best=null;for(var i=0;i<rows.length;i++){var r=rows[i];if(r.node!==node)continue;var ts=Date.parse(r.ts);if(ts<=t&&(!best||ts>Date.parse(best.ts)))best=r;}return best;}
+  function playRange(){var hrs=parseFloat(trailHours());if(!(hrs>0))hrs=3;var now=Date.now();return [now-hrs*3600*1000,now];}
+  function renderPlay(){if(!playT)return;var v=parseInt(playT.value,10);play_.clearLayers();
+    if(v>=1000){if(!map.hasLayer(overlay))map.addLayer(overlay);if(!map.hasLayer(trails_))map.addLayer(trails_);if(playAt)playAt.textContent='';return;}
+    if(map.hasLayer(overlay))map.removeLayer(overlay);if(map.hasLayer(trails_))map.removeLayer(trails_);
+    var rg=playRange(),t=rg[0]+(rg[1]-rg[0])*v/1000;if(playAt)playAt.textContent=new Date(t).toISOString().slice(0,19)+'Z';
+    var nodes={};lastRows.forEach(function(r){nodes[r.node]=true;});
+    Object.keys(nodes).forEach(function(id){var p=posAt(lastRows,id,t);if(!p)return;var path=lastRows.filter(function(r){return r.node===id&&Date.parse(r.ts)<=t&&Date.parse(r.ts)>=rg[0];}).map(function(r){return [r.lat,r.lon];});
+      if(path.length>1)L.polyline(path,{color:tok('--gold'),weight:3,opacity:.7}).addTo(play_);
+      L.circleMarker([p.lat,p.lon],{radius:8,color:tok('--accent'),weight:2,fillColor:tok('--gold'),fillOpacity:1}).bindTooltip((names_[id]||id),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});}
+  var names_={};
+  if(playT){playT.addEventListener('input',renderPlay);}
+  if(playGo){playGo.addEventListener('click',function(){if(playing){clearInterval(playing);playing=null;playGo.textContent='Play';return;}
+    if(parseInt(playT.value,10)>=1000)playT.value=0;playGo.textContent='Pause';
+    playing=setInterval(function(){var v=parseInt(playT.value,10)+5;if(v>=1000){v=1000;clearInterval(playing);playing=null;playGo.textContent='Play';}playT.value=v;renderPlay();},200);});}
+  // Spec 041: waypoints heard on the mesh, as pins; Spec 042: neighbour edges between positioned nodes
+  var wps_=L.layerGroup().addTo(map),graph_=L.layerGroup().addTo(map),wpsOn=document.getElementById('wps-on'),graphOn=document.getElementById('graph-on');
+  function fetchWaypoints(){if(wpsOn&&!wpsOn.checked){wps_.clearLayers();return;}fetch('/api/waypoints').then(function(r){return r.json();}).then(function(j){wps_.clearLayers();(j.waypoints||[]).forEach(function(w){if(w.lat===null||w.lat===undefined)return;
+    L.circleMarker([w.lat,w.lon],{radius:7,color:tok('--gold'),weight:3,fillColor:tok('--surface-raised'),fillOpacity:1}).bindTooltip(w.name+(w.description?' · '+w.description:''),{permanent:true,direction:'top',className:'mm-node'}).addTo(wps_);});}).catch(function(){});}
+  function fetchGraph(){if(!graphOn||!graphOn.checked||!lastJ){graph_.clearLayers();return;}fetch('/api/neighbors?hours='+(trailHours()||24)).then(function(r){return r.json();}).then(function(j){graph_.clearLayers();var by={};(lastJ.nodes||[]).forEach(function(n){by[n.id]=n;});if(lastJ.own&&lastJ.own.id)by[lastJ.own.id]=lastJ.own;
+    (j.edges||[]).forEach(function(x){var a=by[x.from],b=by[x.to];if(!a||!b||a.lat===null||a.lat===undefined||b.lat===null||b.lat===undefined)return;
+      L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:tok(bandTok(band(x.snr))),weight:2,dashArray:'2 6',opacity:.9}).bindTooltip((x.from_name||x.from)+' hears '+(x.to_name||x.to)+' at '+x.snr+' dB',{sticky:true,className:'mm-link'}).addTo(graph_);});}).catch(function(){});}
+  if(wpsOn)wpsOn.addEventListener('change',fetchWaypoints);if(graphOn)graphOn.addEventListener('change',fetchGraph);
+  fetchWaypoints();setInterval(fetchWaypoints,60000);
   var last=0;
   window.mmOverlay=function(){var now=Date.now();if(now-last<1500)return;last=now;fetch('/api/links').then(function(r){return r.json();}).then(function(J){draw(J);fetchTrails(false);}).catch(function(){});};
   show(chosen);last=0;window.mmOverlay();
@@ -1178,12 +1224,12 @@ def mesh_views(L, tiles, size=640, bare=False):
     return (f"<div id='mesh-views' data-default-view='{'map' if has else 'plan'}' data-has-position='{'1' if has else '0'}' data-tiles='{attr}'>"
             "<div class='controls views'><button type='button' class='line' data-view='map'>Map</button><button type='button' class='line' data-view='plan'>Plan</button>"
             "<label class='meta' for='ring-alpha' title='The range rings and their labels, from solid to invisible'>rings <input type='range' id='ring-alpha' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:110px'></label><span class='meta' id='ring-step'></span>"
-            "<label class='meta' for='trail-hours' title='Each node&#39;s track over the window, fading with age'>trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option></select></label>"
+            "<label class='meta' for='trail-hours' title='Each node&#39;s track over the window, fading with age'>trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option></select></label> <label class='meta'>playback <input type='range' id='play-t' min='0' max='1000' value='1000' style='width:160px;vertical-align:middle'></label><button type='button' class='line' id='play-go'>Play</button><span id='play-at' class='meta'></span> <label class='meta'><input type='checkbox' id='graph-on'> graph</label> <label class='meta'><input type='checkbox' id='wps-on' checked> waypoints</label>"
             "<label class='meta' for='cover-hours' title='Every position heard, a dot coloured by its signal band; hollow when it came through a relay'>coverage <select id='cover-hours'><option value='0' selected>off</option><option value='3'>3 h</option><option value='24'>24 h</option><option value='168'>7 d</option></select></label>"
             "<label class='meta' for='grid-on' title='The MGRS grid: 1 km lines from zoom 13, 10 km below, kilometre digits along the edges'><input type='checkbox' id='grid-on' style='width:auto;min-height:0;margin:0 4px 0 0;vertical-align:middle'>grid</label>"
             + ("" if bare else "<button type='button' class='line' id='map-pop' title='The map on its own, in a window of its own'>Pop out</button>")
             + "<span class='meta' id='tiles-now'></span><span class='meta warn' id='tiles-note'></span></div>"
-            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div></div>"
+            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div><details class='fold ctl' style='margin-top:var(--s3)'><summary>Drop a waypoint on the mesh</summary><form class='card' data-action='waypoint_send' data-risk='air' data-confirm='This reaches every device on the primary channel and is forwarded to TAK as a marker.'><label>Name (30 bytes)<input type='text' name='name' maxlength='30' required></label><label>Description<input type='text' name='description' maxlength='100'></label><label>Latitude<input type='text' name='lat' inputmode='decimal' required placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' inputmode='decimal' required placeholder='-0.1200'></label><label>Expires in (minutes)<input type='number' name='expire_min' value='60' min='1' max='10080'></label><button type='submit'>Send waypoint</button><div class='res meta' role='status'></div></form></details></div>"
             f"<div data-view='plan' id='map-box'>{map_svg(L, size)}</div></div>{OVERLAY_JS}")
 
 
@@ -1682,7 +1728,20 @@ def manage_forms(r):
     return (f"<details class='fold ctl'><summary>Manage</summary><div class='manage'>{read}{setf}{regf}{push}{reboot}</div></details>")
 
 
-def register_rows(reg):
+def _avcell(a):
+    """Spec 036: the heard-percentage cell, with the histogram in the tooltip."""
+    if not a:
+        return "<td class='meta'>·</td>"
+    ser = a.get("series") or []
+    blocks = "".join("▮" if v else "▯" for v in ser)
+    pct = int(a.get("pct") or 0)
+    tone = "ok" if pct >= 80 else ("warn" if pct >= 40 else "bad")
+    return (f"<td data-tip='heard in {a.get('heard')} of {a.get('buckets')} {'hours' if a.get('bucket_secs') == 3600 else 'days'}' "
+            f"data-tip-more='{e(blocks)}' style='font-variant-numeric:tabular-nums;color:var(--{tone})'>{pct}%</td>")
+
+
+def register_rows(reg, availability=None):
+    availability = availability or {}
     rows = ""
     for r in reg.get("rows", []):
         nid = str(r.get("id") or "")
@@ -1700,11 +1759,12 @@ def register_rows(reg):
                   "<button type='submit' class='danger'>Forget this node</button><div class='res meta' role='status'></div></form></details>")
         rows += (f"<tr data-id='{e(nid)}'><td><b>{e(dname(r))}</b><div class='sub'>{e(nid)}{(' · ' + e(str(r.get('name') or ''))) if r.get('label') and r.get('name') else ''}</div>{forget}</td><td>{form}</td>"
                  f"<td>{e(str(r.get('hw') or ''))}<div class='sub'>{e(str(r.get('firmware') or 'firmware unknown'))}</div></td><td>{e(str(r.get('role') or ''))}</td>"
-                 f"<td>{managed}</td><td>{heard_html}</td></tr>")
-    return rows or "<tr><td colspan=6 class='meta'>No device in the register and none in the radio's database.</td></tr>"
+                 f"<td>{managed}</td><td>{heard_html}</td>{_avcell(availability.get(str(r.get('id') or '')))}</tr>")
+    return rows or "<tr><td colspan=7 class='meta'>No device in the register and none in the radio's database.</td></tr>"
 
 
-def register_body(reg, drift=None):
+def register_body(reg, drift=None, availability=None):
+    availability = availability or {}
     js = r"""<script>
 (function(){var last=0;
   window.mmRegister=function(){var now=Date.now();if(now-last<1500)return;last=now;
@@ -1724,8 +1784,8 @@ def register_body(reg, drift=None):
     managed = sum(1 for r in reg.get("rows", []) if r.get("managed"))
     return (f"<p class='meta'>{n} device{'s' if n != 1 else ''} the radio knows of or the bench has seen, {managed} managed. Joined on radio id and nothing else: the node's own name from the air sits beside your label, never in its place. "
             "A device is managed only when a read of the device itself showed this radio's public key among its admin keys; the bench is where that happens.</p>"
-            "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Label · holder</th><th>Hardware · firmware</th><th>Role</th><th>Managed</th><th>Heard</th></tr></thead>"
-            f"<tbody id='register-rows'>{register_rows(reg)}</tbody></table></div>{stale_form()}<div id='drift-body' style='margin-top:var(--s4)'>{drift_section(drift)}</div>{DRIFT_JS}{js}{WRITE_JS}")
+            "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Label · holder</th><th>Hardware · firmware</th><th>Role</th><th>Managed</th><th>Heard</th><th title='how much of the last 24 hours the node was heard for'>Heard %</th></tr></thead>"
+            f"<tbody id='register-rows'>{register_rows(reg, availability)}</tbody></table></div>{stale_form()}<div id='drift-body' style='margin-top:var(--s4)'>{drift_section(drift)}</div>{DRIFT_JS}{js}{WRITE_JS}")
 
 
 DRIFT_JS = "<script>(function(){var prev=window.onMesh||function(){};window.onMesh=function(d){prev(d);if(d.kind==='node'){window.mmFrag('drift','drift-body');}};})();</script>"
@@ -1974,7 +2034,7 @@ def series_chart(pts, key, unit="", lo=None, hi=None, guides=(), label=""):
             f"<polyline points='{line}'/><text x='30' y='{ht - 4}'>{e(pts[0]['ts'][5:16].replace('T', ' '))}Z</text><text x='{w - 110}' y='{ht - 4}'>{e(pts[-1]['ts'][5:16].replace('T', ' '))}Z</text></svg>")
 
 
-def node_body(n, tel, msgs, npos, hours):
+def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
     """Spec 025: one node, its facts, its battery and voltage over time, its last messages."""
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if n.get("lat") is not None and n.get("lon") is not None else "no fix")
     heard = n.get("heard") or n.get("last_heard_db")
@@ -1988,10 +2048,27 @@ def node_body(n, tel, msgs, npos, hours):
     sel = "".join(f"<option value='{h}'{' selected' if h == hours else ''}>{t}</option>" for h, t in ((24, "24 h"), (168, "7 d")))
     form = (f"<form method='get' action='/node' class='controls'><input type='hidden' name='id' value='{e(n.get('id') or '')}'><label class='meta'>window <select name='hours' onchange='this.form.submit()'>{sel}</select></label></form>")
     rows = "".join(f"<tr><td class='meta'><time datetime='{e(m['ts'])}' data-age>{e(age(m['ts']))}</time></td><td>{e('everyone' if str(m.get('dest') or '') == '^all' else str(m.get('dest') or ''))}</td><td>{e(str(m.get('text') or ''))}</td></tr>" for m in msgs[-20:])
-    return (f"<div class='cards'>{facts}</div>{form}"
+    env = env or []
+    envblock = ""
+    if env:
+        last = env[-1]
+        bits = [f"{last['temperature']:.1f} °C" if last.get("temperature") is not None else None,
+                f"{last['humidity']:.0f}% RH" if last.get("humidity") is not None else None,
+                f"{last['pressure']:.0f} hPa" if last.get("pressure") is not None else None]
+        envblock = (f"<h2>Environment</h2><div class='cards'>{card('Latest reading', e(' · '.join(b for b in bits if b)) + f"<div class='sub'><time datetime='{e(str(last.get('ts') or ''))}' data-age>{e(age(str(last.get('ts') or '')))}</time></div>")}</div>"
+                    f"<h3>Temperature</h3>{series_chart(env, 'temperature', ' °C', None, None, (), 'temperature')}")
+    avblock = ""
+    if availability and availability.get("series"):
+        ser = availability["series"]; w = max(2, min(12, int(600 / max(1, len(ser)))))
+        bars = "".join(f"<rect x='{i * w}' y='{2 if v else 16}' width='{w - 1}' height='{18 if v else 4}' class='{'on' if v else 'off'}'/>" for i, v in enumerate(ser))
+        avblock = (f"<h2>Heard</h2><p class='meta'><b>{availability.get('pct')}%</b> of the window: heard in {availability.get('heard')} of {availability.get('buckets')} "
+                   f"{'hours' if availability.get('bucket_secs') == 3600 else 'days'}.</p>"
+                   f"<svg class='chart avail' viewBox='0 0 {len(ser) * w} 20' width='{len(ser) * w}' height='20' role='img' aria-label='heard per bucket'>{bars}</svg>")
+    return (f"<div class='cards'>{facts}</div>{form}{avblock}"
             f"<h2>Battery</h2>{series_chart(levels, 'level', '%', 0, 100, ((20, 'bad'),), 'battery')}"
             + (f"<p class='meta'>On charge at {e(', '.join(charging[-6:]))}{' and earlier' if len(charging) > 6 else ''} (shown as 100%).</p>" if charging else "")
             + f"<h2>Voltage</h2>{series_chart(tel, 'voltage', ' V', None, None, ((3.3, 'bad'),), 'voltage')}"
+            + envblock +
             f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>None in the window.</td></tr>'}</tbody></table></div>")
 
 
@@ -2082,9 +2159,9 @@ def alerts_section(al):
 
 def health_body(h, al=None):
     js = "<script>window.onMesh=function(d){if(d.kind==='status'){window.mmFrag('health','health-body');}if(d.kind==='alert'){window.mmFrag('alerts','alerts-body');}};</script>"
-    return ("<p class='meta'>How busy the mesh is, from the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 the gateway's own transmit air time must stay under the 10% duty-cycle limit.</p>"
-            f"<div id='health-body'>{health_cards(h)}</div><div id='alerts-body'>{alerts_section(al)}</div>{js}{WRITE_JS}")
-
+    _out = (("<p class='meta'>How busy the mesh is, from the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 the gateway's own transmit air time must stay under the 10% duty-cycle limit.</p>"
+            f"<div id='health-body'>{health_cards(h)}</div><div id='alerts-body'>{alerts_section(al)}</div>{js}{WRITE_JS}"))
+    return _out + export_section()
 
 def history_box(web):
     """Spec 020: what the box remembers, and for how long."""
@@ -2110,6 +2187,166 @@ def bytesize(n):
     if n >= 1024:
         return f"{n // 1024} KB"
     return f"{n} bytes"
+
+
+
+# ---- Spec 037: the history as a file ------------------------------------------------------------
+EXPORT_KINDS = {"positions": ("gpx", "kml", "csv"), "messages": ("csv",), "packets": ("csv",), "telemetry": ("csv",), "environment": ("csv",)}
+
+
+def export_csv(rows):
+    import csv as _csv, io as _io
+    cols = []
+    for r in rows:
+        for k in r:
+            if k not in cols and k != "id":
+                cols.append(k)
+    out = _io.StringIO(); w = _csv.writer(out, lineterminator="\n")
+    w.writerow(cols)
+    for r in rows:
+        w.writerow(["" if r.get(c) is None else r.get(c) for c in cols])
+    return out.getvalue().encode("utf-8")
+
+
+def export_gpx(rows, names=None):
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    names = names or {}
+    g = Element("gpx", {"version": "1.1", "creator": "Mesh Manager", "xmlns": "http://www.topografix.com/GPX/1/1"})
+    by = {}
+    for r in rows:
+        if r.get("lat") is None or r.get("lon") is None:
+            continue
+        by.setdefault(str(r.get("node") or "?"), []).append(r)
+    for node, pts in by.items():
+        trk = SubElement(g, "trk"); SubElement(trk, "name").text = names.get(node) or node
+        seg = SubElement(trk, "trkseg")
+        for r in pts:
+            p = SubElement(seg, "trkpt", {"lat": f"{float(r['lat']):.6f}", "lon": f"{float(r['lon']):.6f}"})
+            if r.get("ts"):
+                SubElement(p, "time").text = str(r["ts"])
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(g)
+
+
+def export_kml(rows, names=None):
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    names = names or {}
+    k = Element("kml", {"xmlns": "http://www.opengis.net/kml/2.2"}); doc = SubElement(k, "Document")
+    SubElement(doc, "name").text = "Mesh Manager positions"
+    by = {}
+    for r in rows:
+        if r.get("lat") is None or r.get("lon") is None:
+            continue
+        by.setdefault(str(r.get("node") or "?"), []).append(r)
+    for node, pts in by.items():
+        pm = SubElement(doc, "Placemark"); SubElement(pm, "name").text = names.get(node) or node
+        ls = SubElement(pm, "LineString"); SubElement(ls, "tessellate").text = "1"
+        SubElement(ls, "coordinates").text = " ".join(f"{float(r['lon']):.6f},{float(r['lat']):.6f},0" for r in pts)
+    return b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(k)
+
+
+def export_section():
+    """Spec 037: the Export control on the Health page. The URL is built in the browser from the selects."""
+    kinds = "".join(f"<option value='{k}'>{k}</option>" for k in EXPORT_KINDS)
+    return ("<h2 id='export'>Export</h2><p class='meta'>The history as a file, for a report or for Pinecone: positions as GPX, KML or CSV; messages, packets, telemetry and environment as CSV. "
+            "Only what the box already holds: ids, your labels, times, positions and the text already on the channels.</p>"
+            f"<form class='controls' id='export-form'><label>Kind <select id='ex-kind'>{kinds}</select></label>"
+            "<label>Window <select id='ex-hours'><option value='24'>24 h</option><option value='168'>7 d</option><option value='720'>30 d</option></select></label>"
+            "<label>Format <select id='ex-fmt'><option value='gpx'>GPX</option><option value='kml'>KML</option><option value='csv'>CSV</option></select></label>"
+            "<button type='submit' class='line'>Download</button></form>"
+            "<script>(function(){var f=document.getElementById('export-form');if(!f)return;var k=document.getElementById('ex-kind'),fm=document.getElementById('ex-fmt');"
+            "var allowed=" + json.dumps({k: list(v) for k, v in EXPORT_KINDS.items()}) + ";"
+            "function fix(){var a=allowed[k.value]||['csv'];Array.prototype.forEach.call(fm.options,function(o){o.disabled=a.indexOf(o.value)<0;});if(a.indexOf(fm.value)<0){fm.value=a[0];}}"
+            "k.addEventListener('change',fix);fix();"
+            "f.addEventListener('submit',function(ev){ev.preventDefault();window.location.href='/export/'+k.value+'.'+fm.value+'?hours='+document.getElementById('ex-hours').value;});})();</script>")
+
+
+# ---- Spec 038: quick messages ----------------------------------------------------------------------
+QUICK_DEFAULTS = ["Check in", "RTB", "Send your location"]
+
+
+def quick_load(etc_dir):
+    try:
+        v = json.load(open(os.path.join(etc_dir, "quick.json")))
+        return [str(x) for x in v if str(x).strip()] if isinstance(v, list) else list(QUICK_DEFAULTS)
+    except (OSError, ValueError):
+        return list(QUICK_DEFAULTS)
+
+
+def quick_save(etc_dir, msgs):
+    """Returns (list, error). Up to eight, each 200 bytes at most, none empty."""
+    if not isinstance(msgs, list):
+        return None, "messages must be a list"
+    out = [str(m).strip() for m in msgs if str(m).strip()]
+    if len(out) > 8:
+        return None, "eight quick messages at most"
+    for m in out:
+        if len(m.encode()) > 200:
+            return None, "a quick message is 200 bytes at most, like any mesh message"
+    with open(os.path.join(etc_dir, "quick.json"), "w") as fh:
+        json.dump(out, fh)
+    return out, None
+
+
+# ---- Spec 039: the packet inspector ---------------------------------------------------------------
+def packets_body(rows, hours, node, port, labels):
+    counts = {}
+    for r in rows:
+        counts[str(r.get("port") or "?")] = counts.get(str(r.get("port") or "?"), 0) + 1
+    ports = sorted(counts, key=lambda k: -counts[k])
+    shown = [r for r in rows if (not node or r.get("node") == node) and (not port or str(r.get("port") or "") == port)]
+    shown = list(reversed(shown))   # newest first
+    body = "".join(
+        f"<tr><td class='meta'><time datetime='{e(str(r.get('ts') or ''))}' data-age>{e(age(str(r.get('ts') or '')))}</time></td>"
+        f"<td>{e(labels.get(str(r.get('node') or ''), str(r.get('node') or '?')))}<div class='sub'>{e(str(r.get('node') or ''))}</div></td>"
+        f"<td><code>{e(str(r.get('port') or '?'))}</code></td>"
+        f"<td style='font-variant-numeric:tabular-nums'>{'' if r.get('snr') is None else f'{float(r['snr']):.1f} dB'}</td>"
+        f"<td>{'' if r.get('hops') is None else r.get('hops')}</td><td>{'' if r.get('size') is None else str(r.get('size')) + ' B'}</td></tr>"
+        for r in shown[:500])
+    hsel = "".join(f"<option value='{h}'{' selected' if h == hours else ''}>{t}</option>" for h, t in ((1, "1 h"), (6, "6 h"), (24, "24 h"), (48, "48 h"), (168, "7 d")))
+    psel = "<option value=''>every port</option>" + "".join(f"<option value='{e(p)}'{' selected' if p == port else ''}>{e(p)}</option>" for p in ports)
+    nodes = sorted({str(r.get("node") or "") for r in rows if r.get("node")})
+    nsel = "<option value=''>every node</option>" + "".join(f"<option value='{e(n)}'{' selected' if n == node else ''}>{e(labels.get(n, n))}</option>" for n in nodes)
+    chips = " ".join(f"<a class='pill' href='/packets?hours={hours}&port={e(p)}' data-portcount='{counts[p]}'>{e(p)} <b>{counts[p]}</b></a>" for p in ports)
+    js = r"""<script>(function(){var last=0;function refresh(){var now=Date.now();if(now-last<2000)return;last=now;
+  fetch(window.location.href).then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var nb=d.getElementById('pkt-rows'),ob=document.getElementById('pkt-rows');if(nb&&ob){ob.innerHTML=nb.innerHTML;}var nc=d.getElementById('pkt-counts'),oc=document.getElementById('pkt-counts');if(nc&&oc){oc.innerHTML=nc.innerHTML;}}).catch(function(){});}
+  window.onMesh=function(d){if(d.kind==='packet'){refresh();}};})();</script>"""
+    return (f"<p class='meta'>Every packet the radio heard in the window, newest first. The port is what the packet carried; hops is how many relays it came through; a direct packet is 0.</p>"
+            f"<form method='get' action='/packets' class='controls'><label>Window <select name='hours' onchange='this.form.submit()'>{hsel}</select></label>"
+            f"<label>Node <select name='node' onchange='this.form.submit()'>{nsel}</select></label><label>Port <select name='port' onchange='this.form.submit()'>{psel}</select></label></form>"
+            f"<p id='pkt-counts'>{chips or '<span class=meta>nothing in the window</span>'}</p>"
+            f"<div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th>Port</th><th>SNR</th><th>Hops</th><th>Size</th></tr></thead><tbody id='pkt-rows'>{body or '<tr><td colspan=6 class=meta>No packets match.</td></tr>'}</tbody></table></div>{js}")
+
+
+# ---- Spec 042: the mesh as a graph -------------------------------------------------------------------
+def graph_body(nb, hours):
+    import math
+    edges = nb.get("edges") or []; own = nb.get("own")
+    hsel = "".join(f"<option value='{h}'{' selected' if h == hours else ''}>{t}</option>" for h, t in ((1, "1 h"), (6, "6 h"), (24, "24 h"), (168, "7 d")))
+    form = f"<form method='get' action='/graph' class='controls'><label>Window <select name='hours' onchange='this.form.submit()'>{hsel}</select></label></form>"
+    if not edges:
+        return (form + "<p class='meta'><b>No neighbour reports in the window.</b> This graph is drawn from the neighbour-info module, which a node broadcasts only when it is switched on. "
+                "Turn it on over the air with <code>node_set</code> on a managed device (neighbour info, with an interval of a few minutes), or on the bench, and the edges appear as reports arrive. "
+                "The gateway's own links to each node are on the map meanwhile.</p>")
+    ids, names = [], {}
+    for x in edges:
+        for k, nk in (("from", "from_name"), ("to", "to_name")):
+            if x.get(k) and x[k] not in names:
+                ids.append(x[k]); names[x[k]] = x.get(nk) or x[k]
+    n = len(ids); W_, H_ = 720, 480; cx, cy, r = W_ / 2, H_ / 2, min(W_, H_) / 2 - 60
+    pos = {nid: (cx + r * math.cos(2 * math.pi * i / n - math.pi / 2), cy + r * math.sin(2 * math.pi * i / n - math.pi / 2)) for i, nid in enumerate(ids)}
+    def tone(snr):
+        if snr is None: return "--ink-muted"
+        return "--ok" if snr >= 8 else ("--warn" if snr >= 2 else "--bad")
+    lines = "".join(
+        f"<line data-edge='{e(x['from'])}|{e(x['to'])}' x1='{pos[x['from']][0]:.0f}' y1='{pos[x['from']][1]:.0f}' x2='{pos[x['to']][0]:.0f}' y2='{pos[x['to']][1]:.0f}' "
+        f"stroke='var({tone(x.get('snr'))})' stroke-width='{1.5 + max(0.0, min(6.0, (x.get('snr') or 0) / 2)):.1f}' stroke-opacity='0.85'><title>{e(names[x['from']])} hears {e(names[x['to']])} at {e(str(x.get('snr')))} dB</title></line>"
+        for x in edges if x.get("from") in pos and x.get("to") in pos)
+    dots = "".join(
+        f"<g data-node='{e(nid)}'><circle cx='{pos[nid][0]:.0f}' cy='{pos[nid][1]:.0f}' r='{11 if nid == own else 8}' fill='var({'--gold' if nid == own else '--surface-raised'})' stroke='var(--accent)' stroke-width='2'/>"
+        f"<text x='{pos[nid][0]:.0f}' y='{pos[nid][1] + 24:.0f}' text-anchor='middle'>{e(names[nid])}</text></g>"
+        for nid in ids)
+    return (form + f"<p class='meta'>{len(edges)} edge{'s' if len(edges) != 1 else ''} from {len({x.get('from') for x in edges})} reporting node{'s' if len({x.get('from') for x in edges}) != 1 else ''}. An edge points from the node that reported to the neighbour it heard, weighted by the SNR it heard it at; green is a comfortable link, amber marginal, red about to fail. The gold node is this box.</p>"
+            f"<svg class='chart graph' viewBox='0 0 {W_} {H_}' width='{W_}' height='{H_}' role='img' aria-label='the mesh as a graph' style='max-width:100%;height:auto'>{lines}{dots}</svg>")
 
 
 def rollback_box(web):
@@ -2181,7 +2418,7 @@ def seed_messages(web):
     except Exception:  # noqa: BLE001
         rows = None
     for r in rows or []:
-        web.messages.append({"ts": r.get("ts"), "from": r.get("node"), "name": r.get("name") or r.get("node"), "to": r.get("dest"),
+        web.messages.append({"ts": r.get("ts"), "from": r.get("node"), "name": r.get("name") or r.get("node"), "to": r.get("dest"), "mid": r.get("mid"), "ack": r.get("ack"), "sent": r.get("mid") is not None,
                              "channel": r.get("channel"), "text": r.get("text"), "stored": True})
 
 
@@ -2193,7 +2430,15 @@ def message_rows(web, labels=None):
         who = labels.get(str(m.get("from") or "")) or str(m.get("name") or m.get("from") or "")
         ts = str(m.get("ts") or "")
         when = f"<time datetime='{e(ts)}' data-age>{e(age(ts))}</time>" if ts else ""
-        state = " <span class='pill'>acknowledged</span>" if m.get("acked") else (f" <span class='pill'>handed to the radio {e(hhmm(ts))}</span>" if m.get("sent") else "")
+        ack = m.get("ack")
+        if ack == "delivered":
+            state = " <span class='pill' style='background:var(--ok);color:#fff;border-color:var(--ok)'>delivered</span>"
+        elif ack:
+            state = f" <span class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)' title='the radio gave up: {e(str(ack))}'>not delivered · {e(str(ack).replace('_', ' ').lower())}</span>"
+        elif m.get("sent") or m.get("mid") is not None:
+            state = f" <span class='pill'>handed to the radio {e(hhmm(ts))}</span>"
+        else:
+            state = ""
         rows += (f"<tr><td class='meta'>{when}</td><td>{e(who)}{state}</td>"
                  f"<td>{e('everyone' if str(m.get('to') or '') == '^all' else str(m.get('to') or ''))}</td><td>{e(str(m.get('text') or ''))}</td></tr>")
     return rows or "<tr><td colspan=4 class='meta'>Nothing heard on the channels since the bridge started.</td></tr>"
@@ -2209,12 +2454,14 @@ def messages_body(web, nodes, chans=None, st=None):
             "data-confirm-channel='Send to everyone on {channel}, {count} devices heard here: “{text}”' "
             "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.'>"
             f"<h2 style='margin-top:0'>{e(send['title'])}</h2><p class='meta'>{e(send['description'])}</p>"
-            "<label>Message (200 bytes at most)<input type='text' name='text' maxlength='200' required></label>"
+            + ("<div class='row-actions' id='quick'>" + "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick_load(web.etc_dir)) + "</div>" if quick_load(web.etc_dir) else "")
+            + "<label>Message (200 bytes at most)<input type='text' name='text' maxlength='200' required></label>"
             f"<label>Channel<select name='channel'>{ch_opts}</select></label>"
             f"<label>To<select name='to'><option value='^all'>everyone on the channel</option>{node_opts}</select></label>"
             "<button type='submit'>Send</button><div class='res meta' role='status'></div></form>")
     js = r"""<script>
 (function(){var f=document.getElementById('send');
+  document.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
   f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();
     var chSel=f.elements.channel,toSel=f.elements.to,text=f.elements.text.value;
     var t=toSel.value==='^all'?f.dataset.confirmChannel.replace('{channel}',chSel.options[chSel.selectedIndex].text).replace('{count}',f.dataset.heard):f.dataset.confirmDirect.replace('{node}',toSel.options[toSel.selectedIndex].text);
@@ -2343,7 +2590,19 @@ def settings_body(web, saved=False):
             "<p class='meta'>What this mesh is for, who runs it, the region and channel policy, standing orders. Served verbatim to every connected agent as <code>mesh_context</code>; nothing in the product knows your fleet, this is where it learns it.</p>"
             f"<textarea name='context' rows='16' style='font:14px var(--mono)'>{e(ctx)}</textarea>"
             "<div style='margin-top:.6rem'><button type='submit'>Save</button></div></form>"
+            + quick_settings(web, saved)
             + update_settings(web))
+
+
+def quick_settings(web, saved=False):
+    """Spec 038: the preset messages, one per line."""
+    msgs = quick_load(web.etc_dir)
+    err = getattr(web, "_quick_err", "")
+    return (f"<form method='post' action='/settings/quick' class='card' style='margin-top:1rem'><h2 style='margin-top:0'>Quick messages</h2>"
+            "<p class='meta'>Up to eight, one per line, each 200 bytes at most. The Messages page offers them as buttons; a press fills the field and nothing is sent without the usual confirm.</p>"
+            f"{'<p class=bad>' + e(err) + '</p>' if err else ''}"
+            f"<textarea name='quick' rows='6' style='font:14px var(--mono)'>{e(chr(10).join(msgs))}</textarea>"
+            "<div style='margin-top:.6rem'><button type='submit'>Save</button></div></form>")
 
 
 def update_settings(web):
@@ -2472,6 +2731,63 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 ctype = {".js": "text/javascript", ".css": "text/css", ".png": "image/png"}.get(os.path.splitext(fp)[1], "text/plain")
                 with open(fp, "rb") as fh:
                     return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""), {"Cache-Control": "public, max-age=86400"})
+            if path.startswith("/export/"):
+                m = re.fullmatch(r"/export/([a-z]+)\.([a-z]+)", path)
+                if not m or m.group(1) not in EXPORT_KINDS or m.group(2) not in EXPORT_KINDS[m.group(1)]:
+                    return self._json(404, {"error": "export kinds: " + ", ".join(f"{k}.{'|'.join(v)}" for k, v in EXPORT_KINDS.items())})
+                kind, fmt = m.group(1), m.group(2)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                try:
+                    hours = max(1, min(int(q.get("hours", ["24"])[0]), 24 * 30))
+                except ValueError:
+                    hours = 24
+                node = (q.get("node", [""])[0] or "").strip() or None
+                since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+                rows = self._ask("history", kind=kind, node=node, since=since, limit=5000).get("rows") or []
+                names = {n.get("id"): (n.get("label") or n.get("name") or n.get("id")) for n in (self._links().get("nodes") or [])}
+                data = export_gpx(rows, names) if fmt == "gpx" else (export_kml(rows, names) if fmt == "kml" else export_csv(rows))
+                ctype = {"gpx": "application/gpx+xml", "kml": "application/vnd.google-earth.kml+xml", "csv": "text/csv; charset=utf-8"}[fmt]
+                fn = f"mesh-{kind}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.{fmt}"
+                self.send_response(200); self.send_header("Content-Type", ctype); self.send_header("Content-Disposition", f"attachment; filename=\"{fn}\"")
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
+            if path == "/packets":
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                try:
+                    hours = int(q.get("hours", ["24"])[0])
+                except ValueError:
+                    hours = 24
+                hours = hours if hours in (1, 6, 24, 48, 168) else 24
+                node = (q.get("node", [""])[0] or "").strip(); port = (q.get("port", [""])[0] or "").strip()
+                since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+                rows = self._ask("history", kind="packets", since=since, limit=5000).get("rows") or []
+                labels = {str(n.get("id")): str(n.get("label") or n.get("name") or n.get("id")) for n in (self._links().get("nodes") or [])}
+                for r in (self._ask("register").get("rows") or []):
+                    if r.get("label"):
+                        labels[str(r.get("id"))] = str(r["label"])
+                return self._send(200, self._page("Packets", packets_body(rows, hours, node, port, labels), "/packets"))
+            if path == "/graph":
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                try:
+                    hours = int(q.get("hours", ["24"])[0])
+                except ValueError:
+                    hours = 24
+                hours = hours if hours in (1, 6, 24, 168) else 24
+                return self._send(200, self._page("Graph", graph_body(self._ask("neighbors", hours=hours), hours), "/graph"))
+            if path == "/api/trails":
+                # Spec 040: the positions in the window, the rows playback and the trails consume
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                try:
+                    hours = max(0.25, min(float(q.get("hours", ["3"])[0]), 24 * 30))
+                except ValueError:
+                    hours = 3.0
+                since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
+                rows = self._ask("history", kind="positions", since=since, limit=5000).get("rows") or []
+                return self._json(200, {"hours": hours, "since": since, "rows": [{"ts": r.get("ts"), "node": r.get("node"), "lat": r.get("lat"), "lon": r.get("lon"), "snr": r.get("snr")} for r in rows]})
+            if path == "/api/waypoints":
+                return self._json(200, self._ask("waypoints"))
+            if path == "/api/neighbors":
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                return self._json(200, self._ask("neighbors", hours=(q.get("hours", ["24"])[0])))
             if path == "/nodes":
                 L = self._links()
                 return self._send(200, self._page("Nodes", nodes_body(L.get("nodes") or [], routes=L.get("routes")) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
@@ -2511,7 +2827,9 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 tel = self._ask("history", kind="telemetry", node=nid, since=since, limit=2000).get("rows") or []
                 msgs = self._ask("history", kind="messages", node=nid, since=since, limit=200).get("rows") or []
                 npos = len(self._ask("history", kind="positions", node=nid, since=since, limit=5000).get("rows") or [])
-                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours), "/nodes"))
+                env = self._ask("history", kind="environment", node=nid, since=since, limit=2000).get("rows") or []
+                av = next((r for r in (self._ask("availability", hours=hours).get("nodes") or []) if r.get("id") == nid), None)
+                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av), "/nodes"))
             if path == "/health":
                 return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), self._ask("alerts")), "/health"))
             if path == "/fragment/health":
@@ -2523,7 +2841,8 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/fragment/alerts":
                 return self._send(200, alerts_section(self._ask("alerts")), "text/html; charset=utf-8")
             if path == "/register":
-                return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift")), "/register"))
+                av = {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}
+                return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift"), availability=av), "/register"))
             if path == "/bench":
                 return self._send(200, self._page("Bench", bench_body(self._ask("bench_devices"), self._ask("firmware_shelf")), "/bench"))
             if path == "/activity":
@@ -2545,7 +2864,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 if name == "map":
                     return self._send(200, map_svg(self._links()))
                 if name == "register":
-                    return self._send(200, register_rows(self._ask("register")))
+                    return self._send(200, register_rows(self._ask("register"), {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}))
                 if name == "bench":
                     return self._send(200, bench_cards(self._ask("bench_devices"), self._ask("firmware_shelf")))
                 if name.startswith("route/"):
@@ -2680,6 +2999,12 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 if path == "/connections/revoke":
                     K.revoke(web.etc_dir, str(body.get("id", "")))
                     return self._redirect("/connections")
+                if path == "/settings/quick":
+                    out, err = quick_save(web.etc_dir, [ln for ln in str(body.get("quick", "")).splitlines()])
+                    web._quick_err = err or ""
+                    if not err:
+                        K.audit(web.etc_dir, who="operator", event="quick-saved", count=len(out))
+                    return self._send(400 if err else 200, self._page("Settings", settings_body(web, saved=not err), "/settings"))
                 if path == "/settings":
                     ctx = str(body.get("context", ""))[:20000]
                     with open(os.path.join(web.etc_dir, "context.md"), "w") as fh:

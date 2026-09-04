@@ -1,10 +1,10 @@
 ---
 name: mesh-onboard
 description: Bring a device into the fleet on the bench, coaching the person at the cable. Use when the operator has a new tracker or radio in hand, when a device must be read or exported before a change, or when a device that was managed has stopped answering over the air. Works through Mesh Manager's bench actions; every write is read back from the device.
-audited:
-audit_verdict:
-audited_with:
-audit_sha:
+audited: 2026-09-04
+audit_verdict: pass with cautions
+audited_with: skill-safety-audit (MilUX meta-skills)
+audit_sha: ae32918137f72f69
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

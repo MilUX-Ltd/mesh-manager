@@ -1,10 +1,10 @@
 ---
 name: mesh-operate
 description: Triage a Meshtastic mesh through Mesh Manager and prepare the fix to the gate. Use when the operator says the mesh is down, a tracker has vanished, nobody is getting messages, or before taking the kit somewhere new. Runs reads, asks the mesh what only the mesh can answer, and hands over the decision.
-audited:
-audit_verdict:
-audited_with:
-audit_sha:
+audited: 2026-09-04
+audit_verdict: pass with cautions
+audited_with: skill-safety-audit (MilUX meta-skills)
+audit_sha: 53ff2a010736d1e0
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

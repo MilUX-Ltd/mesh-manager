@@ -1,10 +1,10 @@
 ---
 name: mesh-lessons
 description: Diagnose a Meshtastic mesh through Mesh Manager and know which signals to believe. Use before concluding anything is broken, when nodes vanish, when a radio looks alive but says nothing, or when positions are coarse. Names the tools behind each check.
-audited:
-audit_verdict:
-audited_with:
-audit_sha:
+audited: 2026-09-04
+audit_verdict: pass with cautions
+audited_with: skill-safety-audit (MilUX meta-skills)
+audit_sha: 83f47db16f7612d6
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd

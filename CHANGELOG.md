@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## 0.6.0 (5 September 2026)
+
+Nine features every tool in this class is expected to have, built one at a time in a single
+release, each with a spec at Definition of Ready and its acceptance tests committed
+failing first. Forty-six suites green. Routes on the map, which was on the list, was already built
+and is not here.
+
+- **Delivery receipts (Spec 034).** A text is handed to the radio; the radio now says whether it
+  arrived. `send_text` asks for an ack and keeps the packet id; the routing answer becomes an
+  `ack` event and the message row reads delivered, or the radio's own reason (`MAX_RETRANSMIT`,
+  `NO_ROUTE`). The history keeps the outcome. The page had rendered an ack pill and listened for
+  the event since 0.2; nothing had ever set either.
+- **Environment sensors (Spec 035).** Temperature, humidity and pressure from nodes with a
+  sensor board, on the air and in answers to an ask, in a new `environment` table; the node page
+  shows the latest reading and temperature over time, only for a node that has ever reported one.
+- **Node availability (Spec 036).** How much of the window each node was actually heard for, in
+  hourly buckets to two days and daily beyond. A Heard % column on the register with the
+  histogram in the tooltip, and the histogram on the node page. A node with nothing in the window
+  is 0% and still listed.
+- **Export (Spec 037).** `/export/<kind>.<format>`: positions as GPX, KML or CSV; messages,
+  packets, telemetry and environment as CSV; a window and a node filter; a Download control on
+  Health. Only what the box already holds.
+- **Quick messages (Spec 038).** Up to eight presets on the box, edited on Settings, offered as
+  buttons above the send form; a press fills the field, nothing is sent without the usual
+  confirm. `quick_messages` and `quick_messages_set` in the catalogue.
+- **The packet inspector (Spec 039).** A Packets page: every packet in the window, newest first,
+  filtered by node, port and window, with per-port counts, live as packets arrive.
+- **Playback (Spec 040).** A slider on the map replays the trails window: every node where it
+  last was at that instant, the trail it had walked by then, the instant shown in UTC, and a play
+  button. Built from the rows the map already fetches; `/api/trails` names the contract.
+- **Waypoints across the bridge (Spec 041).** A waypoint heard on the mesh is kept, drawn on the
+  map as a pin, and forwarded to TAK as a spot marker. `waypoint_send` drops one on the mesh from
+  the Map page or from an agent at `propose`. TAK to mesh is unchanged and out of scope.
+- **The mesh as a graph (Spec 042).** Neighbour-info reports become edges: who hears whom, at what
+  SNR. A Graph page draws them, the map has a graph toggle, and where no node has the module on
+  the page says so and how to turn it on.
+- **The More menu no longer disappears behind the map.** Leaflet's controls sit at z-index 800;
+  the menu was at 6, so with More open over the map the tiles painted over its lower half. The
+  header, its menu and tooltips now sit above every Leaflet layer.
+- The role's autonomy table is regenerated from the catalogue and its audit stamp is marked stale
+  on purpose: the body changed, so R-28 says re-audit.
+
 ## 0.5.1 (4 September 2026)
 
 Two things the kit showed the moment 0.5.0 was on it.
