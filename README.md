@@ -4,6 +4,9 @@
 
 <p align="center"><strong>Manage the mesh from the box that carries the radio.</strong></p>
 
+<p align="center"><a href="../../actions/workflows/tests.yml"><img src="../../actions/workflows/tests.yml/badge.svg" alt="the suites"></a>
+<a href="../../actions/workflows/verify-public.yml"><img src="../../actions/workflows/verify-public.yml/badge.svg" alt="the published release, checked as a stranger"></a></p>
+
 Mesh Manager runs on the computer the Meshtastic gateway radio is plugged into. It shows the
 mesh as it is now, manages the devices on it, and bridges that mesh into TAK. One screen for
 the radio layer under a deployment: what is out there, how well it is heard, where it is, what
@@ -143,7 +146,7 @@ or supported by either, and ships neither TAK Server nor device firmware: you su
 
 ## What travels with it
 
-`SECURITY.md` is the disclosure route and the security model in brief.
+`tests/` holds the product's own suites, which run on every push here; `tests/README.md` says how to run them yourself. `SECURITY.md` is the disclosure route and the security model in brief.
 `release/verify-public.sh` checks a published release the way a stranger receives it, with no
 credentials: run it yourself against this repository if you want to confirm what you
 downloaded matches what is published. `CHANGELOG.md` is the record of what changed and why. `NOTICE` and `THIRD-PARTY.md` name the

@@ -101,7 +101,7 @@ if [[ -d "$WORK/repo" ]]; then
     # from the demo block, because a real node id or radio MAC in it came from someone's fleet.
     stray=$( { grep -rIhoE '![0-9a-f]{8}' "$WORK/repo" --exclude-dir=.git 2>/dev/null
                grep -rIhoE '![0-9a-f]{8}' "$WORK/un" 2>/dev/null; } | sort -u \
-             | grep -vE '^!(ee00000[0-9]|1a2b3c4d)$' || true)
+             | grep -vE '^!(ee0000[0-9]{2}|1a2b3c4d|aa000001|bb000002|cc000003|dd000004|00000001|ffffffff|0000beef|deadbeef|z1)$' || true)
     [[ -z "$stray" ]] && ok "every device identifier is from the demo block" \
                       || { bad "a device identifier that is not from the demo block is published"; echo "$stray" | sed 's/^/          /'; }
 
@@ -123,9 +123,11 @@ PY
     [[ "$tv" == "$VER" ]] && ok "the tree's VERSION ($tv) is the newest release" \
                           || bad "the tree says $tv but the newest release is $VER: the cut is behind"
 
-    for f in LICENSE SECURITY.md NOTICE THIRD-PARTY.md; do
+    for f in LICENSE SECURITY.md NOTICE THIRD-PARTY.md tests/run.sh .github/workflows/tests.yml; do
         [[ -f "$WORK/repo/$f" ]] && ok "$f is present" || bad "$f is missing"
     done
+    n=$(ls "$WORK/repo"/tests/test_*.py 2>/dev/null | wc -l | tr -d ' ')
+    (( n >= 40 )) && ok "the suites travel with the product ($n of them)" || bad "only $n suites in the public tree"
     grep -qi "report a vulnerability\|security" "$WORK/repo/README.md" \
         && ok "the README points at the disclosure route" \
         || bad "the README does not tell a finder where to report a fault"
