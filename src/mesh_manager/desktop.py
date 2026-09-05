@@ -1,7 +1,7 @@
 """Spec 058: the desktop mode. One command on a laptop: the bridge and the screen in one process tree, no systemd,
 the browser opened on the screen, application directories for the platform, the demo mesh when there is no radio.
 Part of Mesh Manager, GPL-3.0-or-later."""
-import argparse, glob, json, os, platform, signal, socket, subprocess, sys, threading, time, urllib.request, webbrowser
+import argparse, glob, hashlib, json, os, platform, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request, webbrowser
 
 from . import __version__
 
@@ -67,13 +67,30 @@ def heartbeat_age(path):
         return None
 
 
+def socket_for(dirs, limit=90):
+    """The bridge's socket path. A Unix socket path is at most about 104 bytes on macOS (108 on Linux); a deep
+    application directory can pass that, so a long one moves the socket to the temporary directory, named for the root."""
+    p = dirs["socket"]
+    if len(p.encode()) <= limit:
+        return p
+    tag = hashlib.sha1(dirs["root"].encode()).hexdigest()[:10]
+    for base in (tempfile.gettempdir(), "/tmp"):
+        q = os.path.join(base, f"mesh-manager-{tag}.sock")
+        if len(q.encode()) <= limit:
+            return q
+    return p
+
+
 def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 
-def _wait_health(url, secs=60):
+def _wait_health(url, secs=60, stop=None, procs=()):
+    """True once the screen answers with the bridge behind it; False early when asked to stop or a part has died."""
     t0 = time.time()
     while time.time() - t0 < secs:
+        if (stop is not None and stop.is_set()) or any(p.poll() is not None for p in procs):
+            return False
         try:
             with urllib.request.urlopen(url, timeout=2) as r:
                 d = json.loads(r.read().decode())
@@ -102,19 +119,20 @@ def main(argv=None):
     port = a.port if a.port is not None else None
     if port == 0:
         port = free_port()   # --port 0: a free one, named in the line printed below
+    sock = socket_for(dirs)
     try:
-        os.remove(dirs["socket"])
+        os.remove(sock)
     except OSError:
         pass
     env = dict(os.environ); env["MODE"] = "desktop"
     py = sys.executable
     if demo:
-        bridge = subprocess.Popen([py, "-m", "mesh_manager.demo", dirs["socket"]], env=env)
+        bridge = subprocess.Popen([py, "-m", "mesh_manager.demo", sock], env=env)
         why = "the demo mesh (no radio found)" if not a.demo else "the demo mesh"
     else:
-        bridge = subprocess.Popen([py, "-m", "mesh_manager.bridge", "--config", dirs["config"], "--socket", dirs["socket"], "--state-dir", dirs["state"], "--serial", radio], env=env)
+        bridge = subprocess.Popen([py, "-m", "mesh_manager.bridge", "--config", dirs["config"], "--socket", sock, "--state-dir", dirs["state"], "--serial", radio], env=env)
         why = f"the radio on {radio}"
-    web_cmd = [py, "-m", "mesh_manager.web", "--config", dirs["config"], "--socket", dirs["socket"], "--etc", dirs["etc"], "--state-dir", dirs["state"]]
+    web_cmd = [py, "-m", "mesh_manager.web", "--config", dirs["config"], "--socket", sock, "--etc", dirs["etc"], "--state-dir", dirs["state"]]
     if port:
         web_cmd += ["--port", str(port)]
     web = subprocess.Popen(web_cmd, env=env)
@@ -125,10 +143,10 @@ def main(argv=None):
     def halt(*_):
         stop.set()
     signal.signal(signal.SIGINT, halt); signal.signal(signal.SIGTERM, halt)
-    up = _wait_health(url + "healthz", 60)
+    up = _wait_health(url + "healthz", 60, stop=stop, procs=(bridge, web))
     print(f"Mesh Manager {__version__} on this computer: the screen is {url} with {why}; files under {dirs['root']}; Ctrl-C stops it", flush=True)
-    if not up:
-        print("the screen has not answered yet; it is still starting, or the log above says why", flush=True)
+    if not up and not stop.is_set():
+        print("the screen has not answered with the bridge behind it; the log above says why" if (bridge.poll() is not None or web.poll() is not None) else "the screen has not answered yet; it is still starting", flush=True)
     if up and not a.no_browser:
         try:
             webbrowser.open(url)
@@ -152,7 +170,7 @@ def main(argv=None):
         except subprocess.TimeoutExpired:
             pr.kill()
     try:
-        os.remove(dirs["socket"])
+        os.remove(sock)
     except OSError:
         pass
     return 0

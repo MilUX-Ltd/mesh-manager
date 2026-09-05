@@ -42,8 +42,15 @@ age = D.heartbeat_age(hb)
 check_true("AC6 heartbeat_age reads a fresh file as young and a missing one as None", age is not None and age < 5 and D.heartbeat_age(os.path.join(st, "none.json")) is None, repr(age))
 check_true("AC6 pyproject names the command", 'mesh-manager-desktop = "mesh_manager.desktop:main"' in (read("pyproject.toml") or ""))
 
-# AC5: the command itself, with the demo bridge and no browser
-root2 = tempfile.mkdtemp()
+# AC7 (0.17.1): a deep application directory still runs; the socket moves somewhere a Unix socket can live
+long_root = os.path.join(tempfile.mkdtemp(), "a-very-long-application-directory-name-that-a-user-might-well-have", "and-another-level-below-it-for-good-measure", "Mesh Manager")
+dl = {"root": long_root, "socket": os.path.join(long_root, "bridge.sock")}
+sp = D.socket_for(dl)
+check_true("AC7 a long socket path is moved to the temporary directory", sp != dl["socket"] and len(sp.encode()) <= 90 and "mesh-manager-" in sp, sp)
+check("AC7 a short one stays", D.socket_for({"root": "/tmp/x", "socket": "/tmp/x/bridge.sock"}), "/tmp/x/bridge.sock")
+
+# AC5: the command itself, with the demo bridge and no browser, under the long root
+root2 = long_root
 env = {**os.environ, "PYTHONPATH": os.path.join(ROOT, "src") + os.pathsep + os.path.join(ROOT, "tests")}
 p = subprocess.Popen([sys.executable, "-m", "mesh_manager.desktop", "--demo", "--no-browser", "--port", "0", "--root", root2], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
 port = None; t0 = time.time(); lines = []
@@ -73,5 +80,5 @@ try:
     rc = p.wait(timeout=10)
 except subprocess.TimeoutExpired:
     p.kill(); rc = "killed"
-check_true("AC5 Ctrl-C stops it within ten seconds, the demo bridge with it", rc == 0 and time.time() - t1 < 10 and not os.path.exists(os.path.join(root2, "bridge.sock")), repr((rc, round(time.time() - t1, 1), os.path.exists(os.path.join(root2, "bridge.sock")))))
+check_true("AC5 Ctrl-C stops it within ten seconds, the demo bridge with it", rc == 0 and time.time() - t1 < 10 and not os.path.exists(D.socket_for({"root": root2, "socket": os.path.join(root2, "bridge.sock")})), repr((rc, round(time.time() - t1, 1))))
 finish()

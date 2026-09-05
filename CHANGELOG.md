@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.17.1 (5 September 2026)
+
+- **The desktop command under a deep directory.** A Unix socket path is at most about 104 bytes on macOS; an application
+  directory deep enough passed it and the bridge died at start with "AF_UNIX path too long" while the screen stood
+  with no bridge behind it (found running the 0.17.0 gate on a Mac). A long path now moves the socket to the temporary
+  directory, named for the root; the wait for the screen ends early when a part has died or Ctrl-C is pressed, and the
+  command says which.
+
 ## 0.17.0 (5 September 2026) Matt: "apple desktop app next."
 
 - **The desktop mode (Spec 058).** `MODE=desktop` is the server shape with no systemd. One command,
