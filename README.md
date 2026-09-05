@@ -67,6 +67,12 @@ version line stays 0.x until the interface settles; the
   same action catalogue the screen uses. Anything a person can do on the screen an agent can
   do through a connector, at the autonomy you set, and nothing else.
 
+## The guide
+
+[docs/GUIDE.md](docs/GUIDE.md) walks through every page in the order a new user meets it, with
+screenshots from the demo: setting up, the map and its layers, nodes, messages, channels, the bench,
+the register, health and alerts, settings, updates, connections and help.
+
 ## What it looks like
 
 <img src="assets/screenshots/nodes.png"

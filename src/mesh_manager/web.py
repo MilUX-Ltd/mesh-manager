@@ -293,6 +293,7 @@ def run_action(web, aid, args, who):
         K.audit(web.etc_dir, who=who, event="refused", action=aid, error=err)
         return 400, {"error": err}
     if action["op"] == "web:messages":
+        seed_messages(web)   # Spec 020: after a restart the store still holds the last 200
         return 200, {"messages": list(web.messages)}
     if action["op"] == "web:quick_messages":
         return 200, {"messages": quick_load(web.etc_dir)}
@@ -488,7 +489,7 @@ details.more nav .k{font-size:.72rem;color:var(--ink-muted);text-transform:upper
 .seg{display:inline-flex;border:1px solid var(--edge);border-radius:6px;overflow:hidden;vertical-align:middle;margin:var(--s1) 0 var(--s3)}.seg label{display:inline-flex;margin:0;cursor:pointer}.seg input{position:absolute;opacity:0;width:0;height:0;margin:0}.seg span{display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);border-left:1px solid var(--edge);color:var(--ink);font-size:.9rem;white-space:nowrap}.seg label:first-child span{border-left:0}.seg input:checked+span{background:var(--accent);color:var(--accent-ink)}.seg.danger input:checked+span{background:var(--bad)}.seg input:disabled+span{opacity:.45}.seg input:focus-visible+span{outline:3px solid var(--gold);outline-offset:-3px}
 .confirm{background:var(--surface-sunken);border:1px solid var(--edge);border-left:4px solid var(--warn);border-radius:var(--r);padding:var(--s2) var(--s3);margin-top:var(--s2)}.confirm .row-actions{margin-top:var(--s2)}
 .filters{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-bottom:var(--s2)}.filters input[type=search]{width:auto;min-width:180px;margin:0;padding:var(--s1) var(--s2);min-height:var(--tap);border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);font:inherit}.chip{display:inline-flex;align-items:center;gap:var(--s1);min-height:var(--tap);padding:0 var(--s3);border-radius:999px;border:1px solid var(--edge);background:var(--surface-raised);color:var(--ink);cursor:pointer;font-size:.85rem}.chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.chip b{font-weight:600}
-.verdict{display:inline-block;margin-left:var(--s1);font-size:.75rem;font-weight:600}details.fold.ctl.primary summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}details.fold.ctl.bad summary{border-color:var(--bad);color:var(--bad)}.controls label.check{min-height:var(--tap);margin:0;align-items:center}.controls label.check input{width:24px;height:24px;margin:0}.fleet-out{white-space:pre-line}#play-rev.on{background:var(--accent);color:var(--accent-ink)}.iconpick{display:flex;flex-wrap:wrap;gap:var(--s1);margin:var(--s1) 0}.iconpick label{margin:0}.iconpick input{position:absolute;opacity:0;width:0;height:0}.iconpick span{display:inline-flex;width:40px;height:40px;align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;color:var(--ink);background:var(--surface-raised)}.iconpick input:checked+span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.iconpick input:focus-visible+span{outline:3px solid var(--gold)}.iconpick svg{width:20px;height:20px}.mm-pin{background:transparent;border:0}.mm-pin-in{display:flex;width:30px;height:30px;border-radius:50%;background:var(--surface-raised);border:2px solid var(--accent);align-items:center;justify-content:center;color:var(--accent)}.mm-pin-in svg{width:18px;height:18px}.mm-pin.play .mm-pin-in{background:var(--gold)}.mm-pin.stale .mm-pin-in{background:transparent;border-style:dashed}.nodeicon{display:inline-flex;width:20px;height:20px;vertical-align:-5px;margin-right:var(--s1);color:var(--accent)}.nodeicon svg{width:18px;height:18px}.controls>details.fold.ctl{margin-top:0}.controls>details.fold.ctl[open]{flex-basis:100%}.filters label{display:inline-flex;align-items:center;gap:var(--s1);margin:0}.filters select{width:auto;margin:0}ol.steps{margin:var(--s1) 0 0 var(--s4);padding:0}ol.steps li{margin:2px 0}.views>button svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}details.fold.ctl summary svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}
+.verdict{display:inline-block;margin-left:var(--s1);font-size:.75rem;font-weight:600}details.fold.ctl.primary summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}details.fold.ctl.bad summary{border-color:var(--bad);color:var(--bad)}.controls label.check{min-height:var(--tap);margin:0;align-items:center}.controls label.check input{width:24px;height:24px;margin:0}.fleet-out{white-space:pre-line}.chat{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:var(--s3);align-items:start}.chat-list{background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;max-height:76vh;overflow-y:auto}.chat-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:var(--s2);align-items:center;width:100%;text-align:left;padding:var(--s2) var(--s3);background:transparent;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;min-height:56px;cursor:pointer}.chat-row:hover{background:var(--surface-sunken);filter:none}.chat-row.on{background:var(--surface-sunken);box-shadow:inset 4px 0 0 var(--accent)}.chat-row .nodeicon{margin:0;width:28px;height:28px}.chat-row .nodeicon svg{width:20px;height:20px}.chat-row .nm{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .last{display:block;font-size:.8rem;color:var(--ink-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .when{font-size:.72rem;color:var(--ink-muted);text-align:right}.chat-row .unread{display:inline-block;min-width:20px;text-align:center;border-radius:999px;background:var(--bad);color:#fff;font-size:.72rem;font-weight:600;padding:0 6px;margin-top:2px}.chat-panes{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:var(--s3)}.chat-panes:empty::before{content:'Choose a chat on the left. Up to three open side by side.';color:var(--ink-muted);font-size:.9rem;display:block;padding:var(--s4)}.chat-win{display:flex;flex-direction:column;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);height:76vh;min-height:360px;min-width:0}.chat-head{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3);border-bottom:1px solid var(--line)}.chat-head .nm{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-head .sub{font-size:.75rem;color:var(--ink-muted)}.chat-head button.back{display:none}.chat-msgs{flex:1;overflow-y:auto;padding:var(--s2) var(--s3);display:flex;flex-direction:column}.bubble{max-width:86%;margin:var(--s1) 0;padding:var(--s1) var(--s3);border-radius:12px;background:var(--surface-sunken);border:1px solid var(--line);overflow-wrap:anywhere}.bubble.me{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.bubble .who{font-size:.72rem;opacity:.8}.bubble .meta{font-size:.72rem;opacity:.85;margin-top:2px;display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}.bubble .meta .pill{font-size:.68rem;padding:0 6px}.bubble.me .meta .pill{background:rgba(255,255,255,.15);color:var(--accent-ink);border-color:rgba(255,255,255,.35)}.chat-day{align-self:center;font-size:.72rem;color:var(--ink-muted);margin:var(--s2) 0}.chat-compose{border-top:1px solid var(--line);padding:var(--s2) var(--s3)}.chat-compose .quick{display:flex;flex-wrap:wrap;gap:var(--s1);margin-bottom:var(--s1)}.chat-compose .quick button{min-height:28px;font-size:.8rem;padding:0 var(--s2)}.chat-compose form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s2);align-items:center}.chat-compose input[type=text]{margin:0}.chat-compose .res{grid-column:1/-1;margin:0}.chat-compose .note{grid-column:1/-1;font-size:.75rem;color:var(--ink-muted)}@media (max-width:700px){.chat{display:block}.chat.open .chat-list{display:none}.chat-panes{grid-auto-flow:row}.chat-win{height:calc(100vh - 190px)}.chat-head button.back{display:inline-flex}}#play-rev.on{background:var(--accent);color:var(--accent-ink)}.iconpick{display:flex;flex-wrap:wrap;gap:var(--s1);margin:var(--s1) 0}.iconpick label{margin:0}.iconpick input{position:absolute;opacity:0;width:0;height:0}.iconpick span{display:inline-flex;width:40px;height:40px;align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;color:var(--ink);background:var(--surface-raised)}.iconpick input:checked+span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.iconpick input:focus-visible+span{outline:3px solid var(--gold)}.iconpick svg{width:20px;height:20px}.mm-pin{background:transparent;border:0}.mm-pin-in{display:flex;width:30px;height:30px;border-radius:50%;background:var(--surface-raised);border:2px solid var(--accent);align-items:center;justify-content:center;color:var(--accent)}.mm-pin-in svg{width:18px;height:18px}.mm-pin.play .mm-pin-in{background:var(--gold)}.mm-pin.stale .mm-pin-in{background:transparent;border-style:dashed}.nodeicon{display:inline-flex;width:20px;height:20px;vertical-align:-5px;margin-right:var(--s1);color:var(--accent)}.nodeicon svg{width:18px;height:18px}.controls>details.fold.ctl{margin-top:0}.controls>details.fold.ctl[open]{flex-basis:100%}.filters label{display:inline-flex;align-items:center;gap:var(--s1);margin:0}.filters select{width:auto;margin:0}ol.steps{margin:var(--s1) 0 0 var(--s4);padding:0}ol.steps li{margin:2px 0}.views>button svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}details.fold.ctl summary svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}
 @media (pointer:coarse){button.icon,details.fold.ctl.icon summary{width:40px;height:40px;min-height:40px}.row-actions{gap:var(--s2)}.mm-centre button{width:40px;height:40px}}
 @media (max-width:700px){:root{--tap:44px}header nav.primary{position:fixed;bottom:0;left:0;right:calc(var(--tap) + var(--s2));background:var(--accent);justify-content:space-around;z-index:1100;border-top:1px solid var(--live)}header nav.primary a{padding:0 var(--s2);font-size:.8rem}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}
 details.more{position:fixed;bottom:0;right:0;z-index:1101;margin:0;background:var(--accent);border-top:1px solid var(--live)}details.more summary{width:calc(var(--tap) + var(--s2));justify-content:center;padding:0}details.more summary .word{display:none}details.more nav{position:fixed;bottom:var(--tap);top:auto;right:0;left:0;max-height:70vh;overflow:auto;border-radius:var(--r) var(--r) 0 0}
@@ -546,6 +547,7 @@ LIVE_JS = r"""<script>
 (function(){
   var root=document.documentElement;
   try{var t=localStorage.getItem('mm-theme'); if(t){root.dataset.theme=t;}}catch(x){}
+  try{var qt=new URLSearchParams(window.location.search).get('theme');if(qt==='light'||qt==='dark'){root.dataset.theme=qt;}}catch(x){}
   var tb=document.querySelector('[data-theme-toggle]');
   function themeGlyph(){if(!tb)return;var dark=(root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';var s=tb.querySelector('[data-sun]'),m=tb.querySelector('[data-moon]');if(s)s.style.display=dark?'block':'none';if(m)m.style.display=dark?'none':'block';}
   if(tb){tb.addEventListener('click',function(){var cur=root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');var nx=cur==='dark'?'light':'dark';root.dataset.theme=nx;try{localStorage.setItem('mm-theme',nx);}catch(x){}themeGlyph();});themeGlyph();}
@@ -3001,49 +3003,110 @@ def message_rows(web, labels=None):
 
 
 def messages_body(web, nodes, chans=None, st=None, groups=None):
+    """Spec 048: Messages as a chat. The list of chats on the left, up to three open on the right, from
+    what the box holds and hears; the page's script derives the conversations."""
     send = _act("send_text")
-    gopts = "".join(f"<option value='group:{e(str(g.get('name')))}'>everyone in {e(str(g.get('name')))} ({int(g.get('count') or 0)} device{'s' if int(g.get('count') or 0) != 1 else ''}, one message each)</option>"
-                    for g in ((groups or {}).get("groups") or []) if g.get("count"))
     live = [c for c in (chans or []) if c.get("role") != "DISABLED"] or [{"index": 0, "name": (st or {}).get("primary_channel") or "primary", "role": "PRIMARY"}]
+    own = (st or {}).get("own") or {}
     heard = [n for n in nodes if n.get("heard_here", True)]
-    multi = len(live) > 1
-    ch_opts = "".join(f"<option value='{int(c.get('index', 0))}'>{e(c.get('name') or 'slot ' + str(c.get('index')))}{' (primary)' if c.get('role') == 'PRIMARY' else ''}</option>" for c in live)
-    node_opts = "".join(f"<option value='{e(n['id'])}'>{e(dname(n))} ({e(n['id'])}){'' if n.get('heard_here', True) else ' · database only'}</option>" for n in nodes if n.get("id"))
-    ch0 = live[0]
-    ch_field = (f"<label>Channel<select name='channel'>{ch_opts}</select></label>" if multi
-                else f"<input type='hidden' name='channel' value='{int(ch0.get('index', 0))}'>")
-    to_label = "To" if multi else f"To, on {e(ch0.get('name') or 'the primary channel')}"
     quick = quick_load(web.etc_dir)
-    form = (f"<form id='send' class='card' data-action='send_text' data-clear='1' data-refresh='messages:msg-rows' data-heard='{len(heard)}' data-chname='{e(ch0.get('name') or 'the channel')}' "
-            "data-confirm-channel='Send to everyone on {channel}, {count} devices heard here: “{text}”' "
+    glist = [dict(g, members=[n.get("id") for n in nodes if str(n.get("group") or "") == str(g.get("name"))]) for g in ((groups or {}).get("groups") or [])]
+    nmap = {str(n.get("id")): {"name": dname(n), "icon": str(n.get("icon") or "radio"), "group": str(n.get("group") or ""), "db": not n.get("heard_here", True)} for n in nodes if n.get("id")}
+    chips = "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick)
+    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role")} for c in live],
+                       "groups": [{"name": g.get("name"), "icon": g.get("icon") or "radio", "count": int(g.get("count") or 0), "members": g.get("members") or []} for g in glist],
+                       "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"]}).replace("&", "&amp;").replace("'", "&#39;")
+    return (f"<div class='chat' id='chat' data-chat='{data}' data-confirm-channel='Send to everyone on {{channel}}, {{count}} devices heard here: “{{text}}”' "
             "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.' "
             "data-confirm-group='Send to {group}: one direct message to each device, each with its own receipt: “{text}”'>"
-            f"<h2 style='margin-top:0'>{e(send['title'])}</h2><p class='meta'>{e(send['description'])}</p>"
-            + (("<div class='row-actions' id='quick' data-tip='Fills the box, does not send'>" + "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick) + "<span class='meta'>Fills the box, does not send</span></div>") if quick else "")
-            + "<label>Message (200 bytes at most)<input type='text' name='text' maxlength='200' required></label>"
-            + ch_field
-            + f"<label>{to_label}<select name='to'><option value='^all'>everyone on the channel</option>{gopts}{node_opts}</select></label>"
-            f"<button type='submit' id='send-btn'>Send to everyone on {e(ch0.get('name') or 'the channel')}</button>"
-            "<div class='meta' id='bcast-note' style='margin-top:var(--s1)'>A message to everyone is not acknowledged. It will stay at handed to the radio.</div><div class='res meta' role='status'></div></form>")
-    js = r"""<script>
-(function(){var f=document.getElementById('send'),btn=document.getElementById('send-btn'),note=document.getElementById('bcast-note');
-  document.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
-  function chName(){var c=f.elements.channel;return (c&&c.options)?c.options[c.selectedIndex].text:f.dataset.chname;}
-  function label(){var toSel=f.elements.to;var all=toSel.value==='^all',grp=toSel.value.indexOf('group:')===0;var word=toSel.options[toSel.selectedIndex].text.split(' (')[0];btn.textContent=all?('Send to everyone on '+chName()):(grp?('Send to '+word+', one message each'):('Send to '+word+' only'));if(note){note.hidden=!all;}}
-  f.elements.to.addEventListener('change',label);if(f.elements.channel&&f.elements.channel.options){f.elements.channel.addEventListener('change',label);}label();
-  f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();
-    var chSel=f.elements.channel,toSel=f.elements.to,text=f.elements.text.value;
-    var opt=toSel.options[toSel.selectedIndex].text;var t=toSel.value==='^all'?f.dataset.confirmChannel.replace('{channel}',chName()).replace('{count}',f.dataset.heard):(toSel.value.indexOf('group:')===0?f.dataset.confirmGroup.replace('{group}',opt):f.dataset.confirmDirect.replace('{node}',opt));
-    var res=f.querySelector('.res');
-    window.mmConfirm(t.replace('{text}',text),f,function(){
-    fetch('/api/send_text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,channel:parseInt(chSel.value,10),to:toSel.value})})
-      .then(function(r){return r.json().then(function(j){return [r.status,j];});})
-      .then(function(x){if(x[0]>=400){res.textContent='not sent: '+(x[1].error||x[0]);res.className='res meta bad';}else{var m=x[1].members;res.textContent=(m?('handed to the radio for '+m.length+' device'+(m.length===1?'':'s')+' at '):'handed to the radio at ')+window.mmNow()+(toSel.value==='^all'?' · a message to everyone is not acknowledged':(m?' · each receipt shows in the table':' · waiting for the receipt'));res.className='res meta ok';f.elements.text.value='';window.mmFrag('messages','msg-rows');}})
-      .catch(function(){res.textContent=window.mmNoAnswer;res.className='res meta bad';});});},true);
-  window.onMesh=function(d){if(d.kind==='text'||d.kind==='ack'){window.mmFrag('messages','msg-rows');}if(d.kind==='ack'){var res=f.querySelector('.res');if(res&&/waiting for the receipt/.test(res.textContent)){res.textContent=res.textContent.replace(' · waiting for the receipt',' · '+(d.ok?'acknowledged ':'not delivered ')+window.mmNow());}}};})();
+            "<aside class='chat-list' id='chat-list' aria-label='Chats'></aside><section class='chat-panes' id='chat-panes' aria-live='polite'></section></div>"
+            f"<template id='chat-composer'><div class='chat-compose'>{('<div class=quick data-tip=Fills-the-box>' + chips + '</div>') if chips else ''}"
+            f"<form data-action='send_text' data-chat-composer><input type='text' name='text' maxlength='200' required placeholder='{e(send['title'])} (200 bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
+            "<div class='note'></div><div class='res meta' role='status'></div></form></div></template>"
+            f"<p class='meta' style='margin-top:var(--s3)'>{e(send['description'])} A direct message sends on Enter; a message to a channel or a group asks first, because every device hears it and it costs airtime. Receipts show on each bubble: handed to the radio, delivered, or not delivered and why. A message to everyone is never acknowledged.</p>"
+            + CHAT_JS)
+
+
+CHAT_JS = r"""<script>
+(function(){
+  var root=document.getElementById('chat');if(!root)return;var D=JSON.parse(root.dataset.chat||'{}'),own=D.own||'';
+  /* chat:pure:start */
+  function chatKey(m,own){var to=String(m.to||'^all'),from=String(m.from||'');if(to==='^all'||to==='!ffffffff'||to==='')return 'ch:'+((m.channel===undefined||m.channel===null)?0:m.channel);if(from===own)return 'dm:'+to;if(to===own)return 'dm:'+from;return 'dm:'+from;}
+  function chatsFrom(msgs,own,channels,groups,seen){seen=seen||{};var by={};
+    function ent(key,name,sub){if(!by[key])by[key]={key:key,name:name,sub:sub||'',last:'',ts:null,unread:0,count:0};return by[key];}
+    (channels||[]).forEach(function(c){if(c.role==='DISABLED')return;ent('ch:'+c.index,c.name||('slot '+c.index),'everyone on the channel');});
+    (groups||[]).forEach(function(g){ent('group:'+g.name,g.name,(g.count||0)+' device'+(g.count===1?'':'s')+', one message each');});
+    (msgs||[]).forEach(function(m){var k=chatKey(m,own);var e=ent(k,k.indexOf('dm:')===0?(m.from===own?String(m.to):(m.name||m.from)):k,k.indexOf('dm:')===0?'direct':'');
+      var ts=Date.parse(m.ts||'')||0;if(!e.ts||ts>=e.ts){e.ts=ts;e.last=m.text||'';}e.count++;if(m.from!==own&&ts>(seen[k]||0))e.unread++;});
+    (groups||[]).forEach(function(g){var e=by['group:'+g.name];(g.members||[]).forEach(function(id){var d=by['dm:'+id];if(d&&d.ts&&(!e.ts||d.ts>e.ts)){e.ts=d.ts;e.last=d.last;}});});
+    function rank(k){return k.indexOf('ch:')===0?0:(k.indexOf('group:')===0?1:2);}
+    return Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){if((b.ts||0)!==(a.ts||0))return (b.ts||0)-(a.ts||0);var r=rank(a.key)-rank(b.key);return r||String(a.name).localeCompare(String(b.name));});}
+  function openPane(open,key,max){var o=(open||[]).filter(function(k){return k!==key;});o.push(key);while(o.length>max)o.shift();return o;}
+  function unreadCount(msgs,key,own,seenTs){return (msgs||[]).filter(function(m){return chatKey(m,own)===key&&m.from!==own&&(Date.parse(m.ts||'')||0)>(seenTs||0);}).length;}
+  function needsConfirm(key){return key.indexOf('ch:')===0||key.indexOf('group:')===0;}
+  /* chat:pure:end */
+  var msgs=[],open=[],seen={},MAX=function(){return window.innerWidth<=700?1:3;};
+  try{seen=JSON.parse(localStorage.getItem('mm-chat-seen')||'{}')||{};open=JSON.parse(localStorage.getItem('mm-chat-open')||'[]')||[];}catch(e){}
+  function keep(){try{localStorage.setItem('mm-chat-seen',JSON.stringify(seen));localStorage.setItem('mm-chat-open',JSON.stringify(open));}catch(e){}}
+  function nodeName(id){var n=D.nodes[id];return n?n.name:id;}
+  function chatName(c){if(c.key.indexOf('dm:')===0){return nodeName(c.key.slice(3));}return c.name;}
+  function chatIcon(c){if(c.key.indexOf('ch:')===0)return D.hash||'';if(c.key.indexOf('group:')===0){var g=(D.groups||[]).filter(function(x){return 'group:'+x.name===c.key;})[0];return D.icons[(g&&g.icon)||'radio']||D.users;}var n=D.nodes[c.key.slice(3)];return D.icons[(n&&n.icon)||'radio']||'';}
+  function chatSub(c){if(c.key.indexOf('dm:')===0){var id=c.key.slice(3),n=D.nodes[id];return id+(n&&n.group?' · '+n.group:'')+(n&&n.db?' · database only':'');}return c.sub;}
+  function esc(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
+  function hm(ts){return ts?window.mmHm(ts):'';}
+  function dedupe(){var seenK={};msgs=msgs.filter(function(m){var k=(m.mid!==undefined&&m.mid!==null?'m'+m.mid:'')+'|'+(m.ts||'')+'|'+(m.from||'')+'|'+(m.to||'')+'|'+(m.text||'');if(seenK[k])return false;seenK[k]=true;return true;});msgs.sort(function(a,b){return (Date.parse(a.ts||'')||0)-(Date.parse(b.ts||'')||0);});}
+  function msgsFor(key){if(key.indexOf('group:')===0){var g=(D.groups||[]).filter(function(x){return 'group:'+x.name===key;})[0];var mem=(g&&g.members)||[];return msgs.filter(function(m){var k=chatKey(m,own);return mem.indexOf(k.slice(3))>=0&&k.indexOf('dm:')===0;});}return msgs.filter(function(m){return chatKey(m,own)===key;});}
+  function renderList(){var list=document.getElementById('chat-list');var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);list.innerHTML='';
+    chats.forEach(function(c){var b=document.createElement('button');b.type='button';b.className='chat-row'+(open.indexOf(c.key)>=0?' on':'');b.dataset.key=c.key;
+      b.innerHTML="<span class='nodeicon'>"+chatIcon(c)+"</span><span><span class='nm'></span><span class='last'></span></span><span class='when'><span class='t'></span>"+(c.unread?"<span class='unread'>"+c.unread+"</span>":"")+"</span>";
+      b.querySelector('.nm').textContent=chatName(c);b.querySelector('.last').textContent=c.last||chatSub(c);b.querySelector('.t').textContent=hm(c.ts?new Date(c.ts).toISOString():'');
+      b.setAttribute('aria-label',chatName(c)+(c.unread?', '+c.unread+' unread':''));b.addEventListener('click',function(){openChat(c.key);});list.appendChild(b);});
+    if(!chats.length){list.innerHTML="<p class='meta' style='padding:var(--s3)'>No channel is readable yet.</p>";}}
+  function receipt(m){if(m.from!==own)return '';if(m.ack==='delivered')return "<span class='pill'>delivered</span>";if(m.ack)return "<span class='pill' data-tip='The radio gave up' data-tip-more='"+esc(m.ack)+"'>not delivered · "+esc(String(m.ack).replace(/_/g,' ').toLowerCase())+"</span>";
+    var to=String(m.to||'^all');if(to==='^all'||to==='!ffffffff')return "<span class='pill' data-tip='A message to everyone is never acknowledged'>sent to everyone</span>";return "<span class='pill'>handed to the radio</span>";}
+  function renderPane(key){var panes=document.getElementById('chat-panes');var win=panes.querySelector("[data-key='"+key+"']");var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);var c=chats.filter(function(x){return x.key===key;})[0]||{key:key,name:key,sub:''};
+    if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;
+      win.innerHTML="<div class='chat-head'><button type='button' class='line icon back' aria-label='Back to the chats' data-tip='Back to the chats'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 3 5 8l5 5'/></svg></button><span class='nodeicon'>"+chatIcon(c)+"</span><span class='nm'><span class='name'></span><br><span class='sub'></span></span><button type='button' class='line icon close' aria-label='Close this chat' data-tip='Close this chat'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' aria-hidden='true'><path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/></svg></button></div><div class='chat-msgs'></div>";
+      win.appendChild(document.getElementById('chat-composer').content.cloneNode(true));
+      win.querySelector('.close').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.toggle('open',open.length>0);renderList();});
+      win.querySelector('.back').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.remove('open');renderList();});
+      var f=win.querySelector('form'),res=win.querySelector('.res'),note=win.querySelector('.note');
+      note.textContent=key.indexOf('ch:')===0?'Everyone on the channel sees this; it is never acknowledged.':(key.indexOf('group:')===0?'One direct message per device, each with its own receipt.':'Only this radio sees it; the receipt shows on the bubble.');
+      win.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
+      f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();var text=f.elements.text.value;if(!text.trim())return;
+        var body={text:text,channel:0,to:'^all'},confirmText='';
+        if(key.indexOf('ch:')===0){body.channel=parseInt(key.slice(3),10);body.to='^all';confirmText=root.dataset.confirmChannel.replace('{channel}',c.name).replace('{count}',String(D.heard||0)).replace('{text}',text);}
+        else if(key.indexOf('group:')===0){body.to=key;confirmText=root.dataset.confirmGroup.replace('{group}',c.name).replace('{text}',text);}
+        else{body.to=key.slice(3);}
+        function go(){res.textContent='sending';res.className='res meta warn';var btn=f.querySelector('button[type=submit]');btn.disabled=true;
+          fetch('/api/send_text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return [r.status,j];});})
+            .then(function(x){btn.disabled=false;if(x[0]>=400){res.textContent='not sent: '+(x[1].error||x[0]);res.className='res meta bad';return;}res.textContent='';f.elements.text.value='';f.elements.text.focus();})
+            .catch(function(){btn.disabled=false;res.textContent=window.mmNoAnswer;res.className='res meta bad';});}
+        if(needsConfirm(key)){window.mmConfirm(confirmText,win.querySelector('.chat-compose'),go);}else{go();}},true);
+      panes.appendChild(win);}
+    win.querySelector('.name').textContent=chatName(c);win.querySelector('.sub').textContent=chatSub(c);
+    var box=win.querySelector('.chat-msgs');var atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40||!box.children.length;box.innerHTML='';var lastDay='';
+    msgsFor(key).forEach(function(m){var day=String(m.ts||'').slice(0,10);if(day&&day!==lastDay){lastDay=day;var d=document.createElement('div');d.className='chat-day';d.textContent=day;box.appendChild(d);}
+      var me=m.from===own;var b=document.createElement('div');b.className='bubble '+(me?'me':'them');
+      b.innerHTML="<div class='who'></div><div class='text'></div><div class='meta'><span class='t'></span>"+receipt(m)+"</div>";
+      b.querySelector('.who').textContent=me?'':(nodeName(m.from)+(key.indexOf('group:')===0||key.indexOf('ch:')===0?'':''));if(me)b.querySelector('.who').remove();
+      if(key.indexOf('group:')===0&&me){var to=String(m.to||'');var w=b.querySelector('.meta');var s=document.createElement('span');s.textContent='to '+nodeName(to);w.insertBefore(s,w.firstChild);}
+      b.querySelector('.text').textContent=m.text||'';b.querySelector('.t').textContent=hm(m.ts);box.appendChild(b);});
+    if(atBottom){box.scrollTop=box.scrollHeight;}
+    var newest=0;msgsFor(key).forEach(function(m){var t=Date.parse(m.ts||'')||0;if(t>newest)newest=t;});if(newest>(seen[key]||0)){seen[key]=newest;keep();}}
+  function renderPanes(){var panes=document.getElementById('chat-panes');Array.prototype.slice.call(panes.children).forEach(function(w){if(open.indexOf(w.dataset.key)<0)w.remove();});open.forEach(renderPane);
+    Array.prototype.slice.call(panes.children).sort(function(a,b){return open.indexOf(a.dataset.key)-open.indexOf(b.dataset.key);}).forEach(function(w){panes.appendChild(w);});root.classList.toggle('open',open.length>0);}
+  function openChat(key){open=openPane(open,key,MAX());keep();renderPanes();renderList();var w=document.querySelector("#chat-panes [data-key='"+key+"'] input[name=text]");if(w&&window.innerWidth>700)w.focus();}
+  function load(){Promise.all([fetch('/api/messages').then(function(r){return r.json();}),fetch('/api/history?kind=messages&limit=2000').then(function(r){return r.json();}).catch(function(){return {};})]).then(function(x){
+    msgs=(x[0].messages||[]).slice();(x[1].rows||[]).forEach(function(r){msgs.push({ts:r.ts,from:r.node,name:r.name||r.node,to:r.dest,channel:r.channel,text:r.text,mid:r.mid,ack:r.ack,sent:r.mid!==null&&r.mid!==undefined});});
+    dedupe();try{var q=new URLSearchParams(window.location.search).get('open');if(q){open=q.split(',').map(function(k){return k.trim();}).filter(Boolean);}}catch(e){}
+    open=open.filter(function(k){return k.indexOf('ch:')===0||k.indexOf('dm:')===0||k.indexOf('group:')===0;}).slice(-MAX());if(!open.length&&window.innerWidth>700){var first=chatsFrom(msgs,own,D.channels,D.groups,seen)[0];if(first)open=[first.key];}renderList();renderPanes();}).catch(function(){var l=document.getElementById('chat-list');if(l)l.innerHTML="<p class='meta bad' style='padding:var(--s3)'>"+window.mmNoAnswer+"</p>";});}
+  window.onMesh=function(d){if(!d)return;if(d.kind==='text'){msgs.push(d);dedupe();renderList();open.forEach(function(k){if(chatKey(d,own)===k||k.indexOf('group:')===0)renderPane(k);});}
+    if(d.kind==='ack'){msgs.forEach(function(m){if(m.mid!==undefined&&m.mid!==null&&m.mid===d.request_id){m.ack=d.ok?'delivered':(d.reason||'failed');}});open.forEach(renderPane);}};
+  window.addEventListener('resize',function(){if(open.length>MAX()){open=open.slice(-MAX());keep();renderPanes();renderList();}});
+  load();
+})();
 </script>"""
-    labels = {str(n.get("id")): str(n.get("label") or "") for n in nodes if n.get("label")}
-    return (f"{form}{js}<h2>Heard and sent</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th>To</th><th>Message</th><th>State</th></tr></thead><tbody id='msg-rows'>{message_rows(web, labels)}</tbody></table></div>")
 
 
 def radio_body(cfg, own_id="?"):
@@ -3434,6 +3497,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 return self._send(200, self._page("Help", help_body(st, self._ask("config"), self._ask("register"), self._ask("firmware_shelf"), str(web.config.get("REGION") or "")), "/help", st=st))
             if path == "/messages":
                 st = self._ask("status")
+                seed_messages(web)
                 return self._send(200, self._page("Messages", messages_body(web, self._ask("nodes").get("nodes", []), self._ask("channels").get("channels", []), st, groups=self._ask("groups")), "/messages", st=st))
             if path == "/radio":
                 st = self._ask("status")

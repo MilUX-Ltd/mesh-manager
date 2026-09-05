@@ -47,9 +47,12 @@ cookie = hd.get("set-cookie", "").split(";")[0]
 # AC1 the messages page and the chat ring
 st, _, page = req("GET", "/messages", cookie=cookie); page = page.decode()
 check("AC1 /messages answers", st, 200)
+# Spec 048 (5 Sep 2026): Messages is a chat. The composer carries the text; the channel and the destination
+# are the chat the operator is in, and the page still names send_text's three inputs through the API it posts.
 form_fields = sorted(set(__import__("re").findall(r"name='([a-z_]+)'", page.split("<form", 1)[-1].split("</form>", 1)[0])) - {"password"})
 want_fields = sorted(i["name"] for i in C.by_id("send_text")["inputs"])
-check("AC1 the form's fields are send_text's catalogue inputs", form_fields, want_fields)
+check("AC1 the composer carries the message; the chat carries the channel and the destination", (form_fields, "/api/send_text" in page, "data-confirm-channel=" in page and "data-confirm-direct=" in page), (["text"], True, True))
+check("AC1 send_text still takes text, channel and to", want_fields, ["channel", "text", "to"])
 fb.emit({"kind": "text", "from": "!aa000001", "name": "Tracker9", "to": "^all", "channel": 0, "text": "radio check", "ts": "2026-09-03T03:00:00Z"})
 time.sleep(0.5)
 st, _, msgs = req("GET", "/api/messages", cookie=cookie)

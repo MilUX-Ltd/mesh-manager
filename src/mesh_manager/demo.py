@@ -95,6 +95,11 @@ def _demo_history():
             tel.append({"ts": ts, "node": "!ee000004", "level": max(5, 90 - i // 2), "voltage": round(4.1 - i * 0.003, 2), "chutil": round(2 + 3 * abs(_math.sin(a)), 1), "airutil": round(0.3 + 0.5 * abs(_math.cos(a)), 2), "uptime": 3600 + i * 60})
         if i in (5, 60, 120):
             msg.append({"ts": ts, "node": "!ee000004", "name": "Tracker 4", "dest": "^all", "channel": 0, "text": ["at the start point", "halfway, all well", "heading back"][[5, 60, 120].index(i)], "snr": round(snr, 1)})
+    # a direct exchange too, so Messages has more than one chat: the handset asks, the box answers, the radio confirms
+    if msg:
+        t_ask = msg[1]["ts"]
+        msg.insert(2, {"ts": t_ask, "node": "!ee000003", "name": "Handset", "dest": "!ee000001", "channel": 0, "text": "at the RV early, hold here?", "snr": 9.5})
+        msg.insert(3, {"ts": t_ask, "node": "!ee000001", "name": "Gateway", "dest": "!ee000003", "channel": 0, "text": "hold at the RV, we are ten minutes out", "snr": None, "mid": 4242, "ack": "delivered"})
     return {"positions": pos, "telemetry": tel, "messages": msg, "packets": pk}
 DEMO_HISTORY = _demo_history()
 

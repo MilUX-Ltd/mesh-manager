@@ -30,7 +30,8 @@ echo "the release, as an installed box asks for it"
 if ! "${CURL[@]}" "$API/repos/$REPO/releases?per_page=20" -o "$WORK/rels.json"; then
     bad "the releases API is not reachable anonymously"; echo; echo "FAILED"; exit 1
 fi
-read -r TAG VER ASSETS < <(python3 - "$WORK/rels.json" <<'PY'
+newest() {  # the newest release as GitHub lists it: TAG VER ASSETS
+    python3 - "$WORK/rels.json" <<'PY'
 import json, sys
 rels = json.load(open(sys.argv[1]))
 if not isinstance(rels, list) or not rels:
@@ -39,7 +40,21 @@ r = rels[0]
 print(r.get("tag_name", "-"), r.get("tag_name", "-").lstrip("v"),
       ",".join(a["name"] for a in r.get("assets", [])) or "-")
 PY
-)
+}
+
+read -r TAG VER ASSETS < <(newest)
+# The tree may be ahead of the newest release for a minute: the release is being published, or the
+# API has not listed it yet (5 Sep 2026: two runs failed on exactly that). Wait for it rather than
+# call the cut behind; a stranger arriving a minute later sees the right thing.
+tree_ver=$("${CURL[@]}" "https://raw.githubusercontent.com/$REPO/main/VERSION" 2>/dev/null | tr -d ' \n' || true)
+tries=0
+while [[ -n "$tree_ver" && "$tree_ver" != "$VER" && $tries -lt 4 ]] \
+      && [[ "$(printf '%s\n%s\n' "$VER" "$tree_ver" | sort -V | tail -1)" == "$tree_ver" ]]; do
+    tries=$((tries + 1)); echo "        the tree says $tree_ver and the newest release is $VER: waiting 30 s for the release to appear ($tries of 4)"
+    sleep 30
+    "${CURL[@]}" "$API/repos/$REPO/releases?per_page=20" -o "$WORK/rels.json" || break
+    read -r TAG VER ASSETS < <(newest)
+done
 if [[ "$TAG" == "-" ]]; then
     bad "no release is visible without a token"; echo; echo "FAILED"; exit 1
 fi

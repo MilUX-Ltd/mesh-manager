@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.8.0 (5 September 2026) Matt: "it would be great if it worked more like a normal chat app", and "I also want a
+user guide with screenshots created for the public repo." Fifty-three suites green.
+
+- **Messages is a chat (Spec 048).** A list of chats on the left, one per live channel, one per
+  radio spoken to directly and one per group, newest first with the last line, its time and an
+  unread count. A click opens the chat on the right; up to three side by side on a laptop, one at a
+  time on a phone. Bubbles carry the receipt (handed to the radio, delivered, not delivered and
+  why); a message to everyone says it is never acknowledged. A direct message sends on Enter; a
+  channel or group message asks first, because every device hears it. The conversations are derived
+  in the browser from what the box holds and hears; the pure functions run under node in the suite.
+  The newest chat opens itself on a wide screen. The demo carries a direct exchange.
+- **The user guide (Spec 049).** `docs/GUIDE.md` travels with the public cut: one section per page
+  in the order a new user meets them, fifteen screenshots from the demo at desktop and phone widths,
+  taken by `release/guide-shots.sh` and committed under `assets/guide/`. The README links it.
+- **The stranger check waits for a release that is still appearing.** Two verify runs had failed on
+  one check, the tree ahead of the newest release, once because the tree was pushed after the
+  release was created and once because GitHub's releases API had not yet listed a release published
+  seconds before. The check now waits up to two minutes when the tree is ahead, then judges.
+- **ADR 002 (proposed): deployment shapes and a Windows and macOS build.** Argos's assessment for
+  Matt's decision: three shapes as one setting (`tak-server`, `server`, `desktop`), what in the
+  bridge is Linux-specific and how deep it goes, the packaging routes and the signing costs, the
+  order to do it in. Nothing built.
+- The messages API is seeded from the store again after a restart (it had been seeded by the page
+  that no longer renders the rows).
+
 ## 0.7.0 (5 September 2026)
 
 The UX pass and five features, one release. Four reviews (product manager, user

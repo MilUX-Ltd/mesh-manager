@@ -74,7 +74,9 @@ threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
 def get(p):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return r.status, b
 s, body = get("/messages")
-check_true("AC5 the Messages page shows a stored text after a restart", s == 200 and "stored before the restart" in body)
+s2, api = get("/api/messages")
+# Spec 048 (5 Sep 2026): the page is a chat that fetches its messages; the store seeds the messages API after a restart
+check_true("AC5 the Messages page shows a stored text after a restart", s == 200 and "id='chat-list'" in body and s2 == 200 and "stored before the restart" in api)
 s, about = get("/about")
 check_true("AC5 About shows the history store", s == 200 and "History" in about and "history.db" in about)
 srv.shutdown()
