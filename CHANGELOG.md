@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.3 (5 September 2026) The first radio site is an Ubuntu 26.04 machine, whose Python is 3.14; the release was built for
+3.12 only.
+
+- **A cut per Python.** `cut-release.sh --py 3.14` builds the release against Python 3.14's wheels and names
+  the tarball `-py314`; the 3.12 cut keeps the plain name, since it is the kit's update channel. Each
+  tarball carries `release/PYTHON`, the installer reads it and picks that interpreter, and About > Update
+  takes the cut for the box's own Python when the release carries one. Both cuts ship from here on.
+
 ## 0.11.2 (5 September 2026) Found installing the first hub on dev.milux.co.uk (Ubuntu 22.04).
 
 - **The installer on Ubuntu 22.04.** It wrote its polkit rules into `rules.d`, which only 24.04's polkit

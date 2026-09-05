@@ -100,5 +100,9 @@ else:
     check_true("AC8 the peer bind, site name and address are written", r.returncode == 0 and "PEER_BIND=127.0.0.1" in r.stdout and "SITE_NAME=Dev hub" in r.stdout and "SITE_ADDRESS=dev.example" in r.stdout, (r.returncode, r.stdout[-400:]))
     r = dry("--mode", "server")
     check_true("AC8 a server without a radio is still refused", r.returncode != 0 and "--serial" in r.stderr, r.stderr[-200:])
-    check_true("AC8 the installer names Python 3.12 and the MESH_MANAGER_PYTHON override (Ubuntu 22.04 boxes)", "python3.12" in inst and "MESH_MANAGER_PYTHON" in inst and 'PYV" == "3.12"' in inst)
+    check_true("AC8 the installer names Python 3.12 and the MESH_MANAGER_PYTHON override (Ubuntu 22.04 boxes)", "python3.12" in inst and "MESH_MANAGER_PYTHON" in inst and 'PYV" == "$PYT"' in inst and "release/PYTHON" in inst)
+    cut = read("release/cut-release.sh") or ""
+    check_true("AC8 the cut takes --py, stamps release/PYTHON and names a non-3.12 cut by its Python", "--py)" in cut and '> "$B/PYTHON"' in cut and 'suffix="-py${PYV/./}"' in cut)
+    upd = read("src/mesh_manager/updates.py") or ""
+    check_true("AC8 the updater takes the cut for this box's Python when the release carries one", "-py{sys.version_info[0]}{sys.version_info[1]}.tgz" in upd)
 finish()

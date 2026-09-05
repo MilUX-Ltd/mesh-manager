@@ -27,9 +27,6 @@
 set -euo pipefail
 
 ROOT="${MESH_MANAGER_ROOT:-}"
-# the interpreter for the venv: the release's compiled wheels are for Python 3.12 (Ubuntu 24.04's python3); on an
-# older Ubuntu install python3.12 and python3.12-venv (deadsnakes on 22.04). MESH_MANAGER_PYTHON names one outright.
-PY="${MESH_MANAGER_PYTHON:-$(command -v python3.12 || command -v python3 || echo python3)}"
 DRY=0; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""; PEER_BIND_ARG=""; PEER_PORT_ARG=""; SITE_NAME_ARG=""; SITE_ADDRESS_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,6 +57,13 @@ while [[ $# -gt 0 ]]; do
         *)               [[ -z "$TARBALL" ]] && TARBALL="$1" || { echo "ERR one tarball only" >&2; exit 2; }; shift ;;
     esac
 done
+# the interpreter for the venv: each cut is built for one Python (release/PYTHON in the tarball; 3.12 for Ubuntu 24.04,
+# 3.14 for 26.04, named -py314). The box needs that python and its venv module; MESH_MANAGER_PYTHON names one outright.
+PYT="3.12"
+if [[ -n "$TARBALL" && -f "$TARBALL" ]]; then
+    _t=$(tar -xzOf "$TARBALL" release/PYTHON 2>/dev/null | tr -d '[:space:]'); [[ "$_t" =~ ^3\.[0-9]+$ ]] && PYT="$_t"
+fi
+PY="${MESH_MANAGER_PYTHON:-$(command -v "python$PYT" || command -v python3 || echo python3)}"
 [[ -n "$TARBALL" ]] || { echo "ERR usage: install.sh <release.tgz> [--serial ...] [--filter-group ...] [--dry-run]" >&2; exit 2; }
 
 log()  { printf '%s %s\n' "$(date -u '+%H:%M:%S')" "$*"; }
@@ -98,8 +102,8 @@ if (( ! DRY )); then
     # names an interpreter outright.
     command -v "$PY" >/dev/null || die "python3 is missing"
     PYV=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")
-    [[ "$PYV" == "3.12" ]] || die "Mesh Manager's release is built for Python 3.12 and $PY is $PYV: install python3.12 and python3.12-venv (Ubuntu 22.04: the deadsnakes PPA), or set MESH_MANAGER_PYTHON"
-    "$PY" -m venv --help >/dev/null 2>&1 || die "the venv module is missing for $PY (apt-get install python3.12-venv)"
+    [[ "$PYV" == "$PYT" ]] || die "this release is built for Python $PYT and $PY is $PYV: install python$PYT and python$PYT-venv, take the release cut for this box's Python (Ubuntu 26.04: the -py314 tarball), or set MESH_MANAGER_PYTHON"
+    "$PY" -m venv --help >/dev/null 2>&1 || die "the venv module is missing for $PY (apt-get install python$PYT-venv)"
 else
     echo "would: verify $TARBALL against $TARBALL.sha256"
 fi

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import subprocess
 import threading
 import time
@@ -104,6 +105,9 @@ def check(config, token, state_dir, arch="amd64", api=None, running=None):
         ver = ".".join(str(x) for x in v)
         names = {a.get("name"): a for a in r.get("assets", []) if a.get("name")}
         tgz = f"mesh-manager-{ver}-{arch}.tgz"
+        alt = f"mesh-manager-{ver}-{arch}-py{sys.version_info[0]}{sys.version_info[1]}.tgz"   # the cut for this box's Python, when the release carries one
+        if sys.version_info[:2] != (3, 12) and alt in names and f"{alt}.sha256" in names:
+            tgz = alt
         if tgz not in names or f"{tgz}.sha256" not in names or "install.sh" not in names:
             continue
         if best is None or v > best[0]:

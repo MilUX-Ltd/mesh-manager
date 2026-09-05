@@ -20,8 +20,8 @@ if present:
     r = subprocess.run(["bash", "-n", S], capture_output=True, text=True)
     check("cut script parses as bash", r.returncode, 0)
     text = read("release/cut-release.sh") or ""
-    check_true("output is named mesh-manager-<version>-<arch>.tgz (the product's version; the gateway pin is in the manifest)",
-               'mesh-manager-$(cat "$REPO/VERSION")-${ARCH}.tgz' in text)
+    check_true("output is named mesh-manager-<version>-<arch>.tgz (the product's version; a non-3.12 cut adds -py<maj><min>, 0.11.3)",
+               'mesh-manager-$(cat "$REPO/VERSION")-${ARCH}${suffix}.tgz' in text and 'suffix="-py${PYV/./}"' in text)
     check_true("writes RELEASE.json", "RELEASE.json" in text)
     check_true("writes LICENSES/", "LICENSES" in text)
     check_true("the release carries its own installer", 'cp "$REPO/install/install.sh" "$B/install.sh"' in text)
