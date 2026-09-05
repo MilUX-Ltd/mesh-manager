@@ -2581,7 +2581,8 @@ UPDATE_JS = r"""<script>
       if(j.error){res('checked: '+j.error,'warn');return;}res(j.available?(j.version+' is available; the page will show it'):('up to date: '+j.version+' is the newest'),'ok');setTimeout(function(){window.location.href='/about';},1200);})
     .catch(function(){chk.disabled=false;res(window.mmNoAnswer,'bad');});});}
   var ap=document.querySelector('[data-update-apply]');if(ap){ap.addEventListener('click',function(){var v=ap.dataset.updateApply;
-    window.mmConfirm('Update to '+v+'? The release is downloaded and checked, then the bridge and this screen restart; the mesh is off TAK for about a minute.',ap.closest('.card'),function(){
+    var ask=window.mmConfirm||function(t,h,f){if(window.confirm(t)){f();}};
+    ask('Update to '+v+'? The release is downloaded and checked, then the bridge and this screen restart; the mesh is off TAK for about a minute.',ap.closest('.card'),function(){
     ap.disabled=true;res('downloading and checking '+v);
     fetch('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})}).then(function(r){return r.json();}).then(function(j){
       if(j.error){res('not applied: '+j.error,'bad');ap.disabled=false;return;}res('installing '+v+'; the screen will come back on the new version','warn');
@@ -2994,7 +2995,7 @@ ROLLBACK_JS = r"""<script>
 
 
 def about_body(st, web):
-    return (f"{update_box(web)}{rollback_box(web)}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
+    return (f"{update_box(web)}{rollback_box(web)}{WRITE_JS}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
             f"{card('Licence', 'GPL-3.0-or-later')}{card('Heartbeat file', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
             f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}"
             + (card('Reached at', 'https://' + e(str(web.config.get('ROUTE_HOST'))) + ' (the TLS route, Spec 057)') if (web.config or {}).get('ROUTE_HOST') else '') + "</div>"

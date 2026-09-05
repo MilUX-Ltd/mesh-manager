@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.16.1 (5 September 2026)
+
+- **The Update button on About did nothing.** Matt, on the kit: "press it, no feedback, no update." The button asked
+  with the screen's confirm dialog, whose script travelled with the Mesh, Fleet, Bench and Health pages and not with
+  About, so the click raised an error the operator never saw. About carries the script now, and the button falls back
+  to the browser's own dialog should the script ever be missing again. A box on 0.13.0 to 0.16.0 cannot apply this
+  from About; it takes one update by hand (or the updater's own steps from a shell).
+
 ## 0.16.0 (5 September 2026)
 
 - **A TLS route for the screen (Spec 057).** `install.sh --tls-route <host>` installs Caddy from the distribution

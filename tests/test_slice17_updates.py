@@ -13,7 +13,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _common import ROOT, check, check_true, finish, skip  # noqa: E402
+from _common import ROOT, check, check_true, finish, read, skip  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
 from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import web as W, updates as U, __version__  # noqa: E402
@@ -161,5 +161,11 @@ _conf = read_config("/nonexistent")
 check("the update repository has one default, and it is the public repository",
       (_conf.get("UPDATE_REPO"), U.DEFAULT_REPO, str(_conf.get("UPDATE_REPO") or U.DEFAULT_REPO)),
       ("", "MilUX-Ltd/mesh-manager", "MilUX-Ltd/mesh-manager"))
+
+
+# 0.16.1: the Update button asks with the screen's confirm dialog, whose script must travel with About
+_about_src = read("src/mesh_manager/web.py") or ""
+_ab = _about_src[_about_src.find("def about_body("):_about_src.find("def about_body(") + 600]
+check_true("About carries the confirm dialog's script (0.16.1)", "{WRITE_JS}" in _ab and "var ask=window.mmConfirm||function" in _about_src)
 
 finish()
