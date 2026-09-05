@@ -20,8 +20,8 @@ user guide with screenshots created for the public repo." Fifty-three suites gre
   one check, the tree ahead of the newest release, once because the tree was pushed after the
   release was created and once because GitHub's releases API had not yet listed a release published
   seconds before. The check now waits up to two minutes when the tree is ahead, then judges.
-- **ADR 002 (proposed): deployment shapes and a Windows and macOS build.** Argos's assessment for
-  Matt's decision: three shapes as one setting (`tak-server`, `server`, `desktop`), what in the
+- **ADR 002 (proposed): deployment shapes and a Windows and macOS build.** An assessment for the
+  owner's decision: three shapes as one setting (`tak-server`, `server`, `desktop`), what in the
   bridge is Linux-specific and how deep it goes, the packaging routes and the signing costs, the
   order to do it in. Nothing built.
 - The messages API is seeded from the store again after a restart (it had been seeded by the page
