@@ -51,4 +51,7 @@ if present:
                    (bad.stdout + bad.stderr).strip().splitlines()[-1:] if (bad.stdout + bad.stderr).strip() else "")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+_cut = read("release/cut-release.sh") or ""
+check_true("the fallback build refuses a compiled wheel for this machine (5 Sep 2026: Mac wheels rode in the py314 cut)", "which the box cannot use" in _cut and "none-any.whl" in _cut)
+check_true("a non-3.12 cut takes the pins that publish wheels for its interpreter", 'lxml==*)     PINS[$i]="lxml==' in _cut and 'lxml = ">=5.2.2"' in _cut)
 finish()

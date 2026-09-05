@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.11.4 (5 September 2026) The 0.11.3 Python 3.14 tarball did not install: three compiled packages had no 3.14 wheels at
+the estate's pinned versions, the cut built them on the cutting machine and shipped Mac wheels, and the
+installer's venv check passed on a box whose venv module lacked ensurepip.
+
+- **The Python 3.14 cut installs.** It takes lxml 6.1.3, bitarray 3.11.0 and cffi 2.1.1, the first
+  versions with manylinux wheels for 3.14, and relaxes the gateway's exact lxml pin for that cut only; the
+  3.12 cut is unchanged. The cut refuses to ship any compiled wheel built on the cutting machine. The
+  installer checks for ensurepip, not just the venv module, and names the package to install.
+
 ## 0.11.3 (5 September 2026) The first radio site is an Ubuntu 26.04 machine, whose Python is 3.14; the release was built for
 3.12 only.
 

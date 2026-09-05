@@ -103,7 +103,7 @@ if (( ! DRY )); then
     command -v "$PY" >/dev/null || die "python3 is missing"
     PYV=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")
     [[ "$PYV" == "$PYT" ]] || die "this release is built for Python $PYT and $PY is $PYV: install python$PYT and python$PYT-venv, take the release cut for this box's Python (Ubuntu 26.04: the -py314 tarball), or set MESH_MANAGER_PYTHON"
-    "$PY" -m venv --help >/dev/null 2>&1 || die "the venv module is missing for $PY (apt-get install python$PYT-venv)"
+    "$PY" -c 'import venv, ensurepip' >/dev/null 2>&1 || die "the venv module or ensurepip is missing for $PY (apt-get install python$PYT-venv)"
 else
     echo "would: verify $TARBALL against $TARBALL.sha256"
 fi
