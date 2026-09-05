@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.13.0 (5 September 2026) Matt: "ok, do slice 4."
+
+- **The air (Spec 054).** The third switch of the sharing table, at a radio site only: per peer, messages
+  (with a local channel) and waypoints, off by default. A message from a peer with Air on goes onto this mesh
+  as a broadcast prefixed with the peer's name, shows here as the box's own message marked with where it came
+  from, is written to the history, and is never shared back; a message that already went on an air elsewhere
+  is not aired again. A waypoint likewise, named for its origin. The site counts what it aired per peer and
+  the Sharing fold says so.
+- **Receipts and sending into a far mesh.** A chat that arrived from a peer now has a composer: the message
+  goes to that site over the link (`peer_send_text`), and the bubble's receipt reads *on the air at edge* or
+  *not aired: that site keeps its air closed*. A hub, which has no radio, shows no Air controls and refuses
+  the switch in words.
+
+- The installer's preflight names `patch` and `sha256sum` when a minimal image lacks them (found installing the
+  live hub on tak.milux.co.uk, 5 September 2026), instead of falling over at the site-package patch.
+
 ## 0.12.0 (5 September 2026) Matt: "let's keep moving forward with this then", with the sharing table accepted
 as a start.
 

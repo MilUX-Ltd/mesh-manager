@@ -3047,10 +3047,13 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
               "<input type='search' placeholder='Name or radio id' aria-label='Name or radio id' autocomplete='off'><div class='chat-picks' aria-live='polite'></div></div></template>")
     return (f"<div class='chat' id='chat' data-chat='{data}' data-confirm-channel='Send to everyone on {{channel}}, {{count}} devices heard here: “{{text}}”' "
             "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.' "
-            "data-confirm-group='Send to {group}: one direct message to each device, each with its own receipt: “{text}”'>"
+            "data-confirm-group='Send to {group}: one direct message to each device, each with its own receipt: “{text}”' "
+            "data-confirm-remote='Send to {site} over the link: it goes onto that mesh only if {site} allows it, prefixed with this site&#39;s name: “{text}”'>"
             f"<aside class='chat-side' aria-label='Chats'>{tools}<div class='chat-list' id='chat-list'></div></aside><section class='chat-panes' id='chat-panes' aria-live='polite'></section></div>{picker}"
             f"<template id='chat-composer'><div class='chat-compose'>{('<div class=quick data-tip=Fills-the-box>' + chips + '</div>') if chips else ''}"
             f"<form data-action='send_text' data-chat-composer><input type='text' name='text' maxlength='200' required placeholder='{e(send['title'])} (200 bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
+            "<div class='note'></div><div class='res meta' role='status'></div></form></div></template>"
+            f"<template id='chat-composer-remote'><div class='chat-compose'><form data-action='peer_send_text' data-chat-composer><input type='text' name='text' maxlength='180' required placeholder='Send over the link (180 bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
             "<div class='note'></div><div class='res meta' role='status'></div></form></div></template>"
             f"<p class='meta' style='margin-top:var(--s3)'>{e(send['description'])} A direct message sends on Enter; a message to a channel or a group asks first, because every device hears it and it costs airtime. Receipts show on each bubble: handed to the radio, delivered, or not delivered and why; a message the radio gave up on can be sent again from its bubble. A message to everyone is never acknowledged. New message starts a chat with any radio, channel or group; each chat's menu marks it read or unread, pins, mutes or hides it; the field above the list finds a chat or a line.</p>"
             + CHAT_JS)
@@ -3072,7 +3075,7 @@ CHAT_JS = r"""<script>
     return Object.keys(by).map(function(k){return by[k];}).sort(function(a,b){if((b.ts||0)!==(a.ts||0))return (b.ts||0)-(a.ts||0);var r=rank(a.key)-rank(b.key);return r||String(a.name).localeCompare(String(b.name));});}
   function openPane(open,key,max){var o=(open||[]).filter(function(k){return k!==key;});o.push(key);while(o.length>max)o.shift();return o;}
   function unreadCount(msgs,key,own,seenTs){return (msgs||[]).filter(function(m){return chatKey(m,own)===key&&m.from!==own&&(Date.parse(m.ts||'')||0)>(seenTs||0);}).length;}
-  function needsConfirm(key){return key.indexOf('ch:')===0||key.indexOf('group:')===0;}
+  function needsConfirm(key){return key.indexOf('ch:')===0||key.indexOf('group:')===0||String(key||'').indexOf('@')>0;}
   function isRemoteChat(key){return String(key||'').indexOf('@')>0;}   /* Spec 053: a channel that arrives from a peer */
   function recipients(nodes,channels,groups,own,q){q=String(q||'').trim().toLowerCase();var out=[];
     (channels||[]).forEach(function(c){if(c.role==='DISABLED')return;out.push({key:'ch:'+c.index,name:c.name||('slot '+c.index),sub:'everyone on the channel',kind:'channel'});});
@@ -3128,7 +3131,7 @@ CHAT_JS = r"""<script>
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,fallback);}else{fallback();}}
   function sendBody(win,body,confirmText,needs,after){var res=win.querySelector('.res'),btn=win.querySelector('form button[type=submit]');
     function go(){res.textContent='sending';res.className='res meta warn';if(btn)btn.disabled=true;
-      fetch('/api/send_text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return [r.status,j];});})
+      fetch(body.site?'/api/peer_send_text':'/api/send_text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(j){return [r.status,j];});})
         .then(function(x){if(btn)btn.disabled=false;if(x[0]>=400){res.textContent='not sent: '+(x[1].error||x[0]);res.className='res meta bad';return;}res.textContent='';if(after)after();})
         .catch(function(){if(btn)btn.disabled=false;res.textContent=window.mmNoAnswer;res.className='res meta bad';});}
     if(needs){window.mmConfirm(confirmText,win.querySelector('.chat-compose'),go);}else{go();}}
@@ -3138,22 +3141,22 @@ CHAT_JS = r"""<script>
     function draw(){var rs=recipients(D.nodes,D.channels,D.groups,own,inp.value);out.innerHTML='';rs.slice(0,80).forEach(function(r){var b=document.createElement('button');b.type='button';b.className='chat-row';b.innerHTML="<span class='nodeicon'>"+chatIcon({key:r.key})+"</span><span><span class='nm'></span><span class='last'></span></span><span></span>";b.querySelector('.nm').textContent=r.name;b.querySelector('.last').textContent=r.sub;b.addEventListener('click',function(){closePicker();openChat(r.key);});out.appendChild(b);});
       if(!rs.length){out.innerHTML="<p class='meta' style='padding:var(--s3)'>No one by that name. A full radio id, !ee000099, starts a chat with a radio the box has not heard.</p>";}}
     inp.addEventListener('input',draw);inp.addEventListener('keydown',function(ev){if(ev.key==='Escape'){closePicker();}else if(ev.key==='Enter'){ev.preventDefault();var f=out.querySelector('button');if(f)f.click();}});pk.querySelector('.close').addEventListener('click',closePicker);draw();inp.focus();}
-  function receipt(m){if(m.from!==own)return '';if(m.ack==='delivered')return "<span class='pill'>delivered</span>";if(m.ack)return "<span class='pill' data-tip='The radio gave up' data-tip-more='"+esc(m.ack)+"'>not delivered · "+esc(String(m.ack).replace(/_/g,' ').toLowerCase())+"</span>";
+  function receipt(m){if(m.from!==own&&!m.mine)return '';if(m.ack==='delivered')return "<span class='pill'>delivered</span>";if(typeof m.ack==='string'&&m.ack.indexOf('aired:')===0)return "<span class='pill'>on the air at "+esc(m.ack.slice(6))+"</span>";if(typeof m.ack==='string'&&m.ack.indexOf('not aired')===0)return "<span class='pill' data-tip='The far site keeps its air closed'>"+esc(m.ack)+"</span>";if(m.mine&&!m.ack)return "<span class='pill'>sent over the link</span>";if(m.ack)return "<span class='pill' data-tip='The radio gave up' data-tip-more='"+esc(m.ack)+"'>not delivered · "+esc(String(m.ack).replace(/_/g,' ').toLowerCase())+"</span>";
     var to=String(m.to||'^all');if(to==='^all'||to==='!ffffffff')return "<span class='pill' data-tip='A message to everyone is never acknowledged'>sent to everyone</span>";return "<span class='pill'>handed to the radio</span>";}
   function renderPane(key){var panes=document.getElementById('chat-panes');var win=panes.querySelector("[data-key='"+key+"']");var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);var c=chats.filter(function(x){return x.key===key;})[0]||{key:key,name:key,sub:''};
     if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;win.dataset.seenAt=String(seen[key]||0);
       win.innerHTML="<div class='chat-head'><button type='button' class='line icon back' aria-label='Back to the chats' data-tip='Back to the chats'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 3 5 8l5 5'/></svg></button><span class='nodeicon'>"+chatIcon(c)+"</span><span class='nm'><span class='name'></span><br><span class='sub'></span></span><details class='chat-menu'><summary class='line icon' aria-label='More for this chat' data-tip='More for this chat' data-tip-more='Mark read or unread, pin, mute, hide'>"+(D.dots||'&#8943;')+"</summary><div class='menu-list' role='menu'></div></details><button type='button' class='line icon close' aria-label='Close this chat' data-tip='Close this chat'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' aria-hidden='true'><path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/></svg></button></div><div class='chat-msgs'></div>";
-      win.appendChild(document.getElementById('chat-composer').content.cloneNode(true));
-      if(isRemoteChat(key)){var cf=win.querySelector('.chat-compose');if(cf){cf.innerHTML="<p class='meta'>These messages arrive from "+esc(c.origin_name||'another site')+". Replying onto that mesh needs the air switch, which comes in a later release.</p>";}}
+      win.appendChild(document.getElementById(isRemoteChat(key)?'chat-composer-remote':'chat-composer').content.cloneNode(true));
       win.querySelector('.close').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.toggle('open',open.length>0);renderList();});
       win.querySelector('.back').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.remove('open');renderList();});
       win.querySelector('.menu-list').addEventListener('click',function(ev){var b=ev.target.closest('[data-act]');if(!b)return;win.querySelector('details.chat-menu').open=false;act(key,b.dataset.act);});
       var f=win.querySelector('form'),note=win.querySelector('.note');
-      if(note)note.textContent=key.indexOf('ch:')===0?'Everyone on the channel sees this; it is never acknowledged.':(key.indexOf('group:')===0?'One direct message per device, each with its own receipt.':'Only this radio sees it; the receipt shows on the bubble.');
+      if(note)note.textContent=isRemoteChat(key)?('Goes to '+(c.origin_name||'that site')+' over the link, and onto its mesh only if that site allows it.'):key.indexOf('ch:')===0?'Everyone on the channel sees this; it is never acknowledged.':(key.indexOf('group:')===0?'One direct message per device, each with its own receipt.':'Only this radio sees it; the receipt shows on the bubble.');
       win.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
       if(f)f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();var text=f.elements.text.value;if(!text.trim())return;
         var body={text:text,channel:0,to:'^all'},confirmText='';
-        if(key.indexOf('ch:')===0){body.channel=parseInt(key.slice(3),10);body.to='^all';confirmText=root.dataset.confirmChannel.replace('{channel}',c.name).replace('{count}',String(D.heard||0)).replace('{text}',text);}
+        if(isRemoteChat(key)){body={site:c.origin,channel:parseInt(key.slice(3).split('@')[0],10),text:text};confirmText=root.dataset.confirmRemote.split('{site}').join(c.origin_name||'that site').replace('{text}',text);}
+        else if(key.indexOf('ch:')===0){body.channel=parseInt(key.slice(3),10);body.to='^all';confirmText=root.dataset.confirmChannel.replace('{channel}',c.name).replace('{count}',String(D.heard||0)).replace('{text}',text);}
         else if(key.indexOf('group:')===0){body.to=key;confirmText=root.dataset.confirmGroup.replace('{group}',c.name).replace('{text}',text);}
         else{body.to=key.slice(3);}
         sendBody(win,body,confirmText,needsConfirm(key),function(){f.elements.text.value='';f.elements.text.focus();});},true);
@@ -3165,7 +3168,7 @@ CHAT_JS = r"""<script>
     var list=msgsFor(key),divAt=firstUnreadIndex(list,own,parseInt(win.dataset.seenAt||'0',10));
     list.forEach(function(m,i){var day=String(m.ts||'').slice(0,10);if(day&&day!==lastDay){lastDay=day;var d=document.createElement('div');d.className='chat-day';d.textContent=day;box.appendChild(d);}
       if(i===divAt){var nd=document.createElement('div');nd.className='chat-day new';nd.textContent='New messages';box.appendChild(nd);}
-      var me=m.from===own;var b=document.createElement('div');b.className='bubble '+(me?'me':'them');b.dataset.i=i;b.tabIndex=0;
+      var me=m.from===own||!!m.mine;var b=document.createElement('div');b.className='bubble '+(me?'me':'them');b.dataset.i=i;b.tabIndex=0;
       b.innerHTML="<div class='who'></div><div class='text'></div><div class='meta'><span class='t'></span>"+receipt(m)+"<button type='button' class='act' data-act='copy'>Copy</button>"+(canResend(m,own)?"<button type='button' class='act' data-act='resend'>Send again</button>":"")+"</div>";
       if(me){b.querySelector('.who').remove();}else{b.querySelector('.who').textContent=nodeName(m.from);}
       if(key.indexOf('group:')===0&&me){var to=String(m.to||'');var w=b.querySelector('.meta');var sp=document.createElement('span');sp.textContent='to '+nodeName(to);w.insertBefore(sp,w.firstChild);}
@@ -3180,7 +3183,7 @@ CHAT_JS = r"""<script>
     dedupe();try{var q=new URLSearchParams(window.location.search).get('open');if(q){open=q.split(',').map(function(k){return k.trim();}).filter(Boolean);}}catch(e){}
     open=open.filter(function(k){return k.indexOf('ch:')===0||k.indexOf('dm:')===0||k.indexOf('group:')===0;}).slice(-MAX());if(!open.length&&window.innerWidth>700){var first=chatsFrom(msgs,own,D.channels,D.groups,seen)[0];if(first)open=[first.key];}renderList();renderPanes();}).catch(function(){var l=document.getElementById('chat-list');if(l)l.innerHTML="<p class='meta bad' style='padding:var(--s3)'>"+window.mmNoAnswer+"</p>";});}
   window.onMesh=function(d){if(!d)return;if(d.kind==='text'){msgs.push(d);dedupe();renderList();open.forEach(function(k){if(chatKey(d,own)===k||k.indexOf('group:')===0)renderPane(k);});}
-    if(d.kind==='ack'){msgs.forEach(function(m){if(m.mid!==undefined&&m.mid!==null&&m.mid===d.request_id){m.ack=d.ok?'delivered':(d.reason||'failed');}});open.forEach(renderPane);}};
+    if(d.kind==='ack'){msgs.forEach(function(m){if(m.mid!==undefined&&m.mid!==null&&m.mid===d.request_id){if('aired_at' in d){m.ack=d.ok?('aired:'+(d.aired_at||'')):('not aired: '+(d.reason||''));}else{m.ack=d.ok?'delivered':(d.reason||'failed');}}});open.forEach(renderPane);}};
   window.addEventListener('resize',function(){if(open.length>MAX()){open=open.slice(-MAX());keep();renderPanes();renderList();}});
   (function(){var nb=document.getElementById('chat-new'),ra=document.getElementById('chat-readall'),fi=document.getElementById('chat-filter'),hb=document.getElementById('chat-hidden');
     if(nb)nb.addEventListener('click',openPicker);
@@ -3255,9 +3258,9 @@ def activity_body(web):
 
 
 
-def sharing_fold(q):
-    """Spec 053: one peer's sharing table. One small form per class; Air is shown and held for slice 4."""
-    sid = e(str(q.get("id") or "")); sh = q.get("sharing") or {}
+def sharing_fold(q, hub=False):
+    """Spec 053 and 054: one peer's sharing table. One small form per class; Air at a radio site for messages and waypoints."""
+    sid = e(str(q.get("id") or "")); sh = q.get("sharing") or {}; aired = q.get("aired") or {}
     words = {"nodes": ("The picture", "nodes, positions, battery, signal"), "messages": ("Messages", "broadcasts on the channels picked; direct messages never cross"),
              "waypoints": ("Waypoints", "pins heard on the mesh"), "alerts": ("Alerts", "quiet, battery, unknown, fence")}
     onoff = (("on", "On"), ("off", "Off")); rows = ""
@@ -3267,13 +3270,16 @@ def sharing_fold(q):
         rows += (f"<tr><td><b>{title}</b><div class='meta'>{what}</div></td>"
                  f"<td><form data-action='peer_sharing_set' class='share-form'><input type='hidden' name='site' value='{sid}'><input type='hidden' name='cls' value='{cls}'>"
                  f"<div class='row-actions'><span class='meta'>Out</span>{seg('out', onoff, 'on' if row.get('out') else 'off')}<span class='meta'>In</span>{seg('in', onoff, 'on' if row.get('in', True) else 'off')}{chans}"
-                 f"<span class='meta' data-tip='Air is held' data-tip-more='Rebroadcasting what arrives onto this mesh comes in a later release (slice 4)'>Air <span class='pill'>off · slice 4</span></span>"
-                 f"<button class='line'>Save</button></div><div class='res meta' role='status'></div></form></td></tr>")
-    return (f"<details class='fold'><summary>Sharing with {e(str(q.get('name') or ''))}</summary><p class='meta'>What leaves this site for that peer (Out) and what this site shows from it (In). Channel keys, join URLs, admin traffic and direct messages are not on this table: they never cross.</p>"
+                 + (("<span class='meta' data-tip='Air' data-tip-more='What arrives from this peer is transmitted on this mesh, prefixed with the peer&#39;s name; it costs airtime here'>Air</span>" + seg('air', onoff, 'on' if row.get('air') else 'off')
+                     + ("<input type='text' name='air_channel' value='" + e("" if row.get("air_channel") is None else str(row.get("air_channel"))) + "' placeholder='same' size='4' aria-label='air channel' data-tip='Air channel' data-tip-more='The local channel index aired messages go out on; empty keeps the arriving index'>" if cls == "messages" else ""))
+                    if (cls in ("messages", "waypoints") and not hub) else ("<span class='meta'>Air: no radio here</span>" if hub and cls in ("messages", "waypoints") else "<span class='meta'>Air: not for this class</span>"))
+                 + f"<button class='line'>Save</button></div><div class='res meta' role='status'></div></form></td></tr>")
+    aired_words = f" · aired {int(aired.get('count') or 0)} for it" + (f", last {e(age(aired.get('last')))}" if aired.get("last") else "") if not hub else ""
+    return (f"<details class='fold'><summary>Sharing with {e(str(q.get('name') or ''))}{aired_words}</summary><p class='meta'>What leaves this site for that peer (Out), what this site shows from it (In), and what goes onto this mesh from it (Air, a radio site only; a hub has no radio). Channel keys, join URLs, admin traffic and direct messages are not on this table: they never cross.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Class</th><th>Switches</th></tr></thead><tbody>{rows}</tbody></table></div></details>")
 
 
-def peers_section(p):
+def peers_section(p, hub=False):
     """Spec 052: this site, its peers, an invite and a join, on the Connections page."""
     p = p or {}
     if p.get("error"):
@@ -3289,7 +3295,7 @@ def peers_section(p):
         rows += (f"<tr><td><i class='lamp lamp--{lamp}'></i> {e(str(q.get('name')))}<div class='meta'>{e(str(q.get('id') or '')[:12])} · {e(str(q.get('direction') or ''))}</div></td>"
                  f"<td>{e(str(q.get('state')))}{note}</td><td class='meta'>{('<time datetime=' + chr(39) + e(str(q.get('last_seen'))) + chr(39) + ' data-age>' + e(age(q.get('last_seen'))) + '</time>') if q.get('last_seen') else 'never'}</td>"
                  f"<td>{int(q.get('nodes') or 0)}</td><td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: its pin, its link and its picture leave this site.' style='display:inline'><input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>"
-                 f"<tr class='share-row'><td colspan='5'>{sharing_fold(q)}</td></tr>")
+                 f"<tr class='share-row'><td colspan='5'>{sharing_fold(q, hub)}</td></tr>")
     table = (f"<div class='tablewrap'><table><thead><tr><th>Peer</th><th>State</th><th>Last seen</th><th>Nodes</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=5 class=meta>No peers yet. Invite one from here, or join another site with its invite.</td></tr>'}</tbody></table></div>")
     a_inv, a_join = _act("peer_invite"), _act("peer_join")
     invite = (f"<form data-action='peer_invite' class='card' data-risk='change' data-confirm=\"{e(a_inv.get('confirm') or '')}\" id='peer-invite'><h3 style='margin-top:0'>{e(a_inv['title'])}</h3><p class='meta'>{e(a_inv['description'])}</p>"
@@ -3678,7 +3684,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/activity":
                 return self._send(200, self._page("Activity", activity_body(web), "/activity"))
             if path == "/connections":
-                return self._send(200, self._page("Connections", connections_body(web) + peers_section(self._ask("peers")), "/connections"))
+                return self._send(200, self._page("Connections", connections_body(web) + peers_section(self._ask("peers"), hub=(self._ask("status") or {}).get("mode") == "hub"), "/connections"))
             if path == "/settings":
                 return self._send(200, self._page("Settings", settings_body(web) + WRITE_JS, "/settings"))
             if path.startswith("/fragment/"):

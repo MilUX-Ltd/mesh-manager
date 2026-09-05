@@ -205,9 +205,16 @@ join; it passes each site's picture on to the others.
 battery, signal), messages, waypoints and alerts, each with Out (this leaves your site for that peer) and In
 (this shows here from that peer). Messages also take the channel indexes whose broadcasts leave; empty means
 every channel. Out of the box the picture, waypoints and alerts flow both ways and messages stay home. A
-channel that arrives from a peer shows in Messages as its own chat, *MILUX-TAK via edge*, read-only for now:
-replying onto the far mesh needs the Air switch, which is shown but held for a later release. Direct messages,
-channel keys, join URLs, admin traffic and firmware are not on the table and never cross.
+channel that arrives from a peer shows in Messages as its own chat, *MILUX-TAK via edge*.
+
+**The air.** At a site with a radio, each peer's messages row and waypoints row carry a third switch, Air,
+off by default. With it on, what arrives from that peer is transmitted on your mesh: a message goes out as a
+broadcast on the channel you name (or the arriving one), prefixed with the peer's name, and shows in your
+own chat marked with where it came from; a waypoint goes out named for its origin. Airtime is yours, so the
+fold counts what it has aired for each peer. Typing in a remote chat sends your message to that site over the
+link; the bubble's receipt then reads *on the air at edge* when that site allows it, or *not aired: that site
+keeps its air closed* when it does not. A hub has no radio and no Air switch. Direct messages, channel keys,
+join URLs, admin traffic and firmware are not on the table and never cross.
 
 ## Settings
 

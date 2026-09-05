@@ -314,11 +314,12 @@ def serve_one(c):
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),
            "peers": {"site": {"id": "ee" * 32, "short": "eeeeeeeeeeee", "name": "Demo box", "address": "demo.example", "listening": True, "port": 8094},
-                     "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}, "messages": {"out": True, "in": True, "channels": [0]}, "waypoints": {"out": True, "in": True}, "alerts": {"out": True, "in": True}}, "note": None}],
+                     "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}, "messages": {"out": True, "in": True, "channels": [0], "air": True, "air_channel": 0}, "waypoints": {"out": True, "in": True, "air": False}, "alerts": {"out": True, "in": True}}, "aired": {"count": 3, "last": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, "note": None}],
                      "invites": [], "pictures": [{"origin": "ed" * 32, "name": "Edge laptop", "nodes": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}]},
            "peer_invite": {"invite": "demo.example:8094/" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)) + "/" + "ee" * 32, "code": "DEMO", "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600)), "fingerprint": "ee" * 32, "qr_svg": None, "note": "read once, good for 10 minutes, one use"},
            "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
            "peer_sharing_set": {"written": {"out": True, "in": True}, "site": req.get("site"), "cls": req.get("cls"), "confirmed": True},
+           "peer_send_text": {"sent": True, "mid": 8181, "site": req.get("site"), "channel": int(req.get("channel") or 0)},
            "bench_devices": {"gateway": STATUS["radio"], "devices": [
                {"path": "/dev/serial/by-id/usb-Seeed_T1000-E_9F3A-if00", "tty": "ttyACM3", "bootloader": False},
                {"path": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_BOOT-if00", "tty": "ttyACM4", "bootloader": True,

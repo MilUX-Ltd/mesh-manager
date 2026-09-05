@@ -90,7 +90,7 @@ port_w = srv.server_address[1]; threading.Thread(target=srv.serve_forever, daemo
 def get(p):
     c = http.client.HTTPConnection("127.0.0.1", port_w, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return r.status, b
 s1, conns = get("/connections"); s2, health = get("/health"); s3, wps = get("/api/waypoints"); s4, msgs_page = get("/messages")
-check_true("AC7 a sharing form per peer with the four classes and Air held", s1 == 200 and "data-action='peer_sharing_set'" in conns and "name='site'" in conns and all(c in conns for c in ("nodes", "messages", "waypoints", "alerts")) and "slice 4" in conns)
+check_true("AC7 a sharing form per peer with the four classes and Air held", s1 == 200 and "data-action='peer_sharing_set'" in conns and "name='site'" in conns and all(c in conns for c in ("nodes", "messages", "waypoints", "alerts")) and "Air: no radio here" in conns)  # a hub: Spec 054 puts the air controls on radio sites only
 check_true("AC7 Health shows where a remote alert came from", s2 == 200 and "via Edge laptop" in health)
 check_true("AC7 waypoints carry their origin", s3 == 200 and any(w.get("origin_name") == "Edge laptop" for w in json.loads(wps).get("waypoints", [])))
 
