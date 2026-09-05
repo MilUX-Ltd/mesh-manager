@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 import fakegw_lib  # noqa: E402
 fakegw_lib.install()
 from fakebridge_lib import start_fake_bridge  # noqa: E402
+import fakebridge_lib as _fb  # noqa: E402
 from mesh_manager import web as W  # noqa: E402
 
 fb = start_fake_bridge()
@@ -25,7 +26,7 @@ def get(p):
 s, body = get("/api/history?kind=positions&limit=2")
 j = json.loads(body)
 check("AC1 a read action takes query arguments: positions through the catalogue", (s, j.get("kind"), len(j.get("rows") or [])), (200, "positions", 2))
-s, body = get("/api/history?kind=positions&node=!aa000001&since=2026-09-03T21:52:00Z")
+s, body = get("/api/history?kind=positions&node=!aa000001&since=" + _fb.at("2026-09-03T21:52:00Z"))   # the fixture rides the present
 check("AC1 node and since filter", (s, [r["lat"] for r in json.loads(body)["rows"]]), (200, [51.2004]))
 s, mp = get("/map")
 check_true("AC2 the trails control with its windows", s == 200 and "id='trail-hours'" in mp and "value='24'" in mp and "option value='0'>off" in mp)

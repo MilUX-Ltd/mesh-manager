@@ -35,3 +35,8 @@ jobs:
           python -m pip install "meshtastic==2.7.11" "PyQRCode==1.2.1" "cryptography==43.0.3"
       - name: Run every suite
         run: PYTHON=python3 tests/run.sh
+      - name: The same suites over the loopback channel, the one Windows uses (Spec 060)
+        if: matrix.python == '3.12'
+        env:
+          MESH_MANAGER_CHANNEL: tcp
+        run: PYTHON=python3 tests/run.sh

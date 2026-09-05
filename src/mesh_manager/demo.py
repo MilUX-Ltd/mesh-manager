@@ -16,6 +16,8 @@ import sys
 import threading
 import time
 
+from mesh_manager import channel as CH
+
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/fake-bridge.sock"
 NODES = [
     {"id": "!ee000004", "name": "Tracker 4", "battery": 81, "lat": 51.500000, "lon": -0.120000, "heard": "2026-09-03T01:23:55Z", "snr": 13.0, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR4"},
@@ -135,6 +137,8 @@ def answer_nodeinfo(dest):
 
 def serve_one(c):
     f = c.makefile("rb")
+    if not CH.said_hello(f, TOKEN):   # Spec 060
+        c.sendall(b'{"error": "not this bridge\'s screen"}\n'); c.close(); return
     try:
         req = json.loads(f.readline().decode())
     except Exception:  # noqa: BLE001
@@ -349,9 +353,9 @@ def ticker():
 
 if os.path.exists(PATH):
     os.unlink(PATH)
-srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); srv.bind(PATH); srv.listen(8)
+srv, TOKEN = CH.listen_raw(PATH)   # Spec 060: a Unix socket, or loopback with a one-run token
 threading.Thread(target=ticker, daemon=True).start()
-print("fake bridge on", PATH, flush=True)
+print("fake bridge on", CH.where(PATH), flush=True)
 while True:
     c, _ = srv.accept()
     threading.Thread(target=serve_one, args=(c,), daemon=True).start()

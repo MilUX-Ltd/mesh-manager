@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish  # noqa: E402
 
 sys.path.insert(0, os.path.join(ROOT, "src"))
+from mesh_manager import channel as CH  # noqa: E402
 try:
     from mesh_manager import web as W
 except Exception as e:  # noqa: BLE001
@@ -31,10 +32,12 @@ STATUS = {"version": "0.1.0", "radio": "/dev/serial/by-id/usb-x-if00", "radio_pr
 CHANNELS = {"channels": [{"index": 0, "name": "MILUX-TAK", "role": "PRIMARY", "has_key": True}, {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
             "url": "https://meshtastic.org/e/#SECRET-URL-WITH-KEY-ZZZ"}
 event_clients = []
+_tok = None   # Spec 060: the loopback channel's token, set when the listener opens
 
 
 def fake_bridge():
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); srv.bind(sock_path); srv.listen(8)
+    global _tok
+    srv, _tok = CH.listen_raw(sock_path)   # Spec 060: the socket, or loopback where there is none
     while True:
         c, _ = srv.accept()
         threading.Thread(target=serve_one, args=(c,), daemon=True).start()
@@ -42,6 +45,8 @@ def fake_bridge():
 
 def serve_one(c):
     f = c.makefile("rb")
+    if not CH.said_hello(f, _tok):
+        c.sendall(b'{"error": "no"}\n'); c.close(); return
     line = f.readline()
     try:
         req = json.loads(line.decode())

@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
 from fakebridge_lib import start_fake_bridge, NODES  # noqa: E402
+import fakebridge_lib as _fb  # noqa: E402
 try:
     from mesh_manager import web as W
 except Exception as e:  # noqa: BLE001
@@ -96,7 +97,7 @@ check_true("AC5 a signal glyph with bars and the figure", "class='sig" in nodes 
 check_true("AC5 a hop pill", "direct" in nodes and re.search(r"\d hops?<", nodes) is not None)
 check_true("AC5 low battery flagged", "batt--low" in nodes)
 check_true("AC5 a null battery shows no reading", "no reading" in nodes and ">0<" not in nodes.split("no reading")[0][-200:])
-check_true("AC5 heard as a time element with the ISO stamp", re.search(r"<time[^>]*datetime='2026-09-03T02:00:00Z'", nodes) is not None)
+check_true("AC5 heard as a time element with the ISO stamp", re.search("<time[^>]*datetime='%s'" % re.escape(_fb.at("2026-09-03T02:00:00Z")), nodes) is not None)
 check_true("AC5 a result line per row", nodes.count("class='res") >= 2)
 check_true("AC5 database-only nodes in a collapsed group with a pill", "<details" in nodes and "database only" in nodes)
 

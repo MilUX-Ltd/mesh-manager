@@ -11,7 +11,7 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _common import ROOT, check, check_true, finish  # noqa: E402
+from _common import read, ROOT, check, check_true, finish  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
 import fakegw_lib  # noqa: E402
 fakegw_lib.install()
@@ -133,4 +133,12 @@ check_true("AC9 the fake bridge answers links through the API", st == 200 and "n
 st, j = req("GET", "/api/route?id=!aa000001")
 check("AC9 ...and route", (st, (json.loads(j).get("route") or {}).get("dest")), (200, "!aa000001"))
 srv.shutdown()
+# 0.20.2, Matt: "the app should load to map, not plan". The plan used to stick because the automatic fall back,
+# taken when a position had not arrived yet, was written to storage as though the person had chosen it.
+_page = read("src/mesh_manager/web.py") or ""
+check_true("0.20.2 only a deliberate click is remembered", "show(b.dataset.view,true)" in _page and "if(chose){try{localStorage.setItem('mm-view-choice'" in _page)
+check_true("0.20.2 the automatic fall back does not remember", "show('plan');return;" in _page and "localStorage.setItem('mm-view'," not in _page)
+check_true("0.20.2 the key written by the old behaviour is dropped on sight", "localStorage.removeItem('mm-view')" in _page)
+check_true("0.20.2 a box with a position opens on the map", "data-default-view='{'map' if has else 'plan'}'" in _page or "'map' if has else 'plan'" in _page)
+
 finish()

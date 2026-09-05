@@ -35,11 +35,30 @@ nothing on the screen speaks of TAK or forwarding. Everything else in this guide
 
 ### On a laptop
 
-With Python 3.12 or later and the release installed in a virtual environment, `mesh-manager-desktop` runs Mesh
-Manager on this computer: it finds the radio on USB (or runs the demo mesh when there is none), starts the bridge
-and the screen together, opens your browser on the screen, and keeps its files under the platform's application
-directory (on a Mac, `Library/Application Support/Mesh Manager` in your home). There is no sign-in on the laptop's
-own loopback and no TAK. Ctrl-C stops it. A signed app you can double-click follows.
+On a Mac, open `Mesh Manager.app` from the disk image: it appears in the menu bar, not the Dock, finds the radio
+on USB (or shows the demo mesh when there is none), and shows the screen in its own window. Closing that window
+does not stop anything: the bridge keeps running and the menu-bar item brings the window back, or opens the
+screen in a browser if you would rather. Opening the app a second time shows the copy already running rather
+than starting another, since only one thing can hold the radio. If a run goes wrong, `log/app.log` beside its
+other files says why. The menu says what the radio is doing, and carries Open Mesh Manager,
+Open in a browser, Show the files, and Quit, which stops everything. The first time, if macOS says the app is
+from an unidentified developer, right-click it and choose Open: the build is signed by us but not yet by Apple,
+and notarisation follows.
+
+From a terminal instead, with the release installed in a virtual environment, `mesh-manager-desktop` does the
+same without the menu bar, and `--in-process` runs both parts in one process as the app does. Either way the
+files live under the platform's application directory (on a Mac, `Library/Application Support/Mesh Manager` in
+your home), there is no sign-in on the laptop's own loopback, and there is no TAK.
+
+### On Windows
+
+Unzip the release's Windows folder and run `Mesh Manager.exe`. It shows the screen in its own window and sits in
+the notification area by the clock: the menu says what the radio is doing and carries Open Mesh Manager, Open in
+a browser, Show the files, and Quit. Closing the window leaves the bridge running, as on a Mac.
+The files live under `Mesh Manager` in your local application data. Windows SmartScreen will warn that the
+publisher is unknown, because the build is not signed yet: choose More info, then Run anyway, or leave it until
+a signed build is out. Inside, the screen and the bridge talk over the loopback interface with a token made for
+that run, because Windows has no Unix socket; nothing of it is reachable from the network.
 
 ### A name and a certificate for the screen
 

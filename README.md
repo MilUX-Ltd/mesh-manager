@@ -63,6 +63,13 @@ version line stays 0.x until the interface settles; the
   44 px targets, tooltips on a long press, every icon with a word behind a switch.
 - **Updates.** The screen checks for a release, verifies its hash, and applies it on one
   press, and can roll back to any release still on the box. The box downloads nothing else.
+- **Joining meshes.** Two sites out of radio range join over the internet, box to box, with no
+  broker: each sends what its own table lets out, items carry the site they came from, and a
+  site with a radio can put a peer's messages on its own air. What a link may never carry is
+  enforced in code, not by convention.
+- **On a laptop.** The same product as an application on macOS and Windows: it finds the radio
+  on USB, shows the screen in its own window, and sits in the menu bar or the notification area.
+  No server, no TAK, no systemd.
 - **An AI surface.** An MCP endpoint, an agent role and a set of skills, all derived from the
   same action catalogue the screen uses. Anything a person can do on the screen an agent can
   do through a connector, at the autonomy you set, and nothing else.
@@ -106,6 +113,9 @@ optional: with one, the bridge forwards the mesh to it as CoT; without one, inst
 a mini PC with a Heltec V4 gateway radio and Seeed T1000-E trackers, but nothing about the
 hardware is hard-coded.
 
+On a laptop it needs nothing but the application: the macOS and Windows builds carry their own
+Python and every library inside them.
+
 ## Install
 
 Take the release tarball and its `install.sh` from the
@@ -139,6 +149,19 @@ write and changes nothing. The box builds its environment from wheels inside the
 the install works with no internet.
 
 After that, updates are a press on the About page.
+
+A screen reached from a browser elsewhere can have a name and a certificate of its own: add
+`--tls-route <host>` and the installer puts Caddy in front of it, leaving the firewall to you.
+
+### On a laptop
+
+Take the disk image or the Windows zip from the [releases page](../../releases). The application
+finds the radio on USB, shows the screen in its own window, and sits in the menu bar on macOS or
+the notification area on Windows; closing the window leaves the bridge running, and Quit stops
+it. With no radio it shows the demo mesh, so it can be looked at before any hardware arrives.
+
+Neither build is signed by Apple or Microsoft yet, so the first run needs right-click then Open
+on a Mac, or More info then Run anyway on Windows.
 
 ## Try it without a radio
 

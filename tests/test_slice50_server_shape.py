@@ -4,6 +4,7 @@ import http.client, json, os, re, subprocess, sys, tempfile, threading, time
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read, skip  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
+from mesh_manager import channel as CH  # noqa: E402
 import fakegw_lib  # noqa: E402
 fakegw_lib.install()
 import fakebridge_lib  # noqa: E402
@@ -77,7 +78,7 @@ p = subprocess.Popen([sys.executable, "-m", "mesh_manager.demo", demo_sock], env
 try:
     time.sleep(1.2)
     import socket as _s
-    s = _s.socket(_s.AF_UNIX, _s.SOCK_STREAM); s.settimeout(5); s.connect(demo_sock); s.sendall(b'{"op": "status"}\n'); buf = b""
+    s = CH.connect(demo_sock, 5); s.sendall(b'{"op": "status"}\n'); buf = b""   # Spec 060
     while not buf.endswith(b"\n"):
         chunk = s.recv(65536)
         if not chunk: break

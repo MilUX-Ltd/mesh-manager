@@ -1,8 +1,9 @@
 """Spec 058: the desktop mode. One command on a laptop: the bridge and the screen in one process tree, no systemd,
 the browser opened on the screen, application directories for the platform, the demo mesh when there is no radio.
 Part of Mesh Manager, GPL-3.0-or-later."""
-import argparse, glob, hashlib, json, os, platform, signal, socket, subprocess, sys, tempfile, threading, time, urllib.request, webbrowser
+import argparse, glob, hashlib, json, os, platform, signal, socket, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request, webbrowser
 
+from .common import read_config
 from . import __version__
 
 APP = "Mesh Manager"
@@ -102,6 +103,115 @@ def _wait_health(url, secs=60, stop=None, procs=()):
     return False
 
 
+def port_state(port, timeout=1.5):
+    """Spec 061 (0.20.1): who has this port. ("free", None) when nobody, ("ours", version) when a Mesh Manager
+    screen answers on it, ("busy", None) when something else does. A second launch must say so rather than die."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/healthz", timeout=timeout) as r:
+            d = json.loads(r.read().decode())
+        return ("ours", str(d.get("version") or "")) if "version" in d else ("busy", None)
+    except urllib.error.HTTPError:
+        return ("busy", None)
+    except Exception:  # noqa: BLE001  nothing listening, or nothing that answers in time
+        pass
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # 0.20.1: probe as the screen binds, or a socket
+    try:                                                       # still closing from the last run reads as busy
+        s.bind(("127.0.0.1", int(port)))
+        return ("free", None)
+    except OSError:
+        return ("busy", None)
+    finally:
+        s.close()
+
+
+def app_log(dirs):
+    """Spec 061 (0.20.1): an application has no terminal, so its own words go to a file a person can read and
+    send. Kept small; the newest run is always at the end."""
+    d = os.path.join(dirs["root"], "log")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "app.log")
+    try:
+        if os.path.getsize(path) > 2_000_000:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+    fh = open(path, "a", buffering=1)
+    fh.write(f"\n== {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} Mesh Manager {__version__} starting\n")
+    return fh, path
+
+
+class Running:
+    """Spec 059: the bridge and the screen running as threads of this process, and the one way to stop them."""
+    def __init__(self, bridge, srv, sock, port, demo):
+        self.bridge, self.srv, self.sock, self.port, self.demo = bridge, srv, sock, port, demo
+        self.url = f"http://127.0.0.1:{port}/"
+        self._stopped = False
+
+    def status(self):
+        """What the bridge says of itself, or an empty picture while it is still starting."""
+        try:
+            with urllib.request.urlopen(self.url + "api/status", timeout=3) as r:
+                return json.loads(r.read().decode())
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+        for step in (lambda: self.srv.shutdown(), lambda: self.srv.server_close(), lambda: self.bridge and self.bridge.stop()):
+            try:
+                step()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            os.remove(self.sock)
+        except OSError:
+            pass
+
+
+def serve_in_process(dirs, demo=False, radio=None, port=None):
+    """Spec 059: inside an application bundle there is no `python -m`, so the parts run here as threads.
+    Returns a Running; the caller waits on its url and calls stop()."""
+    from . import web as W
+    for d in (dirs["root"], dirs["etc"], dirs["state"]):
+        os.makedirs(d, exist_ok=True)
+    first_config(dirs, serial=radio)
+    conf = read_config(dirs["config"])
+    if radio:
+        conf["SERIAL"] = radio
+    sock = socket_for(dirs)
+    try:
+        os.remove(sock)
+    except OSError:
+        pass
+    bridge = None
+    if demo:
+        import runpy
+        def run_demo():
+            argv = sys.argv
+            sys.argv = ["mesh_manager.demo", sock]
+            os.environ["MODE"] = "desktop"
+            try:
+                runpy.run_module("mesh_manager.demo", run_name="__main__")
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                sys.argv = argv
+        threading.Thread(target=run_demo, name="demo-bridge", daemon=True).start()
+    else:
+        from . import bridge as B
+        bridge = B.Bridge(conf, socket_path=sock, state_dir=dirs["state"])
+        threading.Thread(target=bridge.serve_forever, name="bridge", daemon=True).start()
+    want = int(conf.get("PORT") or 8093) if port is None else int(port)
+    if want and port_state(want)[0] == "busy":   # 0.20.1: something else holds it; take one the system gives
+        want = 0
+    srv = W.make_server("127.0.0.1", want, sock, dirs["etc"], conf, state_dir=dirs["state"])
+    threading.Thread(target=srv.serve_forever, name="screen", daemon=True).start()
+    return Running(bridge, srv, sock, srv.server_address[1], demo)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mesh-manager-desktop", description="Mesh Manager on this computer: the bridge and the screen together, no server, no TAK.")
     ap.add_argument("--root", help="the application directory (default: the platform's, e.g. ~/Library/Application Support/Mesh Manager)")
@@ -109,6 +219,7 @@ def main(argv=None):
     ap.add_argument("--demo", action="store_true", help="run the demo mesh instead of a radio")
     ap.add_argument("--port", type=int, help="the screen's port (default: the config's, 8093; 0 picks a free one)")
     ap.add_argument("--no-browser", action="store_true", help="do not open the browser on the screen")
+    ap.add_argument("--in-process", action="store_true", help="run the bridge and the screen as threads of this process, as the application bundle does (Spec 059)")
     a = ap.parse_args(argv)
     dirs = app_dirs()
     if a.root:
@@ -116,6 +227,8 @@ def main(argv=None):
     radio = None if a.demo else find_radio(wanted=a.serial)
     first_config(dirs, serial=radio)
     demo = a.demo or radio is None
+    if a.in_process or getattr(sys, "frozen", False):
+        return _run_together(dirs, demo, radio, a.port, a.no_browser)
     port = a.port if a.port is not None else None
     if port == 0:
         port = free_port()   # --port 0: a free one, named in the line printed below
@@ -173,6 +286,26 @@ def main(argv=None):
         os.remove(sock)
     except OSError:
         pass
+    return 0
+
+
+def _run_together(dirs, demo, radio, port, no_browser):
+    """Spec 059: the --in-process path and the application bundle's own: start both parts here, wait, stop cleanly."""
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    run = serve_in_process(dirs, demo=demo, radio=radio, port=port)
+    why = "the demo mesh" if demo else f"the radio on {radio}"
+    up = _wait_health(run.url + "healthz", 60, stop=stop)
+    print(f"Mesh Manager {__version__} on this computer: the screen is {run.url} with {why}; files under {dirs['root']}; Ctrl-C stops it", flush=True)
+    if up and not no_browser:
+        try:
+            webbrowser.open(run.url)
+        except Exception:  # noqa: BLE001
+            pass
+    while not stop.is_set():
+        stop.wait(0.5)
+    run.stop()
     return 0
 
 

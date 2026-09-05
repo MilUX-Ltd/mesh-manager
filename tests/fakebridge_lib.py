@@ -1,10 +1,15 @@
 """A fake bridge as a library for the suites: the Spec 002 protocol on a unix socket, with a
 plausible mesh, a call log, and a way to raise events."""
+import calendar
 import json
+import time
+import re
 import os
 import socket
 import tempfile
 import threading
+
+from mesh_manager import channel as CH
 
 NODES = [{"id": "!aa000001", "name": "Tracker9", "battery": 77, "snr": 12.5, "hops": 0, "heard": "2026-09-03T02:00:00Z", "hw": "TRACKER_T1000_E", "lat": 51.2, "lon": -1.5, "heard_here": True},
          {"id": "!bb000002", "name": "Tracker2", "battery": 9, "snr": 3.0, "hops": 1, "heard": "2026-09-03T01:50:00Z", "hw": "TRACKER_T1000_E", "heard_here": True},
@@ -59,8 +64,7 @@ class FakeBridge:
         self.path = os.path.join(tempfile.mkdtemp(), "b.sock")
         self.calls = []
         self.clients = []
-        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._srv.bind(self.path); self._srv.listen(16)
+        self._srv, self._token = CH.listen_raw(self.path)   # Spec 060: the same channel the product uses
         threading.Thread(target=self._accept, daemon=True).start()
 
     def _accept(self):
@@ -70,6 +74,8 @@ class FakeBridge:
 
     def _one(self, c):
         f = c.makefile("rb")
+        if not CH.said_hello(f, self._token):   # Spec 060
+            c.sendall(b'{"error": "not this bridge\'s screen"}\n'); c.close(); return
         try:
             req = json.loads(f.readline().decode())
         except Exception:  # noqa: BLE001
@@ -204,6 +210,43 @@ AVAILABILITY = {"hours": 24, "bucket_secs": 3600, "buckets": 24, "nodes": [
     {"id": "!aa000001", "name": "Tracker 9 (recce)", "buckets": 24, "heard": 21, "pct": 88, "bucket_secs": 3600, "series": [1] * 21 + [0] * 3},
     {"id": "!bb000002", "name": "Tracker2", "buckets": 24, "heard": 2, "pct": 8, "bucket_secs": 3600, "series": [0] * 22 + [1, 1]}]}
 WAYPOINTS = {"waypoints": [{"wid": 7777, "node": "!ee000099", "name": "Far RV", "description": "from the edge", "lat": 51.45, "lon": -0.97, "expire": 4102444800, "ts": "2026-09-03T02:00:00Z", "origin": "cd" * 32, "origin_name": "Edge laptop"}, {"wid": 4242, "node": "!aa000001", "name": "RV Alpha", "description": "meet here", "lat": 51.2015, "lon": -1.4985, "expire": 4102444800, "ts": "2026-09-03T21:40:00Z"}]}
+
+
+# The fixture's clock (found 5 Sep 2026, when the 48-hour exports went empty an hour after a green run).
+# Every timestamp in here was written against 3 September 2026; read literally they age out of the windows the
+# suites ask for, and the whole thing fails at a time of day rather than on a change. So the fixture keeps its
+# readable dates and is shifted, whole, onto the present: the same intervals, ending an hour ago.
+FIXTURE_EPOCH = "2026-09-03T22:00:00Z"
+
+
+_SHIFT = (time.time() - 3600) - calendar.timegm(time.strptime(FIXTURE_EPOCH, "%Y-%m-%dT%H:%M:%SZ"))
+# fixed once, at import: a shift recomputed per call disagrees with the data by however long the suite has been
+# running, and a check comparing the two then passes or fails on the second (found 5 Sep 2026)
+
+
+def at(stamp):
+    """Where a fixture timestamp lands once the fixture is shifted onto now."""
+    t = calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) + _SHIFT
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def _shift(obj, pat=re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")):
+    if isinstance(obj, str):
+        return at(obj) if pat.match(obj) else obj
+    if isinstance(obj, list):
+        return [_shift(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_shift(v) for v in obj)
+    if isinstance(obj, dict):
+        return {k: _shift(v) for k, v in obj.items()}
+    return obj
+
+
+for _name in ("NODES", "STATUS", "ROUTE", "_EXTRA", "LINKS", "REGISTER", "BENCH", "BENCH_READ", "NODE_READ",
+              "SHELF", "EXPORTS", "CONFIG", "HISTORY", "NEIGHBORS", "AVAILABILITY", "WAYPOINTS"):
+    if _name in globals():
+        globals()[_name] = _shift(globals()[_name])
+
 
 
 def start_fake_bridge():

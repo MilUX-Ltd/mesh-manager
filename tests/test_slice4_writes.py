@@ -12,6 +12,7 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
+from mesh_manager import channel as CH  # noqa: E402
 import fakegw_lib  # noqa: E402
 fakegw_lib.install()
 try:
@@ -33,7 +34,7 @@ OWN = "!00000001"
 
 
 def ask(op, **args):
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(10); s.connect(sock_path)
+    s = CH.connect(sock_path, 10)   # Spec 060
     s.sendall((json.dumps({"op": op, **args}) + "\n").encode())
     buf = b""
     while not buf.endswith(b"\n"):

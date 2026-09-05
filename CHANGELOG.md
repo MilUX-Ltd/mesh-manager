@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+## 0.20.2 (6 September 2026)
+
+Matt: "the app should load to map, not plan", and "I am still getting error emails from github".
+
+- **The Mesh page opens on the map.** The plan stuck because the automatic fall back, taken when a position had
+  not arrived yet, was written to storage as though the person had chosen it; a box that started before its first
+  fix then opened on the plan for ever. Only a deliberate click is remembered now, under a new name, and the key
+  the old behaviour wrote is dropped on sight. A deliberate plan still sticks.
+- **The public repository's suites pass.** Five checks read the release tooling, which stays in the source
+  repository by design, so they failed on every release push and sent a mail each time. They say skipped there
+  now, and run as before at home. Proved by staging the public tree into a real checkout and running it.
+
+## 0.20.1 (6 September 2026)
+
+Matt, on the 0.20.0 build: "Mac app won't open." Something else already held the screen's port, and the
+application, having no terminal, died without a word.
+
+- **A second copy says so.** Opening the app while one is already running now shows that one's screen and says
+  which version is up, instead of failing silently. The bundle also tells macOS to activate the copy already
+  running rather than start another, which is what a person doing it from Finder wants.
+- **A port held by something else is no longer fatal**: the screen takes one the system gives it.
+- **The app writes a log.** `log/app.log` beside its other files, so a run that goes wrong can be read and sent.
+
+## 0.20.0 (6 September 2026) Matt: "I would prefer a real app window."
+
+- **The app has a window of its own.** On macOS the screen is shown in a WebKit view in an application window,
+  opened at start and brought back by the menu-bar item; on Windows the same through the Edge web view the
+  platform carries. No browser is launched. *Open in a browser* is still in the menu for anyone who wants a tab,
+  and a machine with no web view falls back to the browser and says so.
+- Closing the window leaves the bridge running, as the menu-bar item shows; Quit is what stops it.
+- The view says who it is, `MeshManager/<version>`, so a request from the app can be told from a browser's.
+
+## 0.19.0 (5 September 2026)
+
+ADR 002, the Windows build. Matt: "if you complete that, build the windows app next."
+
+- **The Windows app (Spec 060).** `Mesh Manager.exe` sits in the notification area, finds the radio, opens the
+  screen, and quits cleanly, with the menu the Mac app shows, built from the same words.
+- **A channel that works where there is no Unix socket.** The bridge and the screen keep the socket on Linux and
+  macOS; on Windows the bridge listens on the loopback interface on a port the operating system picks and writes
+  the address and a token made for that run where the socket would have been. A caller that cannot say the token
+  is refused. `MESH_MANAGER_CHANNEL=tcp` asks for that channel anywhere, and the whole suite runs over it in CI,
+  so the Windows path is proved on Linux too.
+- **`release/build-winapp.ps1`** builds the application with PyInstaller from an environment carrying the
+  release's own patched gateway, and zips it. A Mac cannot build a Windows application, so
+  `.github/workflows/windows-app.yml` builds it on a Windows runner, by hand from the Actions tab and on a tag,
+  where it is attached to the release. There is no code signing yet; SmartScreen will warn.
+
+## 0.18.0 (5 September 2026) Matt: "would love to review a mac app by the morning."
+
+- **Mesh Manager is an application you double-click.** `Mesh Manager.app` lives in the menu bar, finds the radio,
+  opens the screen in your browser, and quits cleanly. The menu says what the radio is doing, and offers the
+  screen, the files, and Quit.
+- **One process when frozen.** An application bundle has no `python -m`, so the bridge and the screen run as
+  threads: `desktop.serve_in_process`, also reachable from the command line as `mesh-manager-desktop
+  --in-process`. The subprocess path stays the default from a terminal.
+- **`release/build-macapp.sh`** builds the bundle with PyInstaller from an environment carrying the release's own
+  patched gateway, sets it to live in the menu bar, signs it ad-hoc and wraps it in a DMG. Apple's Developer ID
+  signature and notarisation are the next slice.
+
 ## 0.17.2 (5 September 2026)
 
 - **The strip counted the radio's database as nodes heard here.** It read "12 heard here, 12 in the radio's

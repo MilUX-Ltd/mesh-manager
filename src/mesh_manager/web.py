@@ -28,6 +28,7 @@ from . import __version__
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, NODE_ICONS, read_config
 from . import catalogue as C
 from . import mgrs as MG
+from . import channel as CH
 from . import connections as K
 from . import updates as U
 from .common import DEFAULT_STATE
@@ -147,9 +148,7 @@ class BridgeClient:
 
     def ask(self, op, timeout=5, **args):
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            s.connect(self.socket_path)
+            s = CH.connect(self.socket_path, timeout)   # Spec 060: the Unix socket, or loopback with its token
             s.sendall((json.dumps({"op": op, **args}) + "\n").encode())
             buf = b""
             while not buf.endswith(b"\n"):
@@ -261,9 +260,7 @@ class Web:
     def _pump(self):
         while not self.stop.is_set():
             try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(60)
-                s.connect(self.client.socket_path)
+                s = CH.connect(self.client.socket_path, 60)
                 s.sendall(b'{"op": "events"}\n')
                 f = s.makefile("rb")
                 while not self.stop.is_set():
@@ -1141,10 +1138,15 @@ OVERLAY_JS = r"""<script>
   var wrap=document.getElementById('mesh-views');if(!wrap)return;
   var tiles=JSON.parse(wrap.dataset.tiles||'{}'),has=wrap.dataset.hasPosition==='1';
   function tok(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
-  function show(v){wrap.querySelectorAll('[data-view]').forEach(function(x){if(x.tagName==='BUTTON'){x.classList.toggle('on',x.dataset.view===v);}else{x.hidden=x.dataset.view!==v;}});
-    try{localStorage.setItem('mm-view',v);}catch(e){}if(v==='map'&&window.mmMap){setTimeout(function(){window.mmMap.invalidateSize();},60);}}
-  wrap.querySelectorAll('button[data-view]').forEach(function(b){b.addEventListener('click',function(){show(b.dataset.view);});});
-  var chosen=wrap.dataset.defaultView;try{var s=localStorage.getItem('mm-view');if(s==='plan'||(s==='map'&&has)){chosen=s;}}catch(e){}
+  function show(v,chose){wrap.querySelectorAll('[data-view]').forEach(function(x){if(x.tagName==='BUTTON'){x.classList.toggle('on',x.dataset.view===v);}else{x.hidden=x.dataset.view!==v;}});
+    /* 0.20.2: only a person's own click is remembered. The old key was written by the automatic fall back to the
+       plan when a position had not arrived yet, so a box that started before its first fix opened on the plan for
+       ever after; that key is dropped on sight. */
+    if(chose){try{localStorage.setItem('mm-view-choice',v);}catch(e){}}
+    if(v==='map'&&window.mmMap){setTimeout(function(){window.mmMap.invalidateSize();},60);}}
+  wrap.querySelectorAll('button[data-view]').forEach(function(b){b.addEventListener('click',function(){show(b.dataset.view,true);});});
+  try{localStorage.removeItem('mm-view');}catch(e){}
+  var chosen=wrap.dataset.defaultView;try{var s=localStorage.getItem('mm-view-choice');if(s==='plan'||(s==='map'&&has)){chosen=s;}}catch(e){}
   if(!has||!window.L){show('plan');return;}
   var map=L.map('map-geo',{zoomControl:true,attributionControl:true});window.mmMap=map;
   var layers={},current=null,byName={};

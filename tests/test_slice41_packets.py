@@ -9,9 +9,9 @@ from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import web as W  # noqa: E402
 
 FB.HISTORY["packets"] = [
-    {"ts": "2026-09-03T21:50:00Z", "node": "!aa000001", "port": "POSITION_APP", "snr": 9.5, "hops": 0, "size": 20},
-    {"ts": "2026-09-03T21:51:00Z", "node": "!bb000002", "port": "TEXT_MESSAGE_APP", "snr": 3.0, "hops": 1, "size": 12},
-    {"ts": "2026-09-03T21:52:00Z", "node": "!aa000001", "port": "TELEMETRY_APP", "snr": 9.0, "hops": 0, "size": 30},
+    {"ts": FB.at("2026-09-03T21:50:00Z"), "node": "!aa000001", "port": "POSITION_APP", "snr": 9.5, "hops": 0, "size": 20},
+    {"ts": FB.at("2026-09-03T21:51:00Z"), "node": "!bb000002", "port": "TEXT_MESSAGE_APP", "snr": 3.0, "hops": 1, "size": 12},
+    {"ts": FB.at("2026-09-03T21:52:00Z"), "node": "!aa000001", "port": "TELEMETRY_APP", "snr": 9.0, "hops": 0, "size": 30},
 ]
 fb = start_fake_bridge()
 srv = W.make_server(bind="127.0.0.1", port=0, socket_path=fb.path, etc_dir=tempfile.mkdtemp(), config={"AUTH": "off"}, state_dir=tempfile.mkdtemp())

@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
 from fakebridge_lib import start_fake_bridge, HISTORY  # noqa: E402
+import fakebridge_lib as _fb  # noqa: E402
 from mesh_manager import web as W  # noqa: E402
 
 fb = start_fake_bridge()
@@ -24,7 +25,7 @@ root = ET.fromstring(body)
 ns = {"g": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
 trks = root.findall("g:trk", ns) if ns else root.findall("trk")
 check("AC1 one track per node with points", (len(trks), len(trks[0].findall(".//g:trkpt", ns) if ns else trks[0].findall(".//trkpt")) if trks else 0), (1, 2))
-check_true("AC1 timestamps are carried", b"<time>2026-09-03T21:50:00Z</time>" in body)
+check_true("AC1 timestamps are carried", ("<time>%s</time>" % _fb.at("2026-09-03T21:50:00Z")).encode() in body)   # the fixture is shifted onto now
 
 # ---- AC2 KML ---------------------------------------------------------------------------------------
 st, body, hdr = get("/export/positions.kml?hours=48")

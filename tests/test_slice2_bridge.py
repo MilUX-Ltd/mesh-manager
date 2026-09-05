@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read  # noqa: E402
 
 sys.path.insert(0, os.path.join(ROOT, "src"))
+from mesh_manager import channel as CH  # noqa: E402
 
 # ---- a fake gateway, shaped like the real one where the bridge touches it ----------------
 fake_pkg = types.ModuleType("tak_meshtastic_gateway")
@@ -136,7 +137,7 @@ while not os.path.exists(sock_path) and time.time() < deadline:
 
 
 def ask(op, **args):
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(3); s.connect(sock_path)
+    s = CH.connect(sock_path, 3)   # Spec 060
     s.sendall((json.dumps({"op": op, **args}) + "\n").encode())
     buf = b""
     while not buf.endswith(b"\n"):
@@ -169,13 +170,13 @@ time.sleep(0.1)
 lg = ask("log")
 check_true("AC3 log: the ring carries the line", any("hello from the gateway" in l for l in lg.get("lines", [])))
 check_true("AC3 unknown op answers an error", "error" in ask("no_such_op"))
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(3); s.connect(sock_path)
+s = CH.connect(sock_path, 3)   # Spec 060
 s.sendall(b"this is not json\n"); bad = s.recv(4096); s.close()
 check_true("AC3 malformed line answers an error", b"error" in bad)
 check_true("AC3 ...and the server keeps serving", "version" in ask("status"))
 
 # AC4 events
-es = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); es.settimeout(3); es.connect(sock_path)
+es = CH.connect(sock_path, 3)   # Spec 060
 es.sendall(b'{"op": "events"}\n')
 first = es.recv(4096)   # the hello line
 if pub:

@@ -28,6 +28,7 @@ except ImportError:  # the gateway depends on it; a bench without it still impor
 
 from . import __version__
 from . import catalogue as C
+from . import channel as CH
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, read_config, utc
 from .history import History
 from . import peers as P
@@ -3999,6 +4000,9 @@ class Bridge(TAKMeshtasticGateway):
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
+                if not CH.check_hello(self.server, self.rfile):   # Spec 060: the loopback channel proves its caller
+                    self.wfile.write((json.dumps({"error": "not this bridge's screen"}) + "\n").encode())
+                    return
                 line = self.rfile.readline(65536)
                 try:
                     req = json.loads(line.decode("utf-8", "replace"))
@@ -4048,20 +4052,8 @@ class Bridge(TAKMeshtasticGateway):
                         rep = {"error": f"{op} failed: {type(e).__name__}: {e}"}
                 self.wfile.write((json.dumps(rep, default=str) + "\n").encode())
 
-        class Server(socketserver.ThreadingUnixStreamServer):
-            daemon_threads = True
-            allow_reuse_address = True
-
-        d = os.path.dirname(self.socket_path)
-        if d and not os.path.isdir(d):
-            os.makedirs(d, exist_ok=True)
-        if os.path.exists(self.socket_path):
-            os.unlink(self.socket_path)
-        self._server = Server(self.socket_path, Handler)
-        try:
-            os.chmod(self.socket_path, 0o660)
-        except OSError:
-            pass
+        self._server = CH.listen(self.socket_path, Handler)   # Spec 060: a Unix socket, or loopback where there is none
+        self.logger.info(f"the screen reaches this bridge at {CH.where(self.socket_path)}")
         self._server.serve_forever(poll_interval=0.5)
 
     def stop(self):
