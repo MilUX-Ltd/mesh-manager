@@ -33,6 +33,15 @@ Not every mesh has a TAK Server beside it. A box installed with `--mode server` 
 its own: the state strip reads *Managing the mesh*, the home page shows the last packet heard, and
 nothing on the screen speaks of TAK or forwarding. Everything else in this guide applies as it is.
 
+### A name and a certificate for the screen
+
+The screen listens on loopback. A hub, or any box you want to reach from a browser without a tunnel, takes
+`--tls-route <host>` at install: Caddy is installed from the distribution, a site block fronts the screen at
+`https://<host>` with a Let's Encrypt certificate, and About says where the screen is reached. The installer
+does not touch the firewall; it prints the two lines, `ufw allow 80/tcp` (the certificate is fetched over 80)
+and `ufw allow 443/tcp` (the screen), for you to run. Sign in is the operator password as before; the session
+cookie is marked Secure over the route.
+
 ## The mesh and the map
 
 The Mesh page is the map, then three cards about the box, then the rest folded under *The box in

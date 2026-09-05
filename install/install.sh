@@ -6,6 +6,7 @@
 #        [--password <operator password>] [--no-auth] [--bind <addr>] [--port <n>] [--dry-run]
 #        [--mode tak-server|server|hub]   (server: a box with no TAK Server beside it, Spec 050; hub: a site with no radio
 #        that other Mesh Managers join, Spec 052) [--peer-bind <addr>] [--peer-port <n>] [--site-name <name>] [--site-address <host>]
+#        [--tls-route <host>]   (Spec 057: Caddy fronts the screen at https://<host>; the firewall is yours to open, 80 and 443)
 #
 # What it does, in order: verify the tarball against its .sha256; unpack to /opt/mesh-manager;
 # build the venv from the bundled wheels with no network; offline is only proven offline;
@@ -27,7 +28,7 @@
 set -euo pipefail
 
 ROOT="${MESH_MANAGER_ROOT:-}"
-DRY=0; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""; PEER_BIND_ARG=""; PEER_PORT_ARG=""; SITE_NAME_ARG=""; SITE_ADDRESS_ARG=""
+DRY=0; ROUTE_HOST_ARG=""; ROUTE_HOST=""; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""; PEER_BIND_ARG=""; PEER_PORT_ARG=""; SITE_NAME_ARG=""; SITE_ADDRESS_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial)        SERIAL="${2:-}"; shift 2 ;;
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
         --peer-port)     PEER_PORT_ARG="${2:-}"; shift 2 ;;
         --site-name)     SITE_NAME_ARG="${2:-}"; shift 2 ;;
         --site-address)  SITE_ADDRESS_ARG="${2:-}"; shift 2 ;;
+        --tls-route)     ROUTE_HOST_ARG="${2:-}"; shift 2 ;;
         --dry-run)       DRY=1; shift ;;
         -h|--help)       sed -n '2,22p' "$0"; exit 0 ;;
         -*)              echo "ERR unknown option: $1" >&2; exit 2 ;;
@@ -73,7 +75,7 @@ do_()  { (( DRY )) && return 0; "$@"; }                               # run it u
 read_conf() {  # KEY=value lines of a config into <prefix>KEY, portably (no eval, no GNU sed)
     local file="$1" prefix="$2" k v
     while IFS='=' read -r k v; do
-        case "$k" in SERIAL|REGION|CHANNEL|FILTER_GROUP|EXTRA_ARGS|BIND|PORT|AUTH|MAP_LAT|MAP_LON|MAP_TILES|MAP_MBTILES_DIR|MAP_GPS|UPDATE_REPO|UPDATE_MODE|UPDATE_CHANNEL|MODE|PEER_BIND|PEER_PORT|SITE_NAME|SITE_ADDRESS) printf -v "${prefix}${k}" '%s' "$v" ;; esac
+        case "$k" in SERIAL|REGION|CHANNEL|FILTER_GROUP|EXTRA_ARGS|BIND|PORT|AUTH|MAP_LAT|MAP_LON|MAP_TILES|MAP_MBTILES_DIR|MAP_GPS|UPDATE_REPO|UPDATE_MODE|UPDATE_CHANNEL|MODE|PEER_BIND|PEER_PORT|SITE_NAME|SITE_ADDRESS|ROUTE_HOST) printf -v "${prefix}${k}" '%s' "$v" ;; esac
     done < "$file"
 }
 
@@ -137,6 +139,8 @@ UPDATE_REPO="${UPDATE_REPO:-MilUX-Ltd/mesh-manager}"; UPDATE_MODE="${UPDATE_MODE
 [[ "$MODE" != tak-server || -d "$ROOT/opt/tak" ]] || die "TAK Server is not installed on this box (/opt/tak missing); a box with no TAK Server installs with --mode server, a site with no radio with --mode hub"
 [[ -z "$PEER_BIND_ARG" ]] || PEER_BIND="$PEER_BIND_ARG"; [[ -z "$PEER_PORT_ARG" ]] || PEER_PORT="$PEER_PORT_ARG"
 [[ -z "$SITE_NAME_ARG" ]] || SITE_NAME="$SITE_NAME_ARG"; [[ -z "$SITE_ADDRESS_ARG" ]] || SITE_ADDRESS="$SITE_ADDRESS_ARG"
+ROUTE_HOST="${ROUTE_HOST:-${CUR_ROUTE_HOST:-}}"; [[ -z "${ROUTE_HOST_ARG:-}" ]] || ROUTE_HOST="$ROUTE_HOST_ARG"
+[[ -z "$ROUTE_HOST" || "$ROUTE_HOST" =~ ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)+$ ]] || die "--tls-route must be a hostname such as hub.example.org"
 if [[ "$MODE" == hub ]]; then PEER_BIND="${PEER_BIND:-0.0.0.0}"; fi          # a hub listens, or it is nothing; the operator opens the port
 [[ -z "$PEER_BIND" ]] || PEER_PORT="${PEER_PORT:-8094}"
 [[ -z "$PEER_PORT" || "$PEER_PORT" =~ ^[0-9]{2,5}$ ]] || die "--peer-port must be a port number"
@@ -194,7 +198,41 @@ want_conf() {
     [[ -z "$PEER_BIND" ]] || printf 'PEER_BIND=%s\nPEER_PORT=%s\n' "$PEER_BIND" "$PEER_PORT"
     [[ -z "$SITE_NAME" ]] || printf 'SITE_NAME=%s\n' "$SITE_NAME"
     [[ -z "$SITE_ADDRESS" ]] || printf 'SITE_ADDRESS=%s\n' "$SITE_ADDRESS"
+    [[ -z "$ROUTE_HOST" ]] || printf 'ROUTE_HOST=%s\n' "$ROUTE_HOST"
 }
+
+tls_route() {  # Spec 057: Caddy fronts the screen at https://$ROUTE_HOST; the firewall stays the operator's
+    local snip="$ROOT/etc/caddy/Caddyfile.d/mesh-manager.caddy" main="$ROOT/etc/caddy/Caddyfile" imp='import /etc/caddy/Caddyfile.d/*.caddy'
+    if (( DRY )); then
+        act "install caddy from the distribution's packages when it is not already present (apt-get install caddy)"
+    elif ! command -v caddy >/dev/null 2>&1; then
+        local cand; cand=$(apt-cache policy caddy 2>/dev/null | grep -c "Candidate: [0-9]" || true)   # not grep -q: under pipefail its early exit fails the pipe (found on the live hub)
+        if [[ "$cand" != "0" && -n "$cand" ]]; then
+            act "apt-get install -y caddy (the distribution's package)"; do_ apt-get install -y -q caddy >/dev/null || die "caddy did not install"
+        else
+            die "caddy is not in this distribution's packages; install it first (https://caddyserver.com/docs/install), then run the installer again with --tls-route $ROUTE_HOST"
+        fi
+    fi
+    act "write $snip: $ROUTE_HOST fronting 127.0.0.1:$PORT (Caddy adds X-Forwarded-For and X-Forwarded-Proto)"
+    do_ mkdir -p "$(dirname "$snip")"
+    do_ sh -c "printf '%s\n' '# written by mesh-manager install.sh (Spec 057); the screen stays on loopback, Caddy holds the certificate' '$ROUTE_HOST {' '    encode zstd gzip' '    reverse_proxy 127.0.0.1:$PORT' '}' > '$snip'"
+    if [[ -f "$main" ]] && grep -q 'root \* /usr/share/caddy' "$main" && grep -q '^:80' "$main" && ! grep -q '^[a-z0-9.-]*\.[a-z]' "$main"; then
+        act "replace the package's placeholder Caddyfile (the welcome page on :80) with one that only imports Caddyfile.d"
+        do_ sh -c "printf '%s\n' '# Mesh Manager (Spec 057): the package placeholder served a welcome page on :80; sites live in Caddyfile.d' '$imp' > '$main'"
+    elif [[ ! -f "$main" ]] || ! grep -qF "$imp" "$main"; then
+        act "add to $main: $imp (one line; the rest of the file is left as it is)"
+        do_ sh -c "mkdir -p '$(dirname "$main")'; printf '\n# Mesh Manager (Spec 057)\n%s\n' '$imp' >> '$main'"
+    fi
+    act "caddy validate, then systemctl enable --now caddy and reload it"
+    if (( ! DRY )); then
+        caddy validate --config "$main" --adapter caddyfile >/dev/null 2>&1 || die "the Caddyfile does not validate after the route was added; see caddy validate --config $main"
+        systemctl enable --now caddy >/dev/null 2>&1 || die "caddy.service would not start"
+        systemctl reload caddy >/dev/null 2>&1 || systemctl restart caddy || die "caddy would not reload"
+    fi
+    log "the route is written; the firewall is yours and nothing here touched it: open 80/tcp (the certificate is fetched over it) and 443/tcp (the screen)"
+    log "then https://$ROUTE_HOST is the screen, signed in with the operator password"
+}
+
 same_conf=0
 if [[ -f "$CONF" ]] && diff -q <(grep -v '^#' "$CONF") <(want_conf | grep -v '^#') >/dev/null 2>&1; then same_conf=1; fi
 # a new release is new code: the bridge must restart to run it, whatever the config says
@@ -471,5 +509,6 @@ if (( ! DRY )); then
     log "the proof is a marker on a client that signed in normally, and the heartbeat updating in $L_STATE"
 fi
 (( INPUT_NEW )) && (( DRY )) && echo "would: restart takserver once, because the input is new"
+[[ -z "$ROUTE_HOST" ]] || tls_route   # Spec 057
 echo "STAGE-OK install"
-log "the bridge binds no port of its own; the screen binds $BIND:$PORT and nothing here opened one. Closed."
+log "the bridge binds no port of its own; the screen binds $BIND:$PORT and nothing here opened one${ROUTE_HOST:+; Caddy fronts it at https://$ROUTE_HOST once you open 80 and 443}. Closed."

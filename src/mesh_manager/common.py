@@ -22,7 +22,7 @@ def read_config(path):
     """KEY=value lines; EXTRA_ARGS carries the gateway's own flags (-i <ip>, -d)."""
     conf = {"SERIAL": "", "REGION": "", "CHANNEL": "", "FILTER_GROUP": "", "EXTRA_ARGS": "",
             "BIND": "127.0.0.1", "PORT": 8093, "AUTH": "on", "MAP_TILES": "google-hybrid", "MAP_MBTILES_DIR": "", "MAP_GPS": "", "UPDATE_REPO": "", "UPDATE_MODE": "manual", "UPDATE_CHANNEL": "prerelease", "TELEMETRY_ASK_SECS": 1800, "HISTORY_DAYS": 30, "MODE": "tak-server",
-            "PEER_BIND": "", "PEER_PORT": 8094, "SITE_NAME": "", "SITE_ADDRESS": ""}
+            "PEER_BIND": "", "PEER_PORT": 8094, "SITE_NAME": "", "SITE_ADDRESS": "", "ROUTE_HOST": ""}
     if path and os.path.exists(path):
         for ln in open(path):
             ln = ln.strip()

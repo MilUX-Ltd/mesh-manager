@@ -49,6 +49,23 @@ def write_password(path, password, iterations=200_000):
         pass
 
 
+def client_ip(h):
+    """Spec 057: the address a request came from. Behind the TLS route the connection is the proxy's (loopback) and the
+    real address is the first in X-Forwarded-For; from anywhere else that header is somebody's claim and is ignored."""
+    addr = str((getattr(h, "client_address", None) or ("", 0))[0] or "")
+    if addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        fwd = str((getattr(h, "headers", None) or {}).get("X-Forwarded-For") or "").split(",")[0].strip()
+        if fwd:
+            return fwd[:64]
+    return addr
+
+
+def over_tls(h):
+    """Spec 057: did the request arrive over the TLS route? Only the proxy on loopback can say so."""
+    addr = str((getattr(h, "client_address", None) or ("", 0))[0] or "")
+    return addr in ("127.0.0.1", "::1", "::ffff:127.0.0.1") and str((getattr(h, "headers", None) or {}).get("X-Forwarded-Proto") or "").lower() == "https"
+
+
 def check_password(path, password):
     try:
         alg, iters, salt, want = open(path).read().strip().split("$")
@@ -2979,7 +2996,8 @@ ROLLBACK_JS = r"""<script>
 def about_body(st, web):
     return (f"{update_box(web)}{rollback_box(web)}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
             f"{card('Licence', 'GPL-3.0-or-later')}{card('Heartbeat file', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
-            f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}</div>"
+            f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}"
+            + (card('Reached at', 'https://' + e(str(web.config.get('ROUTE_HOST'))) + ' (the TLS route, Spec 057)') if (web.config or {}).get('ROUTE_HOST') else '') + "</div>"
             f"{history_box(web)}"
             "<h2>Third-party work</h2><p class='meta'>TAK-Meshtastic-Gateway (OpenTAKServer / brian7704) and the Meshtastic Python library and protobufs, GPL-3.0-or-later; "
             "the TAKPacket-SDK dictionaries (Meshtastic), GPL-3.0-or-later. Attributions and licence texts travel in the release under LICENSES/.</p>")
@@ -3858,19 +3876,19 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 return self._json(404, {"error": "no such route"})
             if not web.auth_on:
                 return self._redirect("/")
-            ip = self.client_address[0]
+            ip = client_ip(self)
             if throttled(ip):
                 return self._send(429, page("Sign in", login_body("Too many attempts. Wait a minute.")))
             form = urllib.parse.parse_qs(self._raw().decode("utf-8", "replace"))
             pw = (form.get("password") or [""])[0]
             if pw and os.path.exists(web.passwd) and check_password(web.passwd, pw):
-                cookie = f"mm_session={web.sessions.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_HOURS * 3600}"
+                cookie = f"mm_session={web.sessions.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_HOURS * 3600}" + ("; Secure" if over_tls(self) else "")   # Spec 057
                 return self._redirect("/", {"Set-Cookie": cookie})
             note_fail(ip)
             return self._send(401, page("Sign in", login_body("That is not the operator password.")))
 
         def _mcp(self):
-            ip = self.client_address[0]
+            ip = client_ip(self)
             auth = self.headers.get("Authorization", "")
             token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
             if throttled(ip):

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.16.0 (5 September 2026)
+
+- **A TLS route for the screen (Spec 057).** `install.sh --tls-route <host>` installs Caddy from the distribution
+  (and says exactly what to do when the distribution has none), writes one site block fronting the screen at
+  `https://<host>`, adds a single import line to the Caddyfile, validates, enables and reloads Caddy, and records
+  `ROUTE_HOST`. The firewall is not touched: the installer prints the two `ufw allow` lines for 80 and 443.
+- Behind the route the screen takes the client address from the proxy's forwarded header only when the connection
+  itself came from loopback, marks the session cookie Secure when the request arrived over TLS, and About says
+  where the screen is reached.
+
 ## 0.15.0 (5 September 2026) Matt: "keep going."
 
 - **Joining meshes, the chapter (Spec 056).** The guide has a chapter of its own: sites, invites and the hub;
