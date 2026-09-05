@@ -201,6 +201,12 @@ and channel keys never cross; messages, waypoints and alerts across the link com
 peer at either end. A hub is a Mesh Manager with no radio, installed with `--mode hub`, that several sites
 join; it passes each site's picture on to the others.
 
+**After a gap.** What crossed a link is kept in the history with the site it came from, so a remote chat is still there
+after a reload or a restart. When a link comes back, each side asks the other for what it missed since the last message
+it holds from that side (up to 24 hours, 200 messages), and the answer fills the gap in order; live waypoints and open
+alerts come with the picture, so a hub that restarted has them within seconds. Caught-up messages are history: they show
+on the screen and never go on the air.
+
 **What gets shared where.** Each peer's row opens *Sharing*: four classes, the picture (nodes, positions,
 battery, signal), messages, waypoints and alerts, each with Out (this leaves your site for that peer) and In
 (this shows here from that peer). Messages also take the channel indexes whose broadcasts leave; empty means

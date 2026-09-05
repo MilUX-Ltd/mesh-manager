@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.14.0 (5 September 2026) Matt: "this is great … move onto slice 5."
+
+- **Catch-up after a reconnection (Spec 055).** What crossed a link is now history: a message from a peer is written
+  to the store with its origin and channel name, so a remote chat is still there after a reload or a restart, and one
+  offered twice is held once. On every connection each side asks the other for what it missed since the newest remote
+  message it holds (within 24 hours), and the other answers from its history, oldest first, up to 200 rows: its own
+  broadcasts its table lets out, and what it holds from other sites relayed with the path. Live waypoints and open
+  alerts go with the picture when a link comes up, this box's own and the ones it holds, so a hub that restarted has
+  them within seconds. A caught-up message is never aired and gets no receipt.
+- The chat seeds remote rows from the history with their origin; a message that went on this air for a peer is
+  marked in the store and never offered back to it.
+
 ## 0.13.0 (5 September 2026) Matt: "ok, do slice 4."
 
 - **The air (Spec 054).** The third switch of the sharing table, at a radio site only: per peer, messages

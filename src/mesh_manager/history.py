@@ -38,10 +38,10 @@ class History:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             for name, cols in TABLES.items():
                 self._conn.execute(f"CREATE TABLE IF NOT EXISTS {name} (id INTEGER PRIMARY KEY, {cols})")
-            # Spec 034: columns added after the store first shipped; a store that predates them
+            # Spec 034 and Spec 055: columns added after the store first shipped; a store that predates them
             # gains them here, once. SQLite cannot add a column that exists, so check first.
             have = {r[1] for r in self._conn.execute("PRAGMA table_info(messages)").fetchall()}
-            for col, typ in (("mid", "INTEGER"), ("ack", "TEXT")):
+            for col, typ in (("mid", "INTEGER"), ("ack", "TEXT"), ("origin", "TEXT"), ("origin_name", "TEXT"), ("channel_name", "TEXT"), ("aired_from", "TEXT")):
                 if col not in have:
                     self._conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typ}")
                 self._conn.execute(f"CREATE INDEX IF NOT EXISTS {name}_ts ON {name}(ts)")
@@ -80,8 +80,50 @@ class History:
     def telemetry(self, node, level=None, voltage=None, chutil=None, airutil=None, uptime=None, ts=None):
         return self._write("telemetry", {"ts": ts or utc(), "node": node, "level": level, "voltage": voltage, "chutil": chutil, "airutil": airutil, "uptime": uptime})
 
-    def message(self, node, text, name=None, dest=None, channel=0, snr=None, ts=None, mid=None, ack=None):
-        return self._write("messages", {"ts": ts or utc(), "node": node, "name": name, "dest": dest, "channel": channel, "text": str(text), "snr": snr, "mid": mid, "ack": ack})
+    def message(self, node, text, name=None, dest=None, channel=0, snr=None, ts=None, mid=None, ack=None, origin=None, origin_name=None, channel_name=None, aired_from=None):
+        """A message heard, sent or (Spec 055) received from a peer; origin names the site it came from, aired_from the peer whose words went on this air."""
+        return self._write("messages", {"ts": ts or utc(), "node": node, "name": name, "dest": dest, "channel": channel, "text": str(text), "snr": snr, "mid": mid, "ack": ack,
+                                        "origin": origin, "origin_name": origin_name, "channel_name": channel_name, "aired_from": aired_from})
+
+    def newest_message(self, origin=None):
+        """Spec 055: the latest time held of a peer's messages (one origin, or any remote origin), or None."""
+        if not self._conn:
+            return None
+        try:
+            with self._lock:
+                if origin:
+                    row = self._conn.execute("SELECT MAX(ts) FROM messages WHERE origin = ?", (str(origin),)).fetchone()
+                else:
+                    row = self._conn.execute("SELECT MAX(ts) FROM messages WHERE origin IS NOT NULL").fetchone()
+            return row[0] if row else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def has_message(self, origin, ts, node, text):
+        """Spec 055: is this remote message (same origin, time, sender and words) already held?"""
+        if not self._conn:
+            return False
+        try:
+            with self._lock:
+                row = self._conn.execute("SELECT 1 FROM messages WHERE origin = ? AND ts = ? AND node IS ? AND text = ? LIMIT 1", (str(origin), str(ts), node, str(text))).fetchone()
+            return row is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def catchup(self, since, exclude_origin, limit=200):
+        """Spec 055: broadcasts since a time, oldest first, for a peer to catch up on: this box's own and those held from
+        other sites, never the asker's own and never words that came off a link and went on this air."""
+        if not self._conn:
+            return []
+        limit = max(1, min(int(limit or 200), 1000))
+        try:
+            with self._lock:
+                cur = self._conn.execute("SELECT * FROM messages WHERE ts >= ? AND (dest IS NULL OR dest IN ('^all', '!ffffffff', '')) AND aired_from IS NULL"
+                                         " AND (origin IS NULL OR origin != ?) ORDER BY id ASC LIMIT ?", (str(since), str(exclude_origin), limit))
+                cols = [c[0] for c in cur.description]
+                return [dict(zip(cols, r)) for r in cur.fetchall()]
+        except Exception:  # noqa: BLE001
+            return []
 
     def set_ack(self, mid, ack):
         """Spec 034: the radio said whether a sent message arrived; keep that with the message."""
@@ -122,8 +164,8 @@ class History:
         except Exception:  # noqa: BLE001
             return False
 
-    def query(self, kind, node=None, since=None, limit=500):
-        """Rows of one table, newest last, filtered by node and by a utc() lower bound."""
+    def query(self, kind, node=None, since=None, limit=500, origin=None):
+        """Rows of one table, newest last, filtered by node, by a utc() lower bound and (Spec 055, messages) by origin."""
         if kind not in TABLES or not self._conn:
             return []
         limit = max(1, min(int(limit or 500), 5000))
@@ -132,6 +174,8 @@ class History:
             where.append("node = ?"); args.append(node)
         if since:
             where.append("ts >= ?"); args.append(str(since))
+        if origin and kind == "messages":
+            where.append("origin = ?"); args.append(str(origin))
         sql = f"SELECT * FROM {kind}" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
         args.append(limit)
         try:

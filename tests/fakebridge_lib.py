@@ -188,7 +188,8 @@ class FakeBridge:
 
 
 HISTORY = {
-    "messages": [{"ts": "2026-09-03T21:58:00Z", "node": "!aa000001", "name": "Tracker9", "dest": "^all", "channel": 0, "text": "stored before the restart", "snr": 9.5}],
+    "messages": [{"ts": "2026-09-03T21:58:00Z", "node": "!aa000001", "name": "Tracker9", "dest": "^all", "channel": 0, "text": "stored before the restart", "snr": 9.5},
+                 {"ts": "2026-09-03T21:59:00Z", "node": "!ee000099", "name": "Far tracker", "dest": "^all", "channel": 0, "text": "far side here", "snr": None, "mid": None, "ack": None, "origin": "cd" * 32, "origin_name": "Edge laptop", "channel_name": "MILUX-TAK"}],
     "positions": [{"ts": "2026-09-03T21:50:00Z", "node": "!aa000001", "lat": 51.2, "lon": -1.5, "snr": 9.5, "hops": 0},
                   {"ts": "2026-09-03T21:55:00Z", "node": "!aa000001", "lat": 51.2004, "lon": -1.5006, "snr": 8.0, "hops": 0}],
     "telemetry": [{"ts": "2026-09-03T20:50:00Z", "node": "!aa000001", "level": 90, "voltage": 4.1, "chutil": 2.0, "airutil": 0.3, "uptime": 400},

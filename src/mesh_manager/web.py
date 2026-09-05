@@ -2995,8 +2995,8 @@ def seed_messages(web):
     except Exception:  # noqa: BLE001
         rows = None
     for r in rows or []:
-        web.messages.append({"ts": r.get("ts"), "from": r.get("node"), "name": r.get("name") or r.get("node"), "to": r.get("dest"), "mid": r.get("mid"), "ack": r.get("ack"), "sent": r.get("mid") is not None,
-                             "channel": r.get("channel"), "text": r.get("text"), "stored": True})
+        web.messages.append({"ts": r.get("ts"), "from": r.get("node"), "name": r.get("name") or r.get("node"), "to": r.get("dest"), "mid": r.get("mid"), "ack": r.get("ack"), "sent": r.get("mid") is not None and not r.get("origin"),
+                             "channel": r.get("channel"), "text": r.get("text"), "stored": True, "origin": r.get("origin"), "origin_name": r.get("origin_name"), "channel_name": r.get("channel_name")})
 
 
 def message_rows(web, labels=None):
@@ -3179,7 +3179,7 @@ CHAT_JS = r"""<script>
     Array.prototype.slice.call(panes.children).sort(function(a,b){return open.indexOf(a.dataset.key)-open.indexOf(b.dataset.key);}).forEach(function(w){panes.appendChild(w);});root.classList.toggle('open',open.length>0);}
   function openChat(key){if(hidden.indexOf(key)>=0){hidden=hidden.filter(function(k){return k!==key;});}open=openPane(open,key,MAX());keep();renderPanes();renderList();var w=document.querySelector("#chat-panes [data-key='"+key+"'] input[name=text]");if(w&&window.innerWidth>700)w.focus();}
   function load(){Promise.all([fetch('/api/messages').then(function(r){return r.json();}),fetch('/api/history?kind=messages&limit=2000').then(function(r){return r.json();}).catch(function(){return {};})]).then(function(x){
-    msgs=(x[0].messages||[]).slice();(x[1].rows||[]).forEach(function(r){msgs.push({ts:r.ts,from:r.node,name:r.name||r.node,to:r.dest,channel:r.channel,text:r.text,mid:r.mid,ack:r.ack,sent:r.mid!==null&&r.mid!==undefined});});
+    msgs=(x[0].messages||[]).slice();(x[1].rows||[]).forEach(function(r){msgs.push({ts:r.ts,from:r.node,name:r.name||r.node,to:r.dest,channel:r.channel,text:r.text,mid:r.mid,ack:r.ack,sent:r.mid!==null&&r.mid!==undefined&&!r.origin,origin:r.origin||undefined,origin_name:r.origin_name||undefined,channel_name:r.channel_name||undefined});});
     dedupe();try{var q=new URLSearchParams(window.location.search).get('open');if(q){open=q.split(',').map(function(k){return k.trim();}).filter(Boolean);}}catch(e){}
     open=open.filter(function(k){return k.indexOf('ch:')===0||k.indexOf('dm:')===0||k.indexOf('group:')===0;}).slice(-MAX());if(!open.length&&window.innerWidth>700){var first=chatsFrom(msgs,own,D.channels,D.groups,seen)[0];if(first)open=[first.key];}renderList();renderPanes();}).catch(function(){var l=document.getElementById('chat-list');if(l)l.innerHTML="<p class='meta bad' style='padding:var(--s3)'>"+window.mmNoAnswer+"</p>";});}
   window.onMesh=function(d){if(!d)return;if(d.kind==='text'){msgs.push(d);dedupe();renderList();open.forEach(function(k){if(chatKey(d,own)===k||k.indexOf('group:')===0)renderPane(k);});}

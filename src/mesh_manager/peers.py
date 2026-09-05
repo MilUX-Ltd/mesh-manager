@@ -147,6 +147,10 @@ class Link:
             return
         self._closed = True
         try:
+            self.sock.shutdown(socket.SHUT_RDWR)   # the reader thread wakes and the peer sees the end at once (Linux keeps the fd open until then)
+        except OSError:
+            pass
+        try:
             self.sock.close()
         except OSError:
             pass
@@ -342,6 +346,9 @@ class Peering:
         item = frame.get("item")
         if isinstance(item, dict):
             self.b.peer_item(link, item)
+        want = frame.get("want")
+        if isinstance(want, dict) and hasattr(self.b, "peer_want"):   # Spec 055: the peer asks for what it missed
+            self.b.peer_want(link, want)
 
     def drop(self, peer_id):
         with self.lock:
@@ -366,9 +373,10 @@ class Peering:
         for ev in list(self.dialers.values()):
             ev.set()
         if self.server:
-            try:
-                self.server.close()
-            except OSError:
-                pass
+            for op in (lambda: self.server.shutdown(socket.SHUT_RDWR), self.server.close):   # wake the accept thread, then release the port
+                try:
+                    op()
+                except OSError:
+                    pass
         for l in list(self.links.values()):
             l.close()

@@ -708,9 +708,75 @@ class Bridge(TAKMeshtasticGateway):
                 if name: rec["name"] = name
                 rec["last_seen"] = utc(time.time()); self._peers_save(d)
 
+    CATCHUP_WINDOW = 24 * 3600   # Spec 055: how far back a reconnection reaches
+    CATCHUP_LIMIT = 200
+
     def peer_connected(self, link):
         self._peer_send_snapshot(link)
+        self._peer_send_state(link)
+        self._peer_want(link)
         self._emit("peers", state="connected", site=link.peer_id, name=link.peer_name)
+
+    def _peer_want(self, link):
+        """Spec 055: ask the peer for the messages missed since the newest remote one held here, within the window."""
+        h = getattr(self, "history", None)
+        floor = utc(time.time() - self.CATCHUP_WINDOW)
+        newest = h.newest_message() if h and h.ok else None
+        link.send({"want": {"messages": max(str(newest or floor), floor)}})
+
+    def peer_want(self, link, want):
+        """Spec 055: answer a peer's ask from the history, oldest first: this box's own broadcasts its table lets out to that
+        peer, and what it holds from other sites relayed with the path. A caught-up message is history: never aired, no receipt."""
+        h = getattr(self, "history", None)
+        since = want.get("messages") if isinstance(want, dict) else None
+        if not since or not h or not h.ok or not self.peering:
+            return
+        since = max(str(since), utc(time.time() - self.CATCHUP_WINDOW))
+        row = self._sharing(link.peer_id).get("messages") or {}
+        if not row.get("out"):
+            return
+        sent = 0
+        for r in h.catchup(since, link.peer_id, limit=self.CATCHUP_LIMIT):
+            ch = int(r.get("channel") or 0)
+            if row.get("channels") and ch not in row["channels"]:
+                continue
+            data = {"from": r.get("node"), "name": r.get("name"), "to": r.get("dest") or "^all", "channel": ch, "text": r.get("text"), "ts": r.get("ts"),
+                    "channel_name": r.get("channel_name") or (self._channel_name(ch) if not r.get("origin") else None)}
+            if r.get("origin"):
+                item = {"class": "messages", "origin": r["origin"], "origin_name": r.get("origin_name") or r["origin"][:12], "path": [r["origin"], self.peering.id], "ts": r.get("ts"), "data": data, "catchup": True}
+            else:
+                item = {"class": "messages", "origin": self.peering.id, "origin_name": self.peering.name, "path": [self.peering.id], "ts": r.get("ts"), "data": data, "catchup": True}
+            link.send({"item": item}); sent += 1
+        if sent:
+            self.logger.info(f"peers: {link.peer_name or link.peer_id[:12]} caught up on {sent} message(s) since {since}")
+
+    def _peer_send_state(self, link):
+        """Spec 055: live waypoints and open alerts go with the picture when a link comes up, this box's own and the ones it
+        holds from other sites, so a peer that restarted has them within seconds."""
+        if not self.peering:
+            return
+        now = int(time.time()); me = self.peering.id
+        def send(cls, origin, oname, data, path):
+            if link.peer_id in path or origin == link.peer_id or not (self._sharing(link.peer_id).get(cls) or {}).get("out"):
+                return
+            link.send({"item": {"class": cls, "origin": origin, "origin_name": oname, "path": path, "ts": utc(time.time()), "data": data}})
+        try:
+            for w in list(getattr(self, "waypoints", {}).values()):
+                if not (w.get("expire") and w["expire"] < now):
+                    send("waypoints", me, self.peering.name, dict(w, gone=False), [me])
+            for o in list(self._alerts_load().get("open", {}).values()):
+                send("alerts", me, self.peering.name, {"state": "open", "node": o.get("node"), "kind": o.get("kind"), "text": o.get("text"), "since": o.get("since")}, [me])
+        except Exception as ex:  # noqa: BLE001
+            self.logger.debug(f"peers: own state not sent: {type(ex).__name__}: {ex}")
+        with self._peers_lock:
+            wps = [(o, dict(w)) for o, bag in self.remote_waypoints.items() for w in bag.values()]
+            als = [(o, dict(x)) for o, bag in self.remote_alerts.items() for x in bag.values()]
+        for o, w in wps:
+            if not (w.get("expire") and w["expire"] < now):
+                oname = w.pop("origin_name", None) or o[:12]; w.pop("origin", None)
+                send("waypoints", o, oname, dict(w, gone=False), [o, me])
+        for o, x in als:
+            send("alerts", o, x.get("origin_name") or o[:12], {"state": "open", "node": x.get("node"), "kind": x.get("kind"), "text": x.get("text"), "since": x.get("since")}, [o, me])
 
     def _snapshot_item(self):
         own = [n for n in self.op_nodes().get("nodes", []) if not n.get("remote")] if self.interface is not None else []
@@ -843,10 +909,18 @@ class Bridge(TAKMeshtasticGateway):
             to = str(data.get("to") or "^all")
             if to not in ("^all", "!ffffffff", ""):
                 return  # a direct message is never accepted either
+            ts = str(data.get("ts") or utc(time.time()))
+            h = getattr(self, "history", None)
+            if h and h.ok:
+                if h.has_message(origin, ts, data.get("from"), data.get("text")):
+                    return   # Spec 055: held already; a catch-up may offer what the live link delivered
+                h.message(data.get("from"), data.get("text"), name=data.get("name"), dest=to, channel=int(data.get("channel") or 0), ts=ts,
+                          origin=origin, origin_name=oname, channel_name=data.get("channel_name"))
             ev = {k: v for k, v in data.items() if k not in ("kind", "origin", "origin_name")}
+            ev["ts"] = ts
             self._emit("text", origin=origin, origin_name=oname, **ev)
             row = self._sharing(link.peer_id).get("messages", {})
-            if self.interface is not None and not data.get("aired_from"):
+            if self.interface is not None and not data.get("aired_from") and not item.get("catchup"):   # Spec 055: history is never aired
                 if row.get("air"):
                     self._air_text(link, oname, data, row)
                 else:
@@ -943,7 +1017,7 @@ class Bridge(TAKMeshtasticGateway):
         self._emit("text", **{"from": own0.get("id"), "name": own0.get("name") or "this box", "to": "^all", "channel": int(channel), "text": text, "mid": pid, "sent": True, "aired_from": oname})
         try:
             if getattr(self, "history", None) and self.history.ok:
-                self.history.message(own0.get("id"), text, name=own0.get("name") or "this box", dest="^all", channel=int(channel), mid=pid)
+                self.history.message(own0.get("id"), text, name=own0.get("name") or "this box", dest="^all", channel=int(channel), mid=pid, aired_from=link.peer_id)
         except Exception:  # noqa: BLE001
             pass
         self._peer_aired_count(link.peer_id)
