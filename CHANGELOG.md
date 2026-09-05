@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.11.0 (5 September 2026) Matt: "I want box-to-box in Mesh Manager itself. Build on both
+tak.milux.co.uk and dev.milux.co.uk at the same time so we have a live and dev broker."
+
+- **Joining meshes (Spec 052).** Every bridge is now a site with an identity made at first start (an EC
+  P-256 key and a self-signed certificate under the state directory; the site id is the certificate's
+  public-key fingerprint). Two sites join by an invite: a one-time code read off the listening site's
+  Connections page and typed into the other's. The dialling site checks the listener's certificate against
+  the invite; the listener checks the code once, pins the dialler and proves every later connection by a
+  signed challenge. Frames are JSON lines over TLS; the link reconnects on its own. Each side sends its
+  picture, nodes with positions, battery and signal, on connect, on change and every 30 s; the other shows
+  those nodes on Nodes and the map marked *via <site>*. A hub passes pictures on to its other peers, itself
+  on the path, and no site forwards what it has already carried. The sharing defaults of ADR 003 are fixed
+  in code for now: the picture out and in, nothing on the air, nothing else crosses.
+- **The hub, `MODE=hub`.** A site with no radio: no gateway, no serial device, no TAK, no mesh of its own,
+  the meeting point for boxes and laptops. `install.sh --mode hub` needs no `--serial`; `--peer-bind`,
+  `--peer-port`, `--site-name` and `--site-address` write the listener and the name the invite carries.
+  The strip reads *Hub · n peers*; the home card says the site has no radio; What is open names the peer
+  port. The operator opens that port; the installer never does.
+- **Connections gains Peers**: this site and whether it listens, the peers with state, last seen and
+  nodes received, Invite a peer (the code, its QR, its expiry), Join a site, Forget.
+- The demo answers the peer actions and shows one peer's picture; `MODE=hub` runs it as a hub.
+
 ## 0.10.0 (5 September 2026) Matt, on the 0.8.0 chat: "there's no way to create a new message. Mark messages as read. All of
 those core common messaging functions and features are not available on that page."
 

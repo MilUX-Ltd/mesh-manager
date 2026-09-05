@@ -21,7 +21,8 @@ def utc(ts=None):
 def read_config(path):
     """KEY=value lines; EXTRA_ARGS carries the gateway's own flags (-i <ip>, -d)."""
     conf = {"SERIAL": "", "REGION": "", "CHANNEL": "", "FILTER_GROUP": "", "EXTRA_ARGS": "",
-            "BIND": "127.0.0.1", "PORT": 8093, "AUTH": "on", "MAP_TILES": "google-hybrid", "MAP_MBTILES_DIR": "", "MAP_GPS": "", "UPDATE_REPO": "", "UPDATE_MODE": "manual", "UPDATE_CHANNEL": "prerelease", "TELEMETRY_ASK_SECS": 1800, "HISTORY_DAYS": 30, "MODE": "tak-server"}
+            "BIND": "127.0.0.1", "PORT": 8093, "AUTH": "on", "MAP_TILES": "google-hybrid", "MAP_MBTILES_DIR": "", "MAP_GPS": "", "UPDATE_REPO": "", "UPDATE_MODE": "manual", "UPDATE_CHANNEL": "prerelease", "TELEMETRY_ASK_SECS": 1800, "HISTORY_DAYS": 30, "MODE": "tak-server",
+            "PEER_BIND": "", "PEER_PORT": 8094, "SITE_NAME": "", "SITE_ADDRESS": ""}
     if path and os.path.exists(path):
         for ln in open(path):
             ln = ln.strip()
@@ -29,7 +30,12 @@ def read_config(path):
                 continue
             k, v = ln.split("=", 1)
             conf[k.strip()] = v.strip()
-    conf["MODE"] = "server" if str(conf.get("MODE") or "").strip().lower() == "server" else "tak-server"  # Spec 050: the box's shape
+    mode = str(conf.get("MODE") or "").strip().lower()
+    conf["MODE"] = mode if mode in ("server", "hub") else "tak-server"  # Spec 050 and 052: the box's shape
+    try:
+        conf["PEER_PORT"] = int(conf.get("PEER_PORT") or 8094)
+    except (TypeError, ValueError):
+        conf["PEER_PORT"] = 8094
     args = conf["EXTRA_ARGS"].split()
     conf["ip"] = args[args.index("-i") + 1] if "-i" in args and args.index("-i") + 1 < len(args) else None
     conf["debug"] = "-d" in args

@@ -14,7 +14,7 @@ dynamic = ["version"]
 # no index. Only what this package needs beyond the gateway's own dependencies is declared,
 # at the release's pin, because a wheel sitting in the bundle that nothing declares is not
 # installed (LESSONS 6; found again on the kit, 3 Sep 2026, when the QR route had no library).
-dependencies = ["PyQRCode==1.2.1"]
+dependencies = ["PyQRCode==1.2.1", "cryptography>=41"]   # cryptography: the site identity and the TLS link (Spec 052); it already travels with the release
 
 [project.scripts]
 mesh-manager-bridge = "mesh_manager.bridge:main"

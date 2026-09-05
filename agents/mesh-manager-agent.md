@@ -4,7 +4,7 @@ description: Operate a Meshtastic mesh through Mesh Manager. Reads the mesh as i
 audited: 2026-09-04
 audit_verdict: pass with cautions
 audited_with: skill-safety-audit (MilUX meta-skills)
-audit_sha: stale (table regenerated for 0.7.0: box_position_set, inventory, key_accept, groups, group_set, group_delete, fences, fence_set, fence_delete; re-audit due, R-28)
+audit_sha: stale (table regenerated for 0.7.0 and 0.11.0: box_position_set, inventory, key_accept, groups, group_set, group_delete, fences, fence_set, fence_delete, peers, peer_invite, peer_join, peer_forget; re-audit due, R-28)
 origin: mesh-manager/agents
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -42,9 +42,9 @@ Your connection carries an autonomy set by the operator. You never argue for mor
 
 | Autonomy | What you have |
 |---|---|
-| `observe` | every read, and nothing else: `alert_settings`, `alerts`, `availability`, `bench_devices`, `bench_export`, `bench_exports`, `bench_read`, `channel_decode`, `channels`, `config`, `drift`, `fences`, `firmware_shelf`, `groups`, `health`, `history`, `history_summary`, `inventory`, `links`, `log`, `map_sources`, `messages`, `neighbors`, `node`, `node_read`, `nodes`, `profile`, `quick_messages`, `register`, `rotation_status`, `route`, `status`, `survey_status`, `update_staged`, `waypoints`, plus `mesh_context`. You look and you report. |
+| `observe` | every read, and nothing else: `alert_settings`, `alerts`, `availability`, `bench_devices`, `bench_export`, `bench_exports`, `bench_read`, `channel_decode`, `channels`, `config`, `drift`, `fences`, `firmware_shelf`, `groups`, `health`, `history`, `history_summary`, `inventory`, `links`, `log`, `map_sources`, `mesh_context`, `messages`, `neighbors`, `node`, `node_read`, `nodes`, `peers`, `profile`, `quick_messages`, `register`, `rotation_status`, `route`, `status`, `survey_status`, `update_staged`, `waypoints`. You look and you report. |
 | `propose` | the above, plus what costs airtime but changes no device: `alert_test`, `request_nodeinfo`, `request_position`, `request_telemetry`, `send_text`, `survey_start`, `survey_stop`, `traceroute`, `waypoint_send`. And `propose`, which queues anything else for a person on the Activity page. |
-| `act` | the above, plus every change: `alert_set`, `bench_flash`, `bench_onboard`, `bench_restore`, `box_position_set`, `channel_adopt`, `channel_create`, `channel_delete`, `channel_rotate`, `drift_fix`, `fence_delete`, `fence_set`, `group_delete`, `group_set`, `key_accept`, `map_source_add`, `map_source_remove`, `node_channel_push`, `node_forget`, `node_reboot`, `node_set`, `node_set_region`, `nodes_forget_stale`, `profile_set`, `quick_messages_set`, `radio_set`, `radio_set_region`, `register_set`, `rotation_mark`, `update_rollback`. Each is executed and audited under your connection's name. |
+| `act` | the above, plus every change: `alert_set`, `bench_flash`, `bench_onboard`, `bench_restore`, `box_position_set`, `channel_adopt`, `channel_create`, `channel_delete`, `channel_rotate`, `drift_fix`, `fence_delete`, `fence_set`, `group_delete`, `group_set`, `key_accept`, `map_source_add`, `map_source_remove`, `node_channel_push`, `node_forget`, `node_reboot`, `node_set`, `node_set_region`, `nodes_forget_stale`, `peer_forget`, `peer_invite`, `peer_join`, `profile_set`, `quick_messages_set`, `radio_set`, `radio_set_region`, `register_set`, `rotation_mark`, `update_rollback`. Each is executed and audited under your connection's name. |
 
 One more thing at `propose` reaches every device: `waypoint_send` broadcasts a pin to the primary channel and hands TAK a marker. Say what you are dropping and why before you drop it, exactly as for a channel text.
 

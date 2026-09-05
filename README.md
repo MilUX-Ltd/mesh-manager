@@ -117,6 +117,14 @@ Take the release tarball and its `install.sh` from the
   --filter-group <your TAK group>
 ```
 
+Two or more sites out of radio range join over the internet, box to box, no broker: one site listens
+(a hub, or any box with `--peer-bind`), the other joins with a one-time code from its Connections page,
+and each shows the other's nodes marked with where they came from. A hub is a site with no radio:
+
+```bash
+./install.sh mesh-manager-<version>-amd64.tgz --mode hub --site-address <this machine's name>
+```
+
 On a box with no TAK Server, the server shape instead:
 
 ```bash

@@ -6,6 +6,7 @@ import argparse
 import calendar
 import collections
 import re
+import secrets
 import datetime
 import json
 import logging
@@ -29,6 +30,7 @@ from . import __version__
 from . import catalogue as C
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, read_config, utc
 from .history import History
+from . import peers as P
 
 SILENCE_LIMIT = 600                              # the deployed watchdog's figure
 
@@ -215,6 +217,9 @@ class CountingSocket:
     def close(self): pass
 
 
+accept_item = P.accept_item   # Spec 052: the loop guard, pure
+
+
 class NullSocket:
     """The server shape (Spec 050): no TAK Server on this box; whatever the gateway would send goes nowhere, uncounted."""
     def connect(self, addr): pass
@@ -265,13 +270,18 @@ def bootloader_mode(serial_path):
 
 class Bridge(TAKMeshtasticGateway):
     box_mode = "tak-server"   # Spec 050: the class default, so a bridge built without __init__ (the suites do) still has a shape
+    peering = None            # Spec 052: the site's identity, pins and links; None on a bridge built without __init__
+    remote_nodes = {}         # Spec 052: origin site id -> {"name", "ts", "nodes": [...]}
     def __init__(self, conf, socket_path=DEFAULT_SOCKET, state_dir=DEFAULT_STATE, observe=False,
                  silence_limit=SILENCE_LIMIT, gps_reader=True):
         self.conf = conf
         self.socket_path = socket_path
         self.state_dir = state_dir
         self.observe = observe
-        self.box_mode = "server" if str(conf.get("MODE") or "").strip().lower() == "server" else "tak-server"  # Spec 050
+        _m = str(conf.get("MODE") or "").strip().lower()
+        self.box_mode = _m if _m in ("server", "hub") else "tak-server"  # Spec 050 and 052
+        self.remote_nodes = {}
+        self._peers_lock = threading.RLock()
         self.silence_limit = silence_limit
         self.started = time.time()
         self.last_activity = 0.0
@@ -311,9 +321,28 @@ class Bridge(TAKMeshtasticGateway):
         threading.Thread(target=self._watchdog_loop, name="watchdog", daemon=True).start()
         threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True).start()
         threading.Thread(target=self._alert_loop, name="alerts", daemon=True).start()
-        TAKMeshtasticGateway.__init__(self, ip=conf.get("ip"), serial_device=conf.get("SERIAL") or None,
-                                      debug=bool(conf.get("debug")))
+        if self.box_mode == "hub":
+            # Spec 052: a site with no radio. No gateway, no serial device, no TAK, no mesh of its own.
+            self.logger = logging.getLogger("mesh-manager-hub")
+            if not self.logger.handlers:
+                h = logging.StreamHandler(); h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s")); self.logger.addHandler(h)
+            self.logger.setLevel(logging.INFO)
+            self.interface = None; self.meshtastic_devices = {}; self.meshtastic_connected = False; self.socket_client = NullSocket()
+        else:
+            TAKMeshtasticGateway.__init__(self, ip=conf.get("ip"), serial_device=conf.get("SERIAL") or None,
+                                          debug=bool(conf.get("debug")))
         self.logger.addHandler(RingHandler(self))
+        try:
+            self.peering = P.Peering(self, conf)
+        except Exception as ex:  # noqa: BLE001
+            self.peering = None
+            self.logger.error(f"peers: the site identity or listener failed: {type(ex).__name__}: {ex}")
+        threading.Thread(target=self._peer_loop, name="peers", daemon=True).start()
+        self._redial_pinned()
+        if self.box_mode == "hub":
+            self._touch(); sd_notify("READY=1")
+            self.logger.info(f"mesh-manager-bridge {__version__} as a hub; site {self.peering.id[:12] if self.peering else '?'}; socket {socket_path}; state {state_dir}")
+            return
         if self.box_mode == "server":
             self.socket_client = NullSocket()
         elif observe and not isinstance(self.socket_client, CountingSocket):
@@ -557,8 +586,11 @@ class Bridge(TAKMeshtasticGateway):
         while not self._stop.is_set():
             path = self.conf.get("SERIAL") or ""
             present = bool(path) and os.path.exists(path)
-            ping, reason = watchdog_decision(time.time(), self.last_activity or self.started, present,
-                                             present and bootloader_mode(path), self.silence_limit)
+            if self.box_mode == "hub":
+                ping, reason = True, "hub: no radio by design; alive"
+            else:
+                ping, reason = watchdog_decision(time.time(), self.last_activity or self.started, present,
+                                                 present and bootloader_mode(path), self.silence_limit)
             self.watchdog_state = "pinging" if ping else "not pinging"
             if ping:
                 sd_notify("WATCHDOG=1")
@@ -571,7 +603,7 @@ class Bridge(TAKMeshtasticGateway):
     # ---- the heartbeat, to wherever the state directory is ------------------------------------
     def heartbeat(self):
         now = time.time()
-        if self.box_mode != "server":  # Spec 050: a box without TAK forwards nothing
+        if self.box_mode == "tak-server":  # Spec 050: a box without TAK forwards nothing
             self.last_forwarded = now
             self._emit("forwarded")
         if now - getattr(self, "_hb_last", 0.0) < 10:
@@ -603,8 +635,237 @@ class Bridge(TAKMeshtasticGateway):
         except Exception:  # noqa: BLE001
             return None
 
+
+    # ---- Spec 052: sites, pairing, the link, the picture -------------------------------------------
+    SHARING_DEFAULT = {"nodes": {"out": True, "in": True}}   # ADR 003's defaults, fixed in code until slice 3
+
+    def _peers_path(self):
+        return os.path.join(self.state_dir, "peers.json")
+
+    def _peers_load(self):
+        try:
+            with open(self._peers_path()) as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            d = {}
+        d.setdefault("peers", {}); d.setdefault("invites", {})
+        return d
+
+    def _peers_save(self, d):
+        os.makedirs(self.state_dir, exist_ok=True)
+        tmp = self._peers_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(d, fh, indent=1, sort_keys=True)
+        os.replace(tmp, self._peers_path())
+
+    def peer_pinned(self, peer_id):
+        with self._peers_lock:
+            return self._peers_load()["peers"].get(str(peer_id))
+
+    def peer_check_code(self, code):
+        """None when the code is good (and it is spent here); otherwise why not, in words."""
+        code = str(code or "").strip().upper()
+        with self._peers_lock:
+            d = self._peers_load(); inv = d["invites"]
+            for k in list(inv):
+                if float(inv[k].get("expires") or 0) < time.time():
+                    del inv[k]
+            if not code:
+                self._peers_save(d)
+                return "no such site here: pair with an invite code"
+            rec = inv.get(code)
+            if not rec or rec.get("used"):
+                self._peers_save(d)
+                return "the code is wrong, expired or already used"
+            rec["used"] = time.time()
+            self._peers_save(d)
+        return None
+
+    def peer_pin(self, peer_id, name, cert_pem, direction):
+        with self._peers_lock:
+            d = self._peers_load(); rec = d["peers"].setdefault(str(peer_id), {"added": utc(time.time()), "sharing": dict(self.SHARING_DEFAULT)})
+            if name: rec["name"] = name
+            if cert_pem: rec["cert"] = cert_pem
+            rec["direction"] = direction; rec["last_seen"] = utc(time.time())
+            self._peers_save(d)
+        self._emit("peers", state="pinned", site=peer_id, name=name)
+
+    def peer_touch(self, peer_id, name):
+        with self._peers_lock:
+            d = self._peers_load(); rec = d["peers"].get(str(peer_id))
+            if rec:
+                if name: rec["name"] = name
+                rec["last_seen"] = utc(time.time()); self._peers_save(d)
+
+    def peer_connected(self, link):
+        self._peer_send_snapshot(link)
+        self._emit("peers", state="connected", site=link.peer_id, name=link.peer_name)
+
+    def _snapshot_item(self):
+        own = [n for n in self.op_nodes().get("nodes", []) if not n.get("remote")] if self.interface is not None else []
+        keep = ("id", "name", "short", "label", "hw", "battery", "voltage", "charging", "lat", "lon", "heard", "snr", "hops", "heard_here", "icon", "group", "role")
+        rows = [{k: n.get(k) for k in keep if k in n} for n in own]
+        return {"class": "nodes", "origin": self.peering.id, "origin_name": self.peering.name, "path": [self.peering.id], "ts": utc(time.time()), "data": rows}
+
+    def _peer_send_snapshot(self, link=None):
+        if not self.peering:
+            return
+        if self.interface is not None and self._sharing(link.peer_id if link else None).get("nodes", {}).get("out", True):
+            item = self._snapshot_item()
+            if link: link.send({"item": item})
+            else: self.peering.broadcast({"item": item})
+        if link:  # a hub (any site) passes the pictures it holds on to a newly connected peer
+            with self._peers_lock:
+                held = [dict(v["item"]) for v in self.remote_nodes.values() if v.get("item")]
+            for it in held:
+                if link.peer_id not in it.get("path", []) and it.get("origin") != link.peer_id:
+                    it = dict(it); it["path"] = list(it.get("path", [])) + [self.peering.id]; link.send({"item": it})
+
+    def _sharing(self, peer_id):
+        rec = self.peer_pinned(peer_id) if peer_id else None
+        sh = dict(self.SHARING_DEFAULT)
+        if rec and isinstance(rec.get("sharing"), dict):
+            sh.update(rec["sharing"])
+        return sh
+
+    def peer_item(self, link, item):
+        if not self.peering or not P.accept_item(item, self.peering.id):
+            return
+        if item.get("class") != "nodes" or not self._sharing(link.peer_id).get("nodes", {}).get("in", True):
+            return
+        origin = str(item.get("origin") or "")
+        if not origin:
+            return
+        with self._peers_lock:
+            self.remote_nodes[origin] = {"name": str(item.get("origin_name") or origin[:12]), "ts": time.time(), "via": link.peer_id, "item": item,
+                                        "nodes": [dict(n) for n in (item.get("data") or []) if isinstance(n, dict) and n.get("id")]}
+        self._emit("peers", state="picture", site=origin, count=len(item.get("data") or []))
+        fwd = dict(item); fwd["path"] = list(item.get("path") or []) + [self.peering.id]
+        for pid, l in self.peering.connected().items():
+            if pid == link.peer_id or pid in fwd["path"] or pid == origin:
+                continue
+            if self._sharing(pid).get("nodes", {}).get("out", True):
+                l.send({"item": fwd})
+
+    def _remote_rows(self, own_ids):
+        rows = []
+        with self._peers_lock:
+            snaps = list(self.remote_nodes.items())
+        for origin, v in snaps:
+            for n in v.get("nodes", []):
+                if str(n.get("id")) in own_ids:
+                    continue
+                r = dict(n); r["remote"] = True; r["origin"] = origin; r["origin_name"] = v.get("name") or origin[:12]
+                r.setdefault("label", ""); r.setdefault("group", ""); r.setdefault("tags", []); r.setdefault("icon", "radio"); r.setdefault("heard_here", True)
+                rows.append(r)
+        return rows
+
+    def _peer_loop(self):
+        while not self._stop.is_set():
+            self._stop.wait(30)
+            if self._stop.is_set():
+                break
+            try:
+                if self.peering and self.peering.connected():
+                    self._peer_send_snapshot()
+                with self._peers_lock:  # a picture from a peer that has been away ten minutes is stale: drop it
+                    live = self.peering.connected() if self.peering else {}
+                    for origin, v in list(self.remote_nodes.items()):
+                        if time.time() - v.get("ts", 0) > 600 and v.get("via") not in live:
+                            del self.remote_nodes[origin]
+            except Exception as ex:  # noqa: BLE001
+                self.logger.warning(f"peers: the loop hit {type(ex).__name__}: {ex}")
+
+    def op_peers(self, **_):
+        if not self.peering:
+            return {"error": "this bridge has no site identity"}
+        with self._peers_lock:
+            d = self._peers_load()
+        live = self.peering.connected()
+        out = []
+        for pid, rec in sorted(d["peers"].items(), key=lambda kv: kv[1].get("name") or kv[0]):
+            l = live.get(pid); snap = self.remote_nodes.get(pid, {})
+            out.append({"id": pid, "name": rec.get("name") or pid[:12], "state": "connected" if l else "away", "direction": rec.get("direction"),
+                        "since": utc(l.since) if l else None, "last_seen": utc(l.last_seen) if l else rec.get("last_seen"), "added": rec.get("added"),
+                        "nodes": len(snap.get("nodes", [])), "sharing": rec.get("sharing") or dict(self.SHARING_DEFAULT), "note": self.peering.refusals.get(pid)})
+        invites = [{"expires": utc(v["expires"])} for k, v in d["invites"].items() if float(v.get("expires") or 0) >= time.time() and not v.get("used")]
+        addr = str(self.conf.get("SITE_ADDRESS") or "").strip()
+        return {"site": {"id": self.peering.id, "short": self.peering.id[:12], "name": self.peering.name, "address": addr or None, "listening": bool(self.peering.port), "port": self.peering.port},
+                "peers": out, "invites": invites, "pictures": [{"origin": o, "name": v.get("name"), "nodes": len(v.get("nodes", [])), "ts": utc(v.get("ts"))} for o, v in self.remote_nodes.items()]}
+
+    def op_peer_invite(self, **_):
+        if not self.peering:
+            return {"error": "this bridge has no site identity"}
+        if not self.peering.port:
+            return {"error": "this site is not listening: set PEER_BIND (the installer's --peer-bind) and restart the bridge"}
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        code = "".join(secrets.choice(alphabet) for _ in range(8)); exp = time.time() + P.INVITE_TTL
+        with self._peers_lock:
+            d = self._peers_load(); d["invites"][code] = {"expires": exp, "made": utc(time.time())}; self._peers_save(d)
+        host = str(self.conf.get("SITE_ADDRESS") or "").strip() or socket.gethostname()
+        invite = f"{host}:{self.peering.port}/{code}/{self.peering.id}"
+        svg = None
+        try:
+            import pyqrcode
+            svg = pyqrcode.create(invite, error="M").svg(scale=4, quiet_zone=2, xmldecl=False, svgclass="qr", lineclass=None, omithw=True)
+        except Exception:  # noqa: BLE001
+            svg = None
+        self._emit("peers", state="invited")
+        return {"invite": invite, "code": code, "expires": utc(exp), "fingerprint": self.peering.id, "qr_svg": svg, "note": f"read once, good for {P.INVITE_TTL // 60} minutes, one use"}
+
+    def op_peer_join(self, invite="", **_):
+        if not self.peering:
+            return {"error": "this bridge has no site identity"}
+        inv = P.parse_invite(invite)
+        if not inv:
+            return {"error": "an invite reads host:port/code/fingerprint, as the other site's screen shows it"}
+        if inv["fingerprint"] == self.peering.id:
+            return {"error": "that is this site's own invite"}
+        with self._peers_lock:
+            d = self._peers_load(); rec = d["peers"].setdefault(inv["fingerprint"], {"added": utc(time.time()), "sharing": dict(self.SHARING_DEFAULT)})
+            rec["address"] = f"{inv['host']}:{inv['port']}"; rec["direction"] = "out"; self._peers_save(d)
+        result = []
+        self.peering.dial(inv["fingerprint"], inv["host"], inv["port"], inv["code"], first_result=result)
+        t0 = time.time()
+        while not result and time.time() - t0 < 15:
+            time.sleep(0.1)
+        if not result:
+            return {"error": "no answer from the site within 15 s; the link keeps trying", "site": inv["fingerprint"]}
+        ok, why, ans = result[0]
+        if not ok:
+            if inv["code"]:  # a pairing that failed leaves nothing behind
+                self.peering.stop_dial(inv["fingerprint"])
+                with self._peers_lock:
+                    d = self._peers_load(); d["peers"].pop(inv["fingerprint"], None); self._peers_save(d)
+            return {"error": why, "site": inv["fingerprint"]}
+        return {"joined": True, "site": (ans or {}).get("site"), "name": (ans or {}).get("name"), "confirmed": True}
+
+    def op_peer_forget(self, site="", **_):
+        site = str(site or "").strip().lower()
+        with self._peers_lock:
+            d = self._peers_load(); had = d["peers"].pop(site, None) is not None; self._peers_save(d)
+            self.remote_nodes.pop(site, None)
+        if self.peering:
+            self.peering.stop_dial(site)
+        self._emit("peers", state="forgotten", site=site)
+        return {"forgotten": had, "site": site}
+
+    def _redial_pinned(self):
+        """At start: dial every peer this site joined before (the address is remembered)."""
+        if not self.peering:
+            return
+        with self._peers_lock:
+            d = self._peers_load()
+        for pid, rec in d["peers"].items():
+            if rec.get("direction") == "out" and rec.get("address"):
+                host, _, port = str(rec["address"]).rpartition(":")
+                try:
+                    self.peering.dial(pid, host, int(port))
+                except ValueError:
+                    pass
+
     def op_status(self, **_):
-        path = self.conf.get("SERIAL") or ""
+        path = (self.conf.get("SERIAL") or "") if self.box_mode != "hub" else None
         present = bool(path) and os.path.exists(path)
         lora = self._lora()
         chans = self.op_channels().get("channels", [])
@@ -615,7 +876,10 @@ class Bridge(TAKMeshtasticGateway):
                 "last_activity": utc(self.last_activity) if self.last_activity else None,
                 "last_forwarded": utc(self.last_forwarded) if self.last_forwarded else None,
                 "nodes_seen": len(getattr(self, "meshtastic_devices", {})), "nodes_db": len(getattr(self.interface, "nodes", {}) or {}), "observe": self.observe,
-                "mode": self.box_mode, "tak": "off" if self.box_mode == "server" else "on",
+                "mode": self.box_mode, "tak": "off" if self.box_mode in ("server", "hub") else "on",
+                "site": ({"id": self.peering.id, "name": self.peering.name} if self.peering else None),
+                "peers": len(self.peering.connected()) if self.peering else 0,
+                "peer_port": self.peering.port if self.peering else None, "peer_bind": (self.conf.get("PEER_BIND") or None) if self.peering and self.peering.port else None,
                 "own": self._own(), "region": region_name(lora.region) if lora else None,
                 "chutil": self._own_chutil(), "verdict": self._verdict(self._own_chutil()),
                 "alerts_open": len(self._alerts_load()["open"]),
@@ -631,7 +895,7 @@ class Bridge(TAKMeshtasticGateway):
         labels = {k: str(v.get("label") or "") for k, v in regall.items()}
         groups = self._groups_load()
         out = []
-        for n in self.mesh_nodes():
+        for n in (self.mesh_nodes() if self.interface is not None else []):
             rec = db.get(n.get("id"), {}) if isinstance(db, dict) else {}
             u = rec.get("user", {}) if isinstance(rec, dict) else {}
             n = dict(n)
@@ -667,6 +931,7 @@ class Bridge(TAKMeshtasticGateway):
             lh = rec.get("lastHeard") if isinstance(rec, dict) else None
             n["last_heard_db"] = utc(lh) if lh else None
             out.append(n)
+        out.extend(self._remote_rows(set(str(n.get("id")) for n in out)))  # Spec 052: the peers' pictures
         return {"nodes": out, "count": len(out)}
 
     def _identity_note(self, nid, key, hw, role):
@@ -2874,12 +3139,12 @@ class Bridge(TAKMeshtasticGateway):
 
     def op_alert_settings(self, **_):
         st = dict(self._alerts_load()["settings"])
-        if self.box_mode == "server":
+        if self.box_mode in ("server", "hub"):
             st["to_tak"] = False  # Spec 050: no TAK on this box, whatever the file says
         return st
 
     def op_alert_set(self, silent_min=None, battery_pct=None, unknown=None, fence_m=None, to_tak=None, **_):
-        if self.box_mode == "server" and to_tak is not None and to_tak != "" and str(to_tak).strip().lower() in ("1", "true", "on", "yes"):
+        if self.box_mode in ("server", "hub") and to_tak is not None and to_tak != "" and str(to_tak).strip().lower() in ("1", "true", "on", "yes"):
             return {"error": "TAK is off on this box (MODE=server): alerts stay on this screen"}
         a = self._alerts_load(); st = a["settings"]
         try:
@@ -2906,8 +3171,8 @@ class Bridge(TAKMeshtasticGateway):
 
     def _tak_chat(self, text, callsign="Mesh Manager"):
         """One GeoChat to All Chat Rooms on the TAK Server, on the socket the bridge forwards CoT on."""
-        if self.box_mode == "server":
-            return False  # Spec 050: no TAK Server to chat to
+        if self.box_mode in ("server", "hub"):
+            return False  # Spec 050 and 052: no TAK Server to chat to
         import datetime as _dt, uuid as _uuid
         from xml.etree.ElementTree import Element, SubElement, tostring
         sock = getattr(self, "socket_client", None)
@@ -3041,7 +3306,7 @@ class Bridge(TAKMeshtasticGateway):
         return {"open": sorted(a["open"].values(), key=lambda x: x["since"], reverse=True), "recent": recent, "settings": a["settings"]}
 
     def op_alert_test(self, **_):
-        if self.box_mode == "server":
+        if self.box_mode in ("server", "hub"):
             self._emit("alert", state="test", tak=False)
             return {"sent": False, "observe": bool(self.observe), "mode": "server", "note": "TAK is off on this box (MODE=server)"}
         sent = self._tak_chat("[Mesh Manager] test alert: the box can reach TAK chat")
@@ -3494,6 +3759,8 @@ class Bridge(TAKMeshtasticGateway):
 
     def stop(self):
         self._stop.set()
+        if self.peering:
+            self.peering.stop()
         if self._server:
             self._server.shutdown()
             self._server.server_close()
@@ -3515,8 +3782,8 @@ def main(argv=None):
     conf = read_config(a.config)
     if a.serial:
         conf["SERIAL"] = a.serial
-    if not conf.get("SERIAL"):
-        print("ERR no SERIAL in the config and no --serial given", file=sys.stderr)
+    if not conf.get("SERIAL") and conf.get("MODE") != "hub":
+        print("ERR no SERIAL in the config and no --serial given (a site with no radio is MODE=hub)", file=sys.stderr)
         return 2
     b = Bridge(conf, socket_path=a.socket, state_dir=a.state_dir, observe=a.observe, silence_limit=a.silence_limit)
     try:

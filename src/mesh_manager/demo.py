@@ -8,6 +8,7 @@ Nothing here touches hardware; every write is answered, none is sent.
     python3 -m mesh_manager.demo /tmp/mm-demo.sock
 """
 import json
+import secrets
 import os
 import random
 import socket
@@ -21,6 +22,7 @@ NODES = [
     {"id": "!ee000002", "name": "Tracker 2", "battery": 9, "lat": 51.500180, "lon": -0.119700, "heard": "2026-09-03T01:20:11Z", "snr": 9.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR2"},
     {"id": "!ee000003", "name": "Handset", "battery": 29, "lat": 51.499910, "lon": -0.120400, "heard": "2026-09-03T01:22:16Z", "snr": 11.25, "hops": 0, "heard_here": True, "hw": "RAK4631", "short": "HAND"},
     {"id": "!ee000006", "name": "Relay 2", "battery": None, "heard": None, "snr": None, "hops": None, "heard_here": False, "hw": "TRACKER_T1000_E", "short": "T2"},
+    {"id": "!ee000007", "name": "Edge tracker", "battery": 64, "lat": 51.4520, "lon": -0.9781, "heard": "2026-09-05T09:20:00Z", "snr": 7.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "EDG1", "remote": True, "origin": "ed" * 32, "origin_name": "Edge laptop"},  # Spec 052: a peer's picture
 ]
 STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_A4:CB:8F:EE:00:01-if00",
           "radio_present": True, "bootloader": False, "connected": True, "last_activity": "2026-09-03T01:24:06Z",
@@ -28,10 +30,13 @@ STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Es
           "own": {"id": "!ee000001", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
           "gps": {"reachable": True, "fix": True, "seen": 11, "used": 8, "checked": "2026-09-03T01:24:00Z", "via": "gpsd://127.0.0.1:2947"},
           "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
-DEMO_MODE = "server" if os.environ.get("MODE", "").strip().lower() == "server" else "tak-server"   # Spec 050: MODE=server runs the demo as a box without TAK
-STATUS["mode"] = DEMO_MODE; STATUS["tak"] = "off" if DEMO_MODE == "server" else "on"
-if DEMO_MODE == "server":
+DEMO_MODE = os.environ.get("MODE", "").strip().lower() if os.environ.get("MODE", "").strip().lower() in ("server", "hub") else "tak-server"   # Spec 050 and 052: MODE=server or MODE=hub shapes the demo
+STATUS["mode"] = DEMO_MODE; STATUS["tak"] = "off" if DEMO_MODE in ("server", "hub") else "on"
+STATUS["site"] = {"id": "ee" * 32, "name": "Demo box"}; STATUS["peers"] = 1; STATUS["peer_port"] = 8094; STATUS["peer_bind"] = "0.0.0.0"   # Spec 052
+if DEMO_MODE in ("server", "hub"):
     STATUS["last_forwarded"] = None
+if DEMO_MODE == "hub":
+    STATUS["radio"] = None; STATUS["radio_present"] = False; STATUS["connected"] = False; STATUS["site"] = {"id": "ee" * 32, "name": "Demo hub"}
 CHANNELS = {"channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True},
                          {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
             "url": "https://meshtastic.org/e/#CgcSAQEoATABEg8IATgBQANIAVAeaAHABgE"}
@@ -304,6 +309,11 @@ def serve_one(c):
                if op == "bench_read" else {"export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json", "bytes": 1840, "id": "!ee000005"})
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),
+           "peers": {"site": {"id": "ee" * 32, "short": "eeeeeeeeeeee", "name": "Demo box", "address": "demo.example", "listening": True, "port": 8094},
+                     "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}}, "note": None}],
+                     "invites": [], "pictures": [{"origin": "ed" * 32, "name": "Edge laptop", "nodes": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}]},
+           "peer_invite": {"invite": "demo.example:8094/" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)) + "/" + "ee" * 32, "code": "DEMO", "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600)), "fingerprint": "ee" * 32, "qr_svg": None, "note": "read once, good for 10 minutes, one use"},
+           "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
            "bench_devices": {"gateway": STATUS["radio"], "devices": [
                {"path": "/dev/serial/by-id/usb-Seeed_T1000-E_9F3A-if00", "tty": "ttyACM3", "bootloader": False},
                {"path": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_BOOT-if00", "tty": "ttyACM4", "bootloader": True,

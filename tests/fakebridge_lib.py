@@ -117,8 +117,13 @@ class FakeBridge:
                    "group_delete": {"removed": req.get("name"), "cleared": [], "confirmed": True}}[op]
             self.calls.append((op, dict(req)))
             c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
-        if op in ("inventory", "key_accept"):
-            rep = {"inventory": {"rows": [
+        if op in ("inventory", "key_accept", "peers", "peer_invite", "peer_join", "peer_forget"):
+            rep = {"peers": {"site": {"id": "ab" * 32, "short": "abababababab", "name": "Dev hub", "address": "dev.example", "listening": True, "port": 8094},
+                             "peers": [{"id": "cd" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-03T01:00:00Z", "last_seen": "2026-09-03T02:00:00Z", "added": "2026-09-01T00:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}}, "note": None}],
+                             "invites": [], "pictures": [{"origin": "cd" * 32, "name": "Edge laptop", "nodes": 1, "ts": "2026-09-03T02:00:00Z"}]},
+                   "peer_invite": {"invite": "dev.example:8094/ABCD2345/" + "ab" * 32, "code": "ABCD2345", "expires": "2026-09-03T02:10:00Z", "fingerprint": "ab" * 32, "qr_svg": None, "note": "read once, good for 10 minutes, one use"},
+                   "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
+                   "inventory": {"rows": [
                         {"id": "!aa000001", "name": "Tracker9", "hw": "TRACKER_T1000_E", "firmware": "2.6.11", "role": "TRACKER", "fingerprint": "3f9a1c0d7e2b", "key_since": "2026-09-02T10:00:00Z", "key_changed": None, "key_ack": None, "key_alarm": False, "managed": True, "behind": False, "behind_reason": "on the shelf's version", "confirmed": "2026-09-03T03:00:00Z", "heard": "2026-09-03T02:00:00Z"},
                         {"id": "!bb000002", "name": "Tracker2", "hw": "TRACKER_T1000_E", "firmware": "2.5.20", "role": None, "fingerprint": "aa11bb22cc33", "key_since": "2026-09-01T08:00:00Z", "key_changed": "2026-09-03T01:00:00Z", "key_ack": None, "key_alarm": True, "managed": False, "behind": True, "behind_reason": "behind the shelf's 2.6.11", "confirmed": "2026-09-03T01:00:00Z", "heard": "2026-09-03T01:50:00Z"},
                         {"id": "!cc000003", "name": "OldTracker", "hw": "HELTEC_V3", "firmware": None, "role": None, "fingerprint": None, "key_since": None, "key_changed": None, "key_ack": None, "key_alarm": False, "managed": False, "behind": None, "behind_reason": "firmware unknown: read the device on the bench or over the air", "confirmed": None, "heard": None}],

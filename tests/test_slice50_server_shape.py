@@ -69,7 +69,7 @@ else:
     r = dry()
     check_true("AC6 the same box without --mode is refused, naming --mode server", r.returncode != 0 and "TAK Server is not installed" in r.stderr and "--mode server" in r.stderr, (r.returncode, r.stderr[-300:]))
     r = dry("--mode", "bogus")
-    check_true("AC6 --mode bogus is refused in words", r.returncode != 0 and "must be tak-server or server" in r.stderr, r.stderr[-200:])
+    check_true("AC6 --mode bogus is refused in words", r.returncode != 0 and "must be tak-server, server or hub" in r.stderr, r.stderr[-200:])  # wording grew with Spec 052's hub
 
 demo_sock = os.path.join(tempfile.mkdtemp(), "d.sock")
 env = dict(os.environ, MODE="server", PYTHONPATH=os.path.join(ROOT, "src"))

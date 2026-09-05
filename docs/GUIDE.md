@@ -190,6 +190,17 @@ for a report or for Pinecone.
 
 ![The Health page](../assets/guide/health.png)
 
+### Peers: joining another Mesh Manager
+
+Two meshes out of radio range can be one picture. On the site that listens (a hub, or a box installed with
+`--peer-bind`), press *Invite a peer* on Connections: it shows a code with the site's address and
+fingerprint, good for ten minutes and one use, with a QR. On the other site, paste that text into *Join a
+site*. From then on the two are joined: each sends its picture, the nodes it hears with their positions,
+battery and signal, and shows the other's on Nodes and the map marked *via <site>*. Nothing goes on the air
+and channel keys never cross; messages, waypoints and alerts across the link come later. *Forget* drops a
+peer at either end. A hub is a Mesh Manager with no radio, installed with `--mode hub`, that several sites
+join; it passes each site's picture on to the others.
+
 ## Settings
 
 The standing brief for connected agents (what this mesh is for, its rules; served to every agent

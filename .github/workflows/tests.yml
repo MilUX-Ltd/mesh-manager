@@ -32,6 +32,6 @@ jobs:
       - name: Install what the suites import
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "meshtastic==2.7.11" "PyQRCode==1.2.1"
+          python -m pip install "meshtastic==2.7.11" "PyQRCode==1.2.1" "cryptography==43.0.3"
       - name: Run every suite
         run: PYTHON=python3 tests/run.sh

@@ -463,7 +463,7 @@ pre.log .ln{display:block}pre.log .ln--radio{color:var(--ink-muted-strong)}pre.l
 .sig{display:inline-flex;align-items:center;gap:var(--s2);white-space:nowrap}td time,td .pill{white-space:nowrap}.sig__bars{width:22px;height:16px;flex:none}.sig__bars rect{fill:var(--edge)}.sig--4 rect,.sig--3 .b1,.sig--3 .b2,.sig--3 .b3{fill:var(--ok)}.sig--2 .b1,.sig--2 .b2{fill:var(--warn)}.sig--1 .b1{fill:var(--bad)}
 .batt--low{color:var(--bad);font-weight:600}
 button{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:6px;padding:0 var(--s3);min-height:var(--tap);font-size:.9rem;cursor:pointer}button:hover{filter:brightness(1.15)}button.line{background:transparent;color:var(--ink);border-color:var(--edge)}button.danger{background:var(--bad)}button.quiet{background:var(--surface-sunken);color:var(--ink);border-color:var(--line)}
-button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}a.plain::after{content:' ›';color:var(--ink-muted)}a.plain:hover{text-decoration-thickness:2px}[data-theme=dark] a.plain{color:var(--gold)}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}.chart.avail{max-width:none;height:20px;padding:0;border:0;background:transparent}.chart.graph line{stroke-dasharray:none}.chart.graph text{fill:var(--ink);font-size:12px}.chart.graph{max-width:100%}.chart.avail rect.on{fill:var(--ok)}.chart.avail rect.off{fill:var(--edge)}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:1200;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
+button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}.row-actions>details.fold.ctl{margin:0}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}a.plain::after{content:' ›';color:var(--ink-muted)}a.plain:hover{text-decoration-thickness:2px}[data-theme=dark] a.plain{color:var(--gold)}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}.chart.avail{max-width:none;height:20px;padding:0;border:0;background:transparent}.chart.graph line{stroke-dasharray:none}.chart.graph text{fill:var(--ink);font-size:12px}.chart.graph{max-width:100%}.chart.avail rect.on{fill:var(--ok)}.chart.avail rect.off{fill:var(--edge)}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:1200;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
 input[type=text],input[type=number],input[type=password],select,textarea{width:100%;padding:var(--s1) var(--s2);min-height:var(--tap);font-size:.9rem;border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);margin:var(--s1) 0 var(--s3)}
 label{display:block}label.check{display:flex;gap:var(--s2);align-items:flex-start;min-height:var(--tap);margin:var(--s2) 0}label.check input{width:18px;height:18px;margin-top:2px;flex:none}
 form.card{max-width:560px}form.login{max-width:360px;margin:3rem auto}form.card.danger{border-color:var(--bad)}form.card.danger h2{color:var(--bad)}
@@ -582,6 +582,9 @@ def state_strip(st):
     st = st or {}
     if "version" not in st:
         lamp, word = "bad", "Bridge not answering"
+    elif st.get("mode") == "hub":
+        n = int(st.get("peers") or 0)
+        lamp, word = ("ok" if st.get("peer_port") else "warn"), f"Hub · {n} peer{'' if n == 1 else 's'}"   # Spec 052: a site with no radio
     elif st.get("bootloader"):
         lamp, word = "bad", "Radio in bootloader"
     elif not st.get("radio_present"):
@@ -735,7 +738,8 @@ def overview_cards(st):
     act = st.get("last_activity")
     heard, db = int(st.get("nodes_seen") or 0), st.get("nodes_db")
     face = "".join([
-        card("Radio", f"{e(radio_txt)}<div class='meta'>{e(radio)}</div>", radio_cls),
+        (card("Radio", "none: this site is a hub<div class='meta'>peers join it by an invite; their pictures show here</div>", "ok") if st.get("mode") == "hub"
+         else card("Radio", f"{e(radio_txt)}<div class='meta'>{e(radio)}</div>", radio_cls)),
         card("Channel utilisation", (f"<a href='/health'>{float(st['chutil']):.1f}% <span class='pill'>{e(st.get('verdict') or '')}</span></a>" if st.get("chutil") is not None else "<a href='/health'>no reading yet</a>")
              + "<div class='meta'>how busy the channel is · now, from this radio</div>",
              {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(st.get("verdict") or "", "")),
@@ -848,6 +852,7 @@ def overview_body(st, bind, auth_on=True, nodes=None, links=None, tiles=None):
               + ("" if auth_on else "<b>Sign-in is off</b>: anyone who can reach this address is the operator. ")
               + ("The bridge binds no port of its own; it owns the radio and speaks to nothing else. " if (st or {}).get("tak") == "off"
                  else "The bridge binds no port of its own; it owns the radio and speaks to TAK Server over the multicast input. ")
+              + (f"The bridge also listens for peers on <b>{e(str(st.get('peer_bind')))}:{e(str(st.get('peer_port')))}</b>, TLS, paired sites only (Spec 052). " if (st or {}).get("peer_port") else "")
               + "Everything else on this box is closed until the operator opens it.</p>")
     js = """<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='forwarded'||d.kind==='connection'){var o=document.querySelector('#overview-cards details'),was=!!(o&&o.open);window.mmFrag('overview','overview-cards',function(){var n=document.querySelector('#overview-cards details');if(n&&was){n.open=true;}});}
 if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}var h=document.getElementById('home-heard');if(h&&d.kind==='status'&&d.nodes_seen!==undefined){h.textContent=d.nodes_seen;}}};</script>"""
@@ -1760,6 +1765,8 @@ def node_row(n, db=False, routes=None, silent_min=30):
     has_fix = n.get("lat") is not None and n.get("lon") is not None
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if has_fix else "no fix")
     sub = " · ".join(x for x in (own_name, str(n.get("hw") or ""), pos) if x)
+    if n.get("remote"):  # Spec 052: a node from a peer's picture
+        sub = f"via {n.get('origin_name') or str(n.get('origin') or '')[:12]}" + (" · " + sub if sub else "")
     heard = n.get("heard") or n.get("last_heard_db")
     quiet = False
     try:
@@ -3245,6 +3252,36 @@ def activity_body(web):
             f"<div class='tablewrap'><table><thead><tr><th>When</th><th>Who</th><th>Event</th><th>Action</th><th>Detail</th></tr></thead><tbody>{audit_rows}</tbody></table></div>{WRITE_JS}")
 
 
+
+def peers_section(p):
+    """Spec 052: this site, its peers, an invite and a join, on the Connections page."""
+    p = p or {}
+    if p.get("error"):
+        return f"<h2 id='peers'>Peers</h2><p class='meta bad'>{e(str(p['error']))}</p>"
+    site = p.get("site") or {}
+    listening = (f"listening on port {e(str(site.get('port')))}" if site.get("listening") else "not listening: peers cannot join this site until the installer's --peer-bind is set")
+    head = (f"<h2 id='peers'>Peers</h2><p class='meta'>Mesh Managers joined to this one over the internet (ADR 003). Each side sends its picture, nodes, positions and battery, and shows the other's, marked with where it came from. Nothing goes on the air, and channel keys never cross.</p>"
+            f"<div class='cards'>{card('This site', e(str(site.get('name') or '?')) + ' <span class=pill>' + e(str(site.get('short') or '')) + '</span><div class=meta>' + e(str(site.get('address') or 'no address set: the invite names this machine by its hostname')) + ' · ' + e(listening) + '</div>', 'ok' if site.get('listening') else '')}</div>")
+    rows = ""
+    for q in p.get("peers") or []:
+        lamp = "ok" if q.get("state") == "connected" else "warn"
+        note = f" <span class='meta'>{e(str(q.get('note')))}</span>" if q.get("note") else ""
+        rows += (f"<tr><td><i class='lamp lamp--{lamp}'></i> {e(str(q.get('name')))}<div class='meta'>{e(str(q.get('id') or '')[:12])} · {e(str(q.get('direction') or ''))}</div></td>"
+                 f"<td>{e(str(q.get('state')))}{note}</td><td class='meta'>{('<time datetime=' + chr(39) + e(str(q.get('last_seen'))) + chr(39) + ' data-age>' + e(age(q.get('last_seen'))) + '</time>') if q.get('last_seen') else 'never'}</td>"
+                 f"<td>{int(q.get('nodes') or 0)}</td><td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: its pin, its link and its picture leave this site.' style='display:inline'><input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>")
+    table = (f"<div class='tablewrap'><table><thead><tr><th>Peer</th><th>State</th><th>Last seen</th><th>Nodes</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=5 class=meta>No peers yet. Invite one from here, or join another site with its invite.</td></tr>'}</tbody></table></div>")
+    a_inv, a_join = _act("peer_invite"), _act("peer_join")
+    invite = (f"<form data-action='peer_invite' class='card' data-risk='change' data-confirm=\"{e(a_inv.get('confirm') or '')}\" id='peer-invite'><h3 style='margin-top:0'>{e(a_inv['title'])}</h3><p class='meta'>{e(a_inv['description'])}</p>"
+              f"<button class='line'{'' if site.get('listening') else ' disabled'}>Invite a peer</button><div class='res meta' role='status'></div><div class='invite-out' aria-live='polite'></div></form>")
+    join = (f"<form data-action='peer_join' class='card' data-risk='change' data-confirm=\"{e(a_join.get('confirm') or '')}\" id='peer-join'><h3 style='margin-top:0'>{e(a_join['title'])}</h3><p class='meta'>{e(a_join['description'])}</p>"
+            f"<label>Invite<input type='text' name='invite' required placeholder='host:port/code/fingerprint' autocomplete='off' spellcheck='false'></label><button class='line'>Join</button><div class='res meta' role='status'></div></form>")
+    js = ("<script>document.addEventListener('mm-written',function(ev){var d=ev.detail||{},a=d.action,r=d.result||{};"
+          "if(a==='peer_invite'){var o=document.querySelector('#peer-invite .invite-out');if(!o)return;o.innerHTML='';var pre=document.createElement('pre');pre.className='fleet-out';pre.style.userSelect='all';pre.textContent=r.invite||'';o.appendChild(pre);"
+          "var m=document.createElement('p');m.className='meta';m.textContent=(r.note||'')+(r.expires?' · expires '+r.expires:'');o.appendChild(m);if(r.qr_svg){var q=document.createElement('div');q.style.maxWidth='240px';q.innerHTML=r.qr_svg;o.appendChild(q);}}"
+          "if(a==='peer_join'||a==='peer_forget'){setTimeout(function(){fetch('/connections').then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var n=d.getElementById('peers-section'),o=document.getElementById('peers-section');if(n&&o){o.replaceWith(n);}});},1200);}});</script>")
+    return f"<section id='peers-section'>{head}{table}<div class='cards'>{invite}{join}</div>{js}</section>"
+
+
 def connections_body(web, minted=None, msg=""):
     conns = K.list_connections(web.etc_dir)
     rows = ""
@@ -3620,7 +3657,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/activity":
                 return self._send(200, self._page("Activity", activity_body(web), "/activity"))
             if path == "/connections":
-                return self._send(200, self._page("Connections", connections_body(web), "/connections"))
+                return self._send(200, self._page("Connections", connections_body(web) + peers_section(self._ask("peers")), "/connections"))
             if path == "/settings":
                 return self._send(200, self._page("Settings", settings_body(web) + WRITE_JS, "/settings"))
             if path.startswith("/fragment/"):
