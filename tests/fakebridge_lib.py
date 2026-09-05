@@ -104,6 +104,33 @@ class FakeBridge:
                    "alert_test": {"sent": True, "observe": False, "note": "a GeoChat to All Chat Rooms"}}[op]
             self.calls.append((op, dict(req)))
             c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+        if op in ("fences", "fence_set", "fence_delete"):
+            rep = {"fences": {"fences": [{"id": "f1a2b3c4", "name": "Compound", "kind": "polygon", "points": [[51.21, -1.51], [51.21, -1.49], [51.19, -1.49], [51.19, -1.51]], "rule": "both", "group": "", "enabled": True, "created": "2026-09-03T02:00:00Z"}]},
+                   "fence_set": {"id": req.get("id") or "0badf00d", "fence": {"id": req.get("id") or "0badf00d", "name": req.get("name"), "kind": req.get("kind") or "polygon", "rule": req.get("rule") or "both"}, "confirmed": True},
+                   "fence_delete": {"removed": req.get("id"), "confirmed": True}}[op]
+            self.calls.append((op, dict(req)))
+            c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+        if op in ("groups", "group_set", "group_delete"):
+            gs = sorted({n.get("group") for n in NODES if n.get("group")})
+            rep = {"groups": {"groups": [{"name": g, "icon": next((n.get("icon") for n in NODES if n.get("group") == g), "radio"), "count": sum(1 for n in NODES if n.get("group") == g), "declared": True} for g in gs], "icons": ["radio", "person", "vehicle", "router", "repeater", "base", "drone", "boat", "bike", "dog", "box", "medic", "flag", "star"]},
+                   "group_set": {"group": {"name": req.get("name"), "icon": req.get("icon") or "radio"}, "confirmed": True},
+                   "group_delete": {"removed": req.get("name"), "cleared": [], "confirmed": True}}[op]
+            self.calls.append((op, dict(req)))
+            c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+        if op in ("inventory", "key_accept"):
+            rep = {"inventory": {"rows": [
+                        {"id": "!aa000001", "name": "Tracker9", "hw": "TRACKER_T1000_E", "firmware": "2.6.11", "role": "TRACKER", "fingerprint": "3f9a1c0d7e2b", "key_since": "2026-09-02T10:00:00Z", "key_changed": None, "key_ack": None, "key_alarm": False, "managed": True, "behind": False, "behind_reason": "on the shelf's version", "confirmed": "2026-09-03T03:00:00Z", "heard": "2026-09-03T02:00:00Z"},
+                        {"id": "!bb000002", "name": "Tracker2", "hw": "TRACKER_T1000_E", "firmware": "2.5.20", "role": None, "fingerprint": "aa11bb22cc33", "key_since": "2026-09-01T08:00:00Z", "key_changed": "2026-09-03T01:00:00Z", "key_ack": None, "key_alarm": True, "managed": False, "behind": True, "behind_reason": "behind the shelf's 2.6.11", "confirmed": "2026-09-03T01:00:00Z", "heard": "2026-09-03T01:50:00Z"},
+                        {"id": "!cc000003", "name": "OldTracker", "hw": "HELTEC_V3", "firmware": None, "role": None, "fingerprint": None, "key_since": None, "key_changed": None, "key_ack": None, "key_alarm": False, "managed": False, "behind": None, "behind_reason": "firmware unknown: read the device on the bench or over the air", "confirmed": None, "heard": None}],
+                        "count": 3, "behind": 1, "key_alarms": 1},
+                   "key_accept": {"accepted": req.get("id"), "confirmed": True}}[op]
+            self.calls.append((op, dict(req)))
+            c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+        if op in ("channel_url", "box_position_set"):
+            rep = {"channel_url": {"index": int(req.get("index") or 0), "name": "MILUX-TAK" if int(req.get("index") or 0) == 0 else "SECOND", "url": "https://meshtastic.org/e/#FAKE-SECRET-URL-WITH-KEY"},
+                   "box_position_set": ({"cleared": True, "confirmed": True} if req.get("clear") == "on" else {"written": {"lat": req.get("lat"), "lon": req.get("lon")}, "confirmed": True, "source": "declared"})}[op]
+            self.calls.append((op, dict(req)))
+            c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
         if op in ("survey_start", "survey_stop", "survey_status"):
             rep = {"survey_start": {"started": True, "dest": req.get("dest"), "interval": int(req.get("interval") or 15), "minutes": int(req.get("minutes") or 10)},
                    "survey_stop": {"stopped": True, "dest": "!aa000001", "asked": 3}, "survey_status": {"running": False, "asked": 3, "answers": 2}}[op]
@@ -124,7 +151,7 @@ class FakeBridge:
                    "node_set_region": {"written": ["region"], "confirmed": True, "sent": "2026-09-03T03:00:00Z", "read_back": {"region": req.get("region")}},
                    "node_channel_push": {"written": ["channel"], "confirmed": True, "sent": "2026-09-03T03:00:00Z", "read_back": {"index": req.get("index"), "name": "MILUX-TAK"}},
                    "node_reboot": {"asked": "2026-09-03T03:00:00Z", "id": req.get("id"), "secs": 10}, "bench_devices": BENCH, "bench_read": BENCH_READ,
-                   "register_set": {"written": {"id": req.get("id"), "label": req.get("label"), "holder": req.get("holder")}, "confirmed": True},
+                   "register_set": {"written": {"id": req.get("id"), "label": req.get("label"), "holder": req.get("holder"), "group": req.get("group"), "tags": req.get("tags"), "icon": req.get("icon")}, "confirmed": True},
                    "bench_export": {"export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T03-00-00Z.json", "bytes": 1840, "id": "!ee000005"},
                    "bench_exports": dict(EXPORTS, id=req.get("id")), "firmware_shelf": SHELF,
                    "bench_restore": {"written": ["owner", "channels", "lora", "device", "position"], "confirmed": True, "sent": "2026-09-03T03:00:00Z", "read_back": {"long_name": "New Device", "channels": 1}},

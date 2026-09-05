@@ -79,7 +79,8 @@ def get(p):
 s, full = get("/map/full")
 check_true("AC5 /map/full is the map with no header", s == 200 and "id='map-geo'" in full and "<header" not in full and "class='bare'" in full and "id='map-pop'" not in full)
 s, mp = get("/map")
-check_true("AC5 /map has Pop out and the rings slider", s == 200 and "id='map-pop'" in mp and "id='ring-alpha'" in mp and "zoomend" in mp and "niceStep" in mp)
+# 5 Sep 2026 UX reviews: the rings are a three-way switch, not a slider, and Pop out is an icon with a name
+check_true("AC5 /map has Pop out and the rings switch", s == 200 and "id='map-pop'" in mp and "name='rings'" in mp and "zoomend" in mp and "niceStep" in mp)
 check_true("AC7 the map waits for a size before it fits and refits on resize; centre on me is a one-kilometre view (0.2.12)", "function sized()" in mp and "ResizeObserver" in mp and "visibilitychange" in mp and "toBounds(1000)" in mp and "map-centre" in mp and "!fitted&&sized()" in mp)
 check_true("AC6 each ring is a gold line over a deep-green halo (0.2.8)", "color:tok('--gold'),weight:2" in mp and "color:tok('--accent'),weight:4" in mp)
 s, nodes = get("/nodes")
@@ -92,9 +93,11 @@ _asks = _row[_row.index("row-actions"):_row.index("</div>", _row.index("row-acti
 # one has to be added to this list on purpose. Spec 032 added the fourth (4 Sep 2026).
 _expected = ["traceroute", "request_position", "request_telemetry", "request_nodeinfo"]
 check("AC5 the row's asks are exactly the air actions meant to be there, each an icon button",
-      (sorted(re.findall(r"class='line icon' data-action='([a-z_]+)'", _asks)), _asks.count("class='line icon'"), _asks.count("<svg")),
-      (sorted(_expected), 4, 5))
-check_true("AC5 no ask on the row carries a text label instead of an icon", "Start a coverage survey" not in nodes and "data-action='survey_start'" not in nodes and ">Traceroute<" not in _asks)
+      (sorted(re.findall(r"<button[^>]*class='line icon'[^>]*data-action='([a-z_]+)'", _asks)), _asks.count("class='line icon'"),
+       sum(1 for b in re.findall(r"<button[^>]*class='line icon'[^>]*>(.*?)</button>", _asks, re.S) if "<svg" in b)),   # Spec 044: the fold beside them carries the icon picker's own glyphs
+      (sorted(_expected), 4, 4))
+# 5 Sep 2026 UX reviews: every icon button carries a hidden word the labels switch reveals, so the check is that no ask is a plain word button
+check_true("AC5 no ask on the row carries a text label instead of an icon", "Start a coverage survey" not in nodes and "data-action='survey_start'" not in nodes and re.search(r"<button[^>]*>Traceroute<", _asks) is None)
 check_true("AC5 the icon buttons carry an instant tooltip (0.2.11)", "data-tip='Ask for a battery'" in nodes and "data-tip-more=" in nodes and "setAttribute('role','tooltip')" in nodes and "title='Ask for a battery" not in nodes)
 s, reg = get("/register")
 check_true("AC5 the Register page offers Forget the stale", "data-action='nodes_forget_stale'" in reg)

@@ -56,7 +56,10 @@ r = br.op_bench_restore(path=NEW, export=exp) if hasattr(br, "op_bench_restore")
 check("AC2 restore writes the export and reads it back", (r.get("confirmed"), dev.device_owner.long_name, dev.device_channels[0].settings.name), (True, "New Device", "LongFast"))
 check("AC2 the security section is the device's own, untouched", [bytes(k) for k in dev.device_config.security.admin_key], keys_before)
 _psk = dev.device_channels[0].settings.psk.hex()
-check_true("AC2 the answer holds no key material", "psk" not in json.dumps(r) and (not _psk or _psk not in json.dumps(r)), f"psk bytes {len(_psk) // 2}")  # an empty psk made the substring test vacuous and the suite flaky
+# A one-byte psk is Meshtastic's index of a well-known key, not key material, and its hex ("01") sits
+# inside any date the answer carries, which is why the check failed on one interpreter and not the
+# other. Only a real key (16 bytes or more) can leak, so only a real key is looked for by value.
+check_true("AC2 the answer holds no key material", "psk" not in json.dumps(r) and (len(_psk) < 32 or _psk not in json.dumps(r)), f"psk bytes {len(_psk) // 2}")
 # an export from another id
 other_dir = os.path.join(state, "exports", "!dd000004"); os.makedirs(other_dir, exist_ok=True)
 other = os.path.join(other_dir, "2026-09-01T00-00-00Z.json")

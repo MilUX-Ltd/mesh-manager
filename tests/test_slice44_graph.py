@@ -34,9 +34,11 @@ def get(p):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return r.status, b
 st, body = get("/graph")
 check("AC3 the page answers", st, 200)
-check_true("AC5 on the More menu", ("/graph", "Graph") in W.NAV_MORE)
+# 5 Sep 2026 content review: the map's checkbox and this page draw the same reports, so one word covers both
+check_true("AC5 on the More menu", ("/graph", "Neighbours") in W.NAV_MORE)
 check_true("AC3 an SVG with a node per id and an edge per pair", "<svg" in body and "data-edge=" in body and "data-node='!aa000001'" in body and "data-node='!bb000002'" in body)
 FB.NEIGHBORS = {"edges": []}
 st, body = get("/graph")
-check_true("AC4 with no edges it says the module is off and how to turn it on", "neighbour" in body.lower() and "node_set" in body)
+# 5 Sep 2026 content review: node_set cannot turn neighbour info on, so the empty state no longer says it can
+check_true("AC4 with no edges it says the module is off and how to turn it on", "neighbour" in body.lower() and "bench" in body.lower() and "node_set" not in body)
 finish()

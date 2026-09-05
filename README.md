@@ -54,6 +54,13 @@ version line stays 0.x until the interface settles; the
   A packet inspector. Playback of the last hours on the map. Export as GPX, KML or CSV.
 - **Waypoints across the bridge.** A pin dropped on the mesh reaches TAK as a marker, and the
   screen can drop one.
+- **Groups, icons and fences.** Put radios in groups with a map icon each, filter the map, the
+  lists, the alerts and the exports by group, message a group, and draw fences on the map that
+  alert when a radio crosses. Playback replays the window on a timeline with a row per node.
+- **Inventory.** Hardware, firmware (as each device reported it), the key each radio holds and
+  since when; a changed key is an alarm until you accept it; behind the shelf's image is a word.
+- **On your phone.** Installable from the browser (a manifest and icons, no service worker),
+  44 px targets, tooltips on a long press, every icon with a word behind a switch.
 - **Updates.** The screen checks for a release, verifies its hash, and applies it on one
   press, and can roll back to any release still on the box. The box downloads nothing else.
 - **An AI surface.** An MCP endpoint, an agent role and a set of skills, all derived from the

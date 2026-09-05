@@ -63,6 +63,7 @@ check_true("AC3 the Health page renders the cards, the chart and the table", s =
 s, frag = get("/fragment/health")
 check_true("AC3 the fragment renders the same cards", s == 200 and "Packets per hour" in frag and "<h2>Per node</h2>" in frag)
 s, home = get("/")
-check_true("AC3 the overview carries the Mesh health card", s == 200 and "Mesh health" in home and "href='/health'" in home)
+# 5 Sep 2026 UX reviews: the card says what the number is, channel utilisation, the name the Health page uses
+check_true("AC3 the overview carries the channel utilisation card", s == 200 and "Channel utilisation" in home and "href='/health'" in home)
 srv.shutdown()
 finish()

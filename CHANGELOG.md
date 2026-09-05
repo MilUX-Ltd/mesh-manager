@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+## 0.7.0 (5 September 2026)
+
+The UX pass and five features, one release. Four reviews (product manager, user
+researcher, content designer, interaction designer) read every rendered page and `web.py`; their
+ranked findings were built where they agreed, recorded on the card where they split. Fifty-one
+suites green; every one of the five features had its spec at Definition of Ready and its suite
+committed failing first.
+
+- **Icons carry their words.** One helper builds every icon control with a name, a tip and a
+  hidden word; the header's *Words on buttons* switch shows the word beside every glyph, on by
+  default on a phone, remembered. Tooltips work on touch (a press held 450 ms shows the tip and
+  swallows the tap), on Escape, and reach assistive technology; the native `title` attributes are
+  gone. Destructive controls (Delete, Forget, Rotate key) and the primary nav stay words.
+- **No browser dialogs.** Every confirm is an in-page panel (Yes, do it / No; focus on No; Escape
+  cancels). The consequence tick points at itself. Read again fetches in place, no reload.
+- **Reachable on a phone.** 44 px targets, 3:1 control edges on the brand blue-grey, focus rings,
+  the state strip folding behind a chevron, More on the bottom bar opening upwards, the join QR
+  as a dialog above the header, folding register columns.
+- **The nav the operator lives on:** Mesh, Nodes, Messages, Channels, Health; Radio in More with
+  the rest grouped. Home is the map, three cards and the rest folded; the node table lives on
+  Nodes only. The map controls fold into *Map layers* (open on a wide screen); rings are a
+  switch; a waypoint is placed by pressing the map or typing a grid reference.
+- **Nodes** has a filter row (find, quiet, battery low, no fix, an order) and a *quiet* verdict
+  against the Health threshold; the ask line reads as English. **Messages** sends first, has a
+  State column, the button names the destination, a broadcast says it is never acknowledged.
+  **Channels** says Slot and *no key*, has a join QR per channel (`channel_url`, over the
+  socket, never the API), pushes a slot to every managed device with a per-device read-back, and
+  dresses the adopt form as danger only when Replace is chosen. **Bench** names the device by
+  what it is, Read then Onboard (label and holder written to the register in the same act), the
+  rest under More, nothing flashes before a read, a role hint, the bootloader drill as three
+  steps naming the file. **Health** puts alerts first and thresholds behind a fold with On/Off
+  switches; the export is in words. **Settings** has three saves that say which, and *Where this
+  box is* (`box_position_set`, kept on the box, a receiver's fix still first). **Help** starts
+  with setting the kit up. Clocks are Zulu everywhere. Units, byte limits, empty states and
+  broken states rewritten; one name for the radio.
+- **Fleet inventory (Spec 043).** The register keeps each node's public key, hardware and role
+  from the radio's database, written only when they change. A key that differs from the one on
+  file raises alert kind `key` until `key_accept`. `inventory` lists every radio with the
+  firmware it itself reported, the shelf's verdict in words (behind, on the shelf's version, no
+  image, unknown) and the key's fingerprint; the Register page carries the columns and
+  `/export/inventory.csv`.
+- **Groups, tags and icons (Spec 044).** A node belongs to a group, carries tags and a map icon
+  of its own or its group's, from a set of fourteen declared once and drawn once. The map, the
+  node list, the trails, the neighbours, the alerts and the exports narrow by `group=`; a
+  message to `group:<name>` is one direct message per member, each with its own receipt. Groups
+  are made on the Register page; the node row's fold sets name, group, tags and icon in one save.
+- **Geofence alerts (Spec 045).** Fences drawn on the map (press the corners and Finish, or a
+  circle from a centre and a radius), named, with a crossing rule and a group. The alert pass
+  keeps the last side of every fence and node and raises `geofence` on a crossing that matches;
+  the opposite crossing clears it. The radius fence on Health is now named *around this box*.
+- **Installable (Spec 046).** A manifest, icons at 192 and 512 (any and maskable), an Apple touch
+  icon and an SVG, served before sign-in; drawn by `release/make-icons.py` in the brand's colours.
+  No service worker. On iOS, Add to Home Screen opens it standalone over plain http; Android
+  Chrome installs it as an app only over https, and offers a home-screen shortcut otherwise.
+- **Playback with a timeline (Spec 047).** A row per node and a tick per report under the map,
+  seekable by press or drag; play, to the start, reverse, speeds to 1000x, fit; space, the
+  arrows, `[` `]`, `r` and `f`. Nothing interpolated; a node is hollow with its age when its last
+  report is older than four times its median interval; the run since its last gap is bold. The
+  trails window gains 3 d.
+- The role's autonomy table was regenerated for the nine new actions; its R-28 re-audit is due.
+
 ## 0.6.0 (5 September 2026)
 
 Nine features every tool in this class is expected to have, built one at a time in a single

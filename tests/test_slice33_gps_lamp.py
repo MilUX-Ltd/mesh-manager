@@ -57,7 +57,8 @@ check_true("AC5 a fix: an ok lamp", "lamp--ok" in s and "GPS fix" in s)
 check_true("AC5 a fix: satellites used are shown", re.search(r"8\s*(satellites?|sats?)\b", s, re.I) is not None)
 
 # ---- AC6 the detail is in the tooltip ---------------------------------------------------------------
-check_true("AC6 the tooltip names what was read", "data-tip" in s and "gpsd://127.0.0.1:2947" in s)
+# 5 Sep 2026 content review: the tip names the receiver in words, not its socket address (that is for whoever installed the box)
+check_true("AC6 the tooltip names what was read", "data-tip" in s and "Receiver: gpsd" in s)
 check_true("AC6 the tooltip carries when it was last read", "2026-09-04T10:00:00Z" in s or "10:00" in s)
 
 # a source that reports no satellite counts must not print an empty count

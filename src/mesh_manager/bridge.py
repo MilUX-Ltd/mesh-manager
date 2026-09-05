@@ -27,10 +27,93 @@ except ImportError:  # the gateway depends on it; a bench without it still impor
 
 from . import __version__
 from . import catalogue as C
-from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, read_config, utc
+from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, read_config, utc
 from .history import History
 
 SILENCE_LIMIT = 600                              # the deployed watchdog's figure
+
+
+def firmware_behind(have, pinned):
+    """Spec 043: is the firmware a device reports behind the shelf's image? Dotted numbers compared in
+    order, a trailing build hash ignored; None when the device's version is unknown or unreadable."""
+    def nums(v):
+        m = re.match(r"^\s*(\d+(?:\.\d+)*)", str(v or ""))
+        return [int(x) for x in m.group(1).split(".")] if m else None
+    a, b = nums(have), nums(pinned)
+    if a is None or b is None:
+        return None
+    n = max(len(a), len(b))
+    a, b = a + [0] * (n - len(a)), b + [0] * (n - len(b))
+    return a < b
+
+
+def point_in_polygon(lat, lon, points):
+    """Spec 045: ray casting over (lat, lon) pairs; a point on the boundary counts as inside."""
+    pts = [(float(p[0]), float(p[1])) for p in (points or []) if p is not None and len(p) >= 2]
+    if len(pts) < 3:
+        return False
+    inside = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        yi, xi = pts[i]; yj, xj = pts[j]
+        if (xi > lon) != (xj > lon):
+            cross = (yj - yi) * (lon - xi) / ((xj - xi) or 1e-12) + yi
+            if lat < cross:
+                inside = not inside
+        j = i
+    return inside
+
+
+def in_circle(lat, lon, clat, clon, radius_m):
+    return _haversine(float(lat), float(lon), float(clat), float(clon)) <= float(radius_m)
+
+
+def fence_inside(fence, lat, lon):
+    if fence.get("kind") == "circle":
+        c = fence.get("centre") or [None, None]
+        return in_circle(lat, lon, c[0], c[1], fence.get("radius_m") or 0)
+    return point_in_polygon(lat, lon, fence.get("points") or [])
+
+
+def fence_transitions(fences, state, nodes):
+    """Spec 045: the crossings since the last look. state holds the last known side of every
+    (fence, node) pair; the first sight of a pair records the side and raises nothing. Returns
+    (events, new_state), an event being {fence, fence_name, node, name, kind: enter|leave}."""
+    state = dict(state or {})
+    events = []
+    for f in fences or []:
+        if not f.get("enabled", True):
+            continue
+        fid = str(f.get("id") or "")
+        for n in nodes or []:
+            nid = n.get("id")
+            if not nid or n.get("lat") is None or n.get("lon") is None:
+                continue
+            if f.get("group") and str(n.get("group") or "") != str(f["group"]):
+                continue
+            try:
+                inside = fence_inside(f, float(n["lat"]), float(n["lon"]))
+            except (TypeError, ValueError):
+                continue
+            key = f"{fid}:{nid}"
+            prev = state.get(key)
+            state[key] = inside
+            if prev is None or prev == inside:
+                continue
+            kind = "enter" if inside else "leave"
+            if f.get("rule", "both") in (kind, "both"):
+                events.append({"fence": fid, "fence_name": f.get("name") or fid, "node": nid, "name": n.get("name") or nid, "kind": kind})
+    return events, state
+
+
+def key_fingerprint(key_b64):
+    """Twelve hex of the sha256 of the key bytes: short enough to read out, long enough to compare."""
+    import base64, hashlib
+    try:
+        raw = base64.b64decode(str(key_b64 or "") + "==")
+    except (ValueError, TypeError):
+        return None
+    return hashlib.sha256(raw).hexdigest()[:12] if raw else None
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")       # the radio's debug log arrives coloured
 WATCHDOG_TICK = 30
 LINK_HISTORY = 200   # SNR readings kept per node (Spec 008)
@@ -525,13 +608,20 @@ class Bridge(TAKMeshtasticGateway):
 
     def op_nodes(self, **_):
         db = getattr(self.interface, "nodes", {}) or {}
-        labels = {k: str(v.get("label") or "") for k, v in self._register_load().items()} if hasattr(self, "_register_load") else {}
+        regall = self._register_load() if hasattr(self, "_register_load") else {}
+        labels = {k: str(v.get("label") or "") for k, v in regall.items()}
+        groups = self._groups_load()
         out = []
         for n in self.mesh_nodes():
             rec = db.get(n.get("id"), {}) if isinstance(db, dict) else {}
             u = rec.get("user", {}) if isinstance(rec, dict) else {}
             n = dict(n)
             n["label"] = labels.get(n.get("id"), "")
+            r_ = regall.get(n.get("id"), {}) if isinstance(regall.get(n.get("id")), dict) else {}
+            n["group"] = str(r_.get("group") or "")
+            n["tags"] = list(r_.get("tags") or [])
+            n["icon_own"] = r_.get("icon") or ""
+            n["icon"] = r_.get("icon") or (groups.get(n["group"]) or {}).get("icon") or "radio"
             # the battery, by trust: the telemetry this bridge heard (newest wins), the library's
             # node database, the gateway's figure. Above 100 means on external power (Spec 018).
             bat = self.batteries.get(n.get("id"))
@@ -554,10 +644,84 @@ class Bridge(TAKMeshtasticGateway):
             n["battery_ts"] = ts
             n["hw"] = u.get("hwModel")
             n["short"] = u.get("shortName")
+            self._identity_note(n.get("id"), u.get("publicKey"), u.get("hwModel"), u.get("role"))
             lh = rec.get("lastHeard") if isinstance(rec, dict) else None
             n["last_heard_db"] = utc(lh) if lh else None
             out.append(n)
         return {"nodes": out, "count": len(out)}
+
+    def _identity_note(self, nid, key, hw, role):
+        """Spec 043: the radio's database says what a node is (hardware, role) and which public key it
+        holds. Written to the register only when it changes, so the poll costs nothing; a changed key
+        is kept beside the one before, for the alert pass to raise."""
+        if not nid or not re.fullmatch(r"![0-9a-f]{8}", str(nid)):
+            return
+        cache = self.__dict__.setdefault("_ident_cache", {})
+        new = (str(key or ""), str(hw or ""), str(role or ""))
+        if cache.get(nid) == new:
+            return
+        cache[nid] = new
+        reg = self._register_load()
+        entry = reg.setdefault(nid, {})
+        changed = False
+        if hw and entry.get("hw") != hw:
+            entry["hw"] = hw; changed = True
+        if role and entry.get("role") != role:
+            entry["role"] = role; changed = True
+        if key:
+            old = entry.get("public_key")
+            if not old:
+                entry["public_key"] = key; entry["key_since"] = utc(time.time()); changed = True
+            elif old != key:
+                entry.update({"key_previous": old, "public_key": key, "key_changed": utc(time.time())}); changed = True
+                self.logger.warning(f"the public key of {nid} changed; if the radio was not reflashed, treat it as an impostor")
+        if changed:
+            self._register_save(reg)
+            self._emit("register", id=nid)
+
+    def op_inventory(self, **_):
+        """Spec 043: one row per radio the register or the database knows: what it is, what it runs,
+        which key it holds, whether it is behind the shelf's verified image, when that was confirmed."""
+        reg = self._register_load()
+        nodes = {n.get("id"): n for n in self.op_nodes().get("nodes", []) if n.get("id")}
+        try:
+            images = [i for i in (self.op_firmware_shelf().get("images") or []) if not str(i.get("version") or "").startswith("erase")]
+        except Exception:  # noqa: BLE001
+            images = []
+        rows = []
+        for nid in sorted(set(reg) | set(nodes)):
+            r, n = reg.get(nid, {}), nodes.get(nid, {})
+            hw = n.get("hw") or r.get("hw")
+            fw = r.get("firmware")
+            img = next((i for i in images if hw and hw in (i.get("hw") or []) and i.get("recommended")), None) or next((i for i in images if hw and hw in (i.get("hw") or [])), None)
+            if fw is None:
+                behind, why = None, "firmware unknown: read the device on the bench or over the air"
+            elif not img:
+                behind, why = None, "no image for this hardware on the shelf"
+            elif img.get("state") != "verified":
+                behind, why = None, f"the shelf's image for this hardware ({img.get('version')}) is not verified on this box"
+            else:
+                behind = firmware_behind(fw, img.get("version"))
+                why = (f"behind the shelf's {img.get('version')}" if behind else ("on the shelf's version" if behind is False and firmware_behind(img.get("version"), fw) is False else f"newer than the shelf's {img.get('version')}")) if behind is not None else "firmware unreadable"
+            confirmed = max([x for x in (r.get("seen_on_bench"), r.get("seen_on_air"), r.get("key_since")) if x] or [""]) or None
+            rows.append({"id": nid, "name": r.get("label") or n.get("name") or r.get("name") or nid, "hw": hw, "firmware": fw, "role": n.get("role") or r.get("role"),
+                         "fingerprint": key_fingerprint(r.get("public_key")), "key_since": r.get("key_since"), "key_changed": r.get("key_changed"), "key_ack": r.get("key_ack"),
+                         "key_alarm": bool(r.get("key_changed") and str(r.get("key_changed")) > str(r.get("key_ack") or "")),
+                         "managed": bool(r.get("managed")), "behind": behind, "behind_reason": why, "confirmed": confirmed, "heard": n.get("heard")})
+        return {"rows": rows, "count": len(rows), "behind": sum(1 for x in rows if x["behind"]), "key_alarms": sum(1 for x in rows if x["key_alarm"])}
+
+    def op_key_accept(self, id=None, **_):
+        """The operator has looked at a changed key and accepts it (the radio was reflashed, or it is a
+        new radio under an old id); the alarm clears and the key on file stands."""
+        nid = str(id or "").strip()
+        reg = self._register_load()
+        if nid not in reg:
+            return {"error": f"no device {nid} in the register"}
+        reg[nid]["key_ack"] = utc(time.time())
+        self._register_save(reg)
+        a = self._alerts_load(); self._clear_alert(a, nid, "key"); self._alerts_save(a)
+        self._emit("register", id=nid)
+        return {"accepted": nid, "confirmed": True}
 
     def op_node(self, id=None, **_):
         for n in self.op_nodes()["nodes"]:
@@ -601,6 +765,20 @@ class Bridge(TAKMeshtasticGateway):
         if len(text.encode()) > 200:
             return {"error": "a mesh message is 200 bytes at most"}
         dest = to or "^all"
+        if isinstance(dest, str) and dest.startswith("group:"):
+            # Spec 044: Meshtastic has no group address, so a group message is one direct message per member,
+            # each with its own receipt; the screen says "n of m delivered", never "sent to the group"
+            gname = dest[6:].strip()
+            reg = self._register_load()
+            members = sorted(nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == gname)
+            if not members:
+                return {"error": f"no device in group {gname!r}"}
+            ids = [self._send_one(text, int(channel or 0), m) for m in members]
+            return {"members": members, "ids": ids, "sent": text, "to": dest, "channel": int(channel or 0)}
+        pid = self._send_one(text, int(channel or 0), dest)
+        return {"id": pid, "sent": text, "to": dest, "channel": int(channel or 0)}
+
+    def _send_one(self, text, channel, dest):
         # Spec 034: wantAck asks the radio to report delivery; the answer arrives on ROUTING_APP at
         # the handler, never by waiting. The id is how the answer finds the message again.
         pkt = self.interface.sendText(text, destinationId=dest, channelIndex=int(channel or 0), wantAck=True, onResponse=self._on_ack)
@@ -619,7 +797,31 @@ class Bridge(TAKMeshtasticGateway):
         own = self._own()
         self._emit("text", **{"from": own.get("id"), "name": own.get("name") or "this radio", "to": dest,
                               "channel": int(channel or 0), "text": text, "sent": True})
-        return {"id": pid, "sent": text, "to": dest, "channel": int(channel or 0)}
+        return pid
+
+    def op_channel_url(self, index=0, **_):
+        """A join URL for one channel slot alone, for a device joining a secondary channel from its own QR
+        (5 Sep 2026 reviews: a channel created on the screen had no way to reach a handset). The screen asks
+        this over the socket and turns it into a PNG; it is not a catalogue action, so the key never leaves
+        the box through the API."""
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            return {"error": "index must be 0 to 7"}
+        try:
+            from meshtastic.protobuf import apponly_pb2, channel_pb2
+            import base64
+            chans = list(self.interface.localNode.channels or [])
+            c = next((x for x in chans if int(x.index) == idx and x.role != channel_pb2.Channel.Role.DISABLED), None)
+            if c is None:
+                return {"error": f"no live channel in slot {idx}"}
+            cs = apponly_pb2.ChannelSet()
+            st = cs.settings.add(); st.CopyFrom(c.settings)
+            cs.lora_config.CopyFrom(self.interface.localNode.localConfig.lora)
+            url = "https://meshtastic.org/e/#" + base64.urlsafe_b64encode(cs.SerializeToString()).decode().rstrip("=")
+            return {"index": idx, "name": c.settings.name or "", "url": url}
+        except Exception as ex:  # noqa: BLE001
+            return {"error": f"the channel could not be encoded: {type(ex).__name__}"}
 
     def op_traceroute(self, dest=None, **_):
         if not dest:
@@ -881,6 +1083,9 @@ class Bridge(TAKMeshtasticGateway):
         radio_fix, radio_stored = self._radio_own_gps()
         if radio_fix:
             return dict(radio_fix, source="radio_gps")
+        decl = self._declared_position()
+        if decl:
+            return {"lat": decl["lat"], "lon": decl["lon"], "source": "declared", "time": decl.get("set")}
         lat, lon = self.conf.get("MAP_LAT"), self.conf.get("MAP_LON")
         try:
             if lat not in (None, "") and lon not in (None, ""):
@@ -898,6 +1103,40 @@ class Bridge(TAKMeshtasticGateway):
         # whatever it was last told (330 km off on the kit), and it showed for the minutes after
         # a restart before any device was heard. Nothing real means no position.
         return None
+
+    def _position_path(self):
+        return os.path.join(self.state_dir, "position.json")
+
+    def _declared_position(self):
+        try:
+            d = json.load(open(self._position_path()))
+            return {"lat": float(d["lat"]), "lon": float(d["lon"]), "set": d.get("set")}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def op_box_position_set(self, lat=None, lon=None, clear=None, **_):
+        """Spec 007 review, 5 Sep 2026: a box with no receiver had no way to be given a position on the
+        screen, and without one the map view is off. Kept on the box; a receiver's fix still wins."""
+        if str(clear or "").lower() in ("on", "yes", "true", "1"):
+            try:
+                os.remove(self._position_path())
+            except OSError:
+                pass
+            self._emit("status", **self.op_status())
+            return {"cleared": True, "confirmed": True}
+        try:
+            la, lo = float(str(lat).strip()), float(str(lon).strip())
+        except (TypeError, ValueError):
+            return {"error": "lat and lon must be decimal degrees, like 51.5000 and -0.1200"}
+        if not (-90 <= la <= 90 and -180 <= lo <= 180):
+            return {"error": "lat is -90 to 90 and lon is -180 to 180"}
+        os.makedirs(self.state_dir, exist_ok=True)
+        tmp = self._position_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"lat": round(la, 6), "lon": round(lo, 6), "set": utc(time.time())}, fh)
+        os.replace(tmp, self._position_path())
+        self._emit("status", **self.op_status())
+        return {"written": {"lat": round(la, 6), "lon": round(lo, 6)}, "confirmed": True, "source": self.own_position().get("source")}
 
     def op_links(self, **_):
         own, pos = self._own(), self.own_position() or {}
@@ -935,6 +1174,7 @@ class Bridge(TAKMeshtasticGateway):
 
     def op_register(self, **_):
         reg = self._register_load()
+        groups = self._groups_load()
         rows, seen = [], set()
         for n in self.op_nodes().get("nodes", []):
             r = reg.get(n.get("id"), {})
@@ -947,24 +1187,97 @@ class Bridge(TAKMeshtasticGateway):
                 continue
             # onboarded on the bench, never yet heard on the air: in the register, not in the radio's database
             rows.append({"id": nid, "name": r.get("name") or nid, "heard_here": False, "heard": None, "battery": None, "snr": None, "hops": None,
+                         "group": str(r.get("group") or ""), "tags": list(r.get("tags") or []), "icon": r.get("icon") or (groups.get(str(r.get("group") or "")) or {}).get("icon") or "radio",
                          "label": r.get("label", ""), "holder": r.get("holder", ""), "note": r.get("note", ""), "hw": r.get("hw"), "firmware": r.get("firmware"),
                          "role": r.get("role"), "managed": bool(r.get("managed")), "managed_at": r.get("managed_at"), "onboarded_at": r.get("onboarded_at"),
                          "export_at": r.get("export_at"), "bench_only": True})
         return {"rows": rows, "count": len(rows)}
 
-    def op_register_set(self, id=None, label=None, holder=None, note=None, **_):
+    def op_register_set(self, id=None, label=None, holder=None, note=None, group=None, tags=None, icon=None, **_):
         nid = str(id or "").strip()
         if not re.fullmatch(r"![0-9a-f]{8}", nid):
             return {"error": "id must be a radio id, !hex"}
+        if icon is not None and str(icon) not in ("", "inherit") and str(icon) not in NODE_ICONS:
+            return {"error": "icon must be one of: " + ", ".join(NODE_ICONS) + ", or inherit for the group's"}
         reg = self._register_load()
         entry = reg.setdefault(nid, {})
         for k, v in (("label", label), ("holder", holder), ("note", note)):
             if v is not None:
                 entry[k] = str(v)[:200]
+        if group is not None:
+            entry["group"] = str(group).strip()[:40]
+        if tags is not None:
+            raw = tags if isinstance(tags, list) else str(tags).split(",")
+            seen, clean = set(), []
+            for t in raw:
+                t = str(t).strip()[:24]
+                if t and t.lower() not in seen:
+                    seen.add(t.lower()); clean.append(t)
+            entry["tags"] = clean[:10]
+        if icon is not None:
+            entry["icon"] = "" if str(icon) in ("", "inherit") else str(icon)
         entry["updated"] = utc(time.time())
         self._register_save(reg)
         self._emit("register", id=nid)
-        return {"written": {"id": nid, "label": entry.get("label", ""), "holder": entry.get("holder", ""), "note": entry.get("note", "")}, "confirmed": True}
+        return {"written": {"id": nid, "label": entry.get("label", ""), "holder": entry.get("holder", ""), "note": entry.get("note", ""),
+                            "group": entry.get("group", ""), "tags": entry.get("tags", []), "icon": entry.get("icon", "")}, "confirmed": True}
+
+    # ---- groups (Spec 044): a name and an icon, kept on the box; membership lives on each register entry
+    def _groups_path(self):
+        return os.path.join(self.state_dir, "groups.json")
+
+    def _groups_load(self):
+        try:
+            d = json.load(open(self._groups_path()))
+            return {str(k): v for k, v in d.items() if isinstance(v, dict)}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def _groups_save(self, g):
+        os.makedirs(self.state_dir, exist_ok=True)
+        tmp = self._groups_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(g, fh, indent=1, sort_keys=True)
+        os.replace(tmp, self._groups_path())
+
+    def op_groups(self, **_):
+        g = self._groups_load()
+        reg = self._register_load()
+        counts = {}
+        for r in reg.values():
+            if isinstance(r, dict) and r.get("group"):
+                counts[str(r["group"])] = counts.get(str(r["group"]), 0) + 1
+        names = sorted(set(g) | set(counts), key=str.lower)
+        return {"groups": [{"name": n, "icon": (g.get(n) or {}).get("icon") or "radio", "count": counts.get(n, 0), "declared": n in g} for n in names], "icons": list(NODE_ICONS)}
+
+    def op_group_set(self, name=None, icon=None, **_):
+        name = str(name or "").strip()[:40]
+        if not name:
+            return {"error": "name is required"}
+        icon = str(icon or "radio")
+        if icon not in NODE_ICONS:
+            return {"error": "icon must be one of: " + ", ".join(NODE_ICONS)}
+        g = self._groups_load()
+        g[name] = {"icon": icon, "created": (g.get(name) or {}).get("created") or utc(time.time())}
+        self._groups_save(g)
+        self._emit("register", group=name)
+        return {"group": {"name": name, "icon": icon}, "confirmed": True}
+
+    def op_group_delete(self, name=None, **_):
+        name = str(name or "").strip()
+        g = self._groups_load()
+        reg = self._register_load()
+        cleared = [nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == name]
+        if name not in g and not cleared:
+            return {"error": f"no group {name!r}"}
+        g.pop(name, None)
+        for nid in cleared:
+            reg[nid]["group"] = ""
+        self._groups_save(g)
+        if cleared:
+            self._register_save(reg)
+        self._emit("register", group=name)
+        return {"removed": name, "cleared": cleared, "confirmed": True}
 
     def _register_note(self, snap, where="bench", **more):
         """What a read of the device itself established: hardware, firmware, role, managed."""
@@ -1686,8 +1999,9 @@ class Bridge(TAKMeshtasticGateway):
             finally:
                 iface.close()
 
-    def op_bench_onboard(self, path=None, long_name=None, short_name=None, role=None, **_):
+    def op_bench_onboard(self, path=None, long_name=None, short_name=None, role=None, label=None, holder=None, **_):
         long_name, short_name, role = str(long_name or "").strip(), str(short_name or "").strip(), str(role or "").strip()
+        _lh = {k: str(v).strip()[:80] for k, v in (("label", label), ("holder", holder)) if v and str(v).strip()}
         if not long_name or len(long_name.encode()) > 39:
             return {"error": "long_name is required, 39 bytes at most"}
         if not short_name or len(short_name.encode()) > 4:
@@ -2436,7 +2750,98 @@ class Bridge(TAKMeshtasticGateway):
         except (OSError, ValueError):
             d = {}
         st = dict(self.ALERT_DEFAULTS); st.update({k: v for k, v in (d.get("settings") or {}).items() if k in self.ALERT_DEFAULTS})
-        return {"settings": st, "open": d.get("open") or {}, "alerted_unknown": d.get("alerted_unknown") or []}
+        return {"settings": st, "open": d.get("open") or {}, "alerted_unknown": d.get("alerted_unknown") or [], "fence_state": d.get("fence_state") or {}}
+
+    # ---- geofences (Spec 045): drawn areas, kept on the box; crossings become alerts
+    def _fences_path(self):
+        return os.path.join(self.state_dir, "fences.json")
+
+    def _fences_load(self):
+        try:
+            d = json.load(open(self._fences_path()))
+            return [f for f in d if isinstance(f, dict) and f.get("id")]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def _fences_save(self, fences):
+        os.makedirs(self.state_dir, exist_ok=True)
+        tmp = self._fences_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(fences, fh, indent=1)
+        os.replace(tmp, self._fences_path())
+
+    def op_fences(self, **_):
+        return {"fences": self._fences_load()}
+
+    def op_fence_set(self, id=None, name=None, kind=None, points=None, lat=None, lon=None, radius_m=None, rule=None, group=None, enabled=None, **_):
+        fences = self._fences_load()
+        fid = str(id or "").strip()
+        cur = next((f for f in fences if f["id"] == fid), None) if fid else None
+        if fid and cur is None:
+            return {"error": f"no fence {fid}"}
+        f = dict(cur or {})
+        if name is not None or not f.get("name"):
+            nm = str(name or "").strip()[:40]
+            if not nm:
+                return {"error": "name is required"}
+            f["name"] = nm
+        kind = str(kind or f.get("kind") or "polygon")
+        if kind not in ("polygon", "circle"):
+            return {"error": "kind must be polygon or circle"}
+        f["kind"] = kind
+        rule = str(rule or f.get("rule") or "both")
+        if rule not in ("enter", "leave", "both"):
+            return {"error": "rule must be enter, leave or both"}
+        f["rule"] = rule
+        if kind == "polygon" and (points is not None or not f.get("points")):
+            try:
+                pts = json.loads(points) if isinstance(points, str) else (points or [])
+                pts = [[float(p[0]), float(p[1])] for p in pts]
+            except (TypeError, ValueError, IndexError):
+                return {"error": "points must be a list of [lat, lon] pairs"}
+            if len(pts) < 3:
+                return {"error": "a fence needs at least three points"}
+            if len(pts) > 200:
+                return {"error": "two hundred points at most"}
+            if any(not (-90 <= p[0] <= 90 and -180 <= p[1] <= 180) for p in pts):
+                return {"error": "a point is off the earth"}
+            f["points"] = pts; f.pop("centre", None); f.pop("radius_m", None)
+        if kind == "circle" and (lat is not None or lon is not None or radius_m is not None or not f.get("centre")):
+            try:
+                c = [float(str(lat).strip()), float(str(lon).strip())]; r = float(radius_m)
+            except (TypeError, ValueError):
+                return {"error": "a circle needs lat, lon and radius_m"}
+            if not (10 <= r <= 100000):
+                return {"error": "radius_m must be 10 to 100000 metres"}
+            f["centre"] = c; f["radius_m"] = r; f.pop("points", None)
+        if group is not None:
+            f["group"] = str(group).strip()[:40]
+        if enabled is not None:
+            f["enabled"] = str(enabled).lower() not in ("off", "no", "false", "0")
+        f.setdefault("enabled", True)
+        if cur is None:
+            import secrets as _secrets
+            f["id"] = _secrets.token_hex(4); f["created"] = utc(time.time())
+            fences.append(f)
+        else:
+            fences[fences.index(cur)] = f
+        f["updated"] = utc(time.time())
+        self._fences_save(fences)
+        self._emit("fence", id=f["id"])
+        return {"id": f["id"], "fence": {k: v for k, v in f.items()}, "confirmed": True}
+
+    def op_fence_delete(self, id=None, **_):
+        fid = str(id or "").strip()
+        fences = self._fences_load()
+        keep = [f for f in fences if f["id"] != fid]
+        if len(keep) == len(fences):
+            return {"error": f"no fence {fid}"}
+        self._fences_save(keep)
+        a = self._alerts_load()
+        a["fence_state"] = {k: v for k, v in a.get("fence_state", {}).items() if not k.startswith(fid + ":")}
+        self._alerts_save(a)
+        self._emit("fence", id=fid, removed=True)
+        return {"removed": fid, "confirmed": True}
 
     def _alerts_save(self, a):
         try:
@@ -2569,6 +2974,26 @@ class Bridge(TAKMeshtasticGateway):
                     raised += self._raise_alert(a, nid, "fence", f"{name} is {int(d)} m from the box, outside the {st['fence_m']} m fence")
                 else:
                     self._clear_alert(a, nid, "fence")
+        # Spec 045: crossings of the drawn fences, from where every node is now
+        fences = [f for f in self._fences_load() if f.get("enabled", True)]
+        if fences:
+            try:
+                rows = [dict(n, name=str(reg.get(n.get("id"), {}).get("label") or n.get("name") or n.get("id"))) for n in self.op_nodes().get("nodes", []) if n.get("id") != own]
+                events, a["fence_state"] = fence_transitions(fences, a.get("fence_state") or {}, rows)
+                for ev in events:
+                    self._clear_alert(a, ev["node"], "geofence")
+                    raised += self._raise_alert(a, ev["node"], "geofence", f"{ev['name']} {'entered' if ev['kind'] == 'enter' else 'left'} {ev['fence_name']}")
+            except Exception as ex:  # noqa: BLE001
+                self.logger.warning(f"the fence check failed: {type(ex).__name__}: {ex}")
+        # Spec 043: a public key that is not the one on file, until the operator accepts it
+        for nid, r in reg.items():
+            if not isinstance(r, dict):
+                continue
+            if r.get("key_changed") and str(r["key_changed"]) > str(r.get("key_ack") or ""):
+                nm = str(r.get("label") or r.get("name") or nid)
+                raised += self._raise_alert(a, nid, "key", f"{nm} public key changed {str(r['key_changed'])[:16]}Z; if the radio was not reflashed, treat it as an impostor")
+            else:
+                self._clear_alert(a, nid, "key")
         self._alerts_save(a)
         return raised
 

@@ -7,6 +7,10 @@ DEFAULT_CONFIG = "/etc/mesh-manager/config"
 DEFAULT_SOCKET = "/run/mesh-manager/bridge.sock"
 DEFAULT_STATE = "/var/lib/vantage-mesh"          # the health contract keeps its old name
 
+# Spec 044: the map icons a node or a group may carry. The screen draws them; the bridge validates against
+# this list, so the two cannot disagree. radio is the default.
+NODE_ICONS = ("radio", "person", "vehicle", "router", "repeater", "base", "drone", "boat", "bike", "dog", "box", "medic", "flag", "star")
+
 
 def utc(ts=None):
     if ts is None:

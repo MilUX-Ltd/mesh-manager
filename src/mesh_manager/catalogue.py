@@ -10,6 +10,8 @@ risk:  read         reads local state, nothing leaves the box
 floor: the lowest autonomy a connection needs to call it directly."""
 import re
 
+from .common import NODE_ICONS
+
 AUTONOMY = ("observe", "propose", "act")
 FLOOR = {"read": "observe", "air": "propose", "change": "act", "unreachable": "act", "flash": "act"}
 
@@ -30,13 +32,33 @@ ACTIONS = [
      "description": "The last traceroute answer for one node: the hops out and back with the SNR at each hop. Ask with traceroute first; the answer arrives as a route event."},
     {"id": "register", "title": "Fleet register", "risk": "read", "op": "register", "inputs": [],
      "description": "Every node the radio knows of joined with the box's register on radio id: the node's own name beside the operator's label, who holds it, hardware, firmware, role, whether it is managed (its admin keys hold this radio's public key, as read from the device itself), last heard."},
+    {"id": "inventory", "title": "Fleet inventory", "risk": "read", "op": "inventory", "inputs": [],
+     "description": "One row per radio the register or the radio's database knows: hardware, firmware (only when read from that device, with when), role, the fingerprint of its public key and since when, whether the key has changed and been accepted, whether the firmware is behind the shelf's verified image for that hardware, said in words."},
+    {"id": "key_accept", "title": "Accept a device's changed key", "risk": "change", "op": "key_accept",
+     "inputs": [{"name": "id", "type": "node", "required": True, "description": "the radio id, !hex"}],
+     "confirm": "The key now on file stands as this device's key and the alarm clears. Do this only when you know why it changed: a reflash, or a new radio under the old id.",
+     "description": "Clear the changed-key alarm for one device: the key it now presents is accepted as its key. Nothing is sent to the device."},
     {"id": "register_set", "title": "Label a device in the register", "risk": "change", "op": "register_set",
      "inputs": [{"name": "id", "type": "text", "required": True, "max_bytes": 12, "description": "the radio id, !hex"},
                 {"name": "label", "type": "text", "required": False, "max_bytes": 80, "description": "the operator's label for the device"},
                 {"name": "holder", "type": "text", "required": False, "max_bytes": 80, "description": "who holds it"},
-                {"name": "note", "type": "text", "required": False, "max_bytes": 200, "description": "a note"}],
+                {"name": "note", "type": "text", "required": False, "max_bytes": 200, "description": "a note"},
+                {"name": "group", "type": "text", "required": False, "max_bytes": 40, "description": "the group the device belongs to (a section, a vehicle, the routers); blank leaves it in none"},
+                {"name": "tags", "type": "text", "required": False, "max_bytes": 300, "description": "tags, comma separated, ten at most"},
+                {"name": "icon", "type": "enum", "values": list(NODE_ICONS) + ["inherit"], "required": False, "description": "the map icon for this device, or inherit for its group's"}],
      "confirm": "",
-     "description": "Write the operator's label, holder and note for a device into the box's register. Changes nothing on any radio."},
+     "description": "Write the operator's label, holder, note, group, tags and map icon for a device into the box's register. Changes nothing on any radio."},
+    {"id": "groups", "title": "Groups", "risk": "read", "op": "groups", "inputs": [],
+     "description": "Every group the register knows: its name, its map icon, how many devices are in it. A group is a word the operator gives devices (a section, a vehicle, the routers); the map, the lists, the alerts and the exports filter by it."},
+    {"id": "group_set", "title": "Create a group or set its icon", "risk": "change", "op": "group_set",
+     "inputs": [{"name": "name", "type": "text", "required": True, "max_bytes": 40, "description": "the group's name"},
+                {"name": "icon", "type": "enum", "values": list(NODE_ICONS), "required": False, "description": "the map icon its devices carry unless one has its own"}],
+     "confirm": "The group and its icon change on this box now; devices in it redraw on the map. Nothing is written to any radio.",
+     "description": "Create a group with a map icon, or change an existing group's icon. Kept on the box."},
+    {"id": "group_delete", "title": "Remove a group", "risk": "change", "op": "group_delete",
+     "inputs": [{"name": "name", "type": "text", "required": True, "max_bytes": 40, "description": "the group's name"}],
+     "confirm": "The group goes; its devices keep everything else and simply belong to no group. Nothing is written to any radio.",
+     "description": "Remove a group from the box; its members lose the group and nothing else."},
     {"id": "bench_devices", "title": "Devices on the bench", "risk": "read", "op": "bench_devices", "inputs": [],
      "description": "The serial devices plugged into the box by their /dev/serial/by-id/ path, other than the gateway's own radio, with whether each sits in bootloader mode and the step that recovers it."},
     {"id": "bench_read", "title": "Read a device on the bench", "risk": "read", "op": "bench_read",
@@ -46,7 +68,9 @@ ACTIONS = [
      "inputs": [{"name": "path", "type": "text", "required": True, "max_bytes": 200, "description": "the device's /dev/serial/by-id/ path"},
                 {"name": "long_name", "type": "text", "required": True, "max_bytes": 39, "description": "the device's long name"},
                 {"name": "short_name", "type": "text", "required": True, "max_bytes": 4, "description": "the short name, 4 bytes at most"},
-                {"name": "role", "type": "enum", "values": ["CLIENT", "CLIENT_MUTE", "ROUTER", "ROUTER_CLIENT", "REPEATER", "TRACKER", "SENSOR", "TAK", "CLIENT_HIDDEN", "LOST_AND_FOUND", "TAK_TRACKER", "ROUTER_LATE"], "required": True, "description": "the device role"}],
+                {"name": "role", "type": "enum", "values": ["CLIENT", "CLIENT_MUTE", "ROUTER", "ROUTER_CLIENT", "REPEATER", "TRACKER", "SENSOR", "TAK", "CLIENT_HIDDEN", "LOST_AND_FOUND", "TAK_TRACKER", "ROUTER_LATE"], "required": True, "description": "the device role"},
+                {"name": "label", "type": "text", "required": False, "max_bytes": 80, "description": "the operator's label for the device, written to the box's register"},
+                {"name": "holder", "type": "text", "required": False, "max_bytes": 80, "description": "who holds it, written to the box's register"}],
      "confirm": "The device on the cable gets these names and role, this radio's primary channel and key, this radio's region and preset, and this radio's public key as an admin key; its configuration is exported to the box first. Every one is read back from the device before it shows here.",
      "description": "Bring a device into the fleet on its USB cable: names and role, the gateway's primary channel and key into slot 0, the gateway's region and preset, the gateway's public key among its admin keys (refused when three foreign keys already fill the list), every one read back from the device, its configuration exported to the box, and the register updated. Keys never appear in the answer."},
     {"id": "bench_export", "title": "Export a bench device's configuration", "risk": "read", "op": "bench_export",
@@ -143,6 +167,12 @@ ACTIONS = [
      "inputs": [{"name": "version", "type": "text", "required": True, "max_bytes": 16, "description": "the version to return to, as update_staged lists it"}],
      "confirm": "This restarts the bridge and the screen, so the mesh is off TAK for about a minute. It returns the code, not the box's settings.",
      "description": "Re-apply a release the box already has: its tarball is checked against its own hash, then the same root unit an update uses installs it. Refuses the running version, a version the box has not got, and a tarball whose hash no longer matches."},
+    {"id": "box_position_set", "title": "Say where this box is", "risk": "change", "op": "box_position_set",
+     "inputs": [{"name": "lat", "type": "text", "required": False, "max_bytes": 12, "description": "latitude, decimal degrees"},
+                {"name": "lon", "type": "text", "required": False, "max_bytes": 12, "description": "longitude, decimal degrees"},
+                {"name": "clear", "type": "enum", "values": ["on", "off"], "required": False, "description": "on clears the declared position instead"}],
+     "confirm": "The box's declared position changes on this box now; the map re-centres. A GPS receiver's fix, when there is one, still comes first.",
+     "description": "Declare where this box is, for the map's centre and the range rings when the box has no GPS receiver. Kept on the box, above the installer's flags and below any receiver's fix; nothing is written to any radio."},
     {"id": "map_sources", "title": "Map sources", "risk": "read", "op": "web:map_sources", "inputs": [],
      "description": "Every source the map can draw: the built-in ones, the box's own MBTiles, ATAK custom map sources in the box's map folder, and any added on this screen."},
     {"id": "map_source_add", "title": "Add a map source", "risk": "change", "op": "web:map_source_add",
@@ -194,6 +224,25 @@ ACTIONS = [
                 {"name": "to_tak", "type": "enum", "values": ["on", "off"], "required": False, "description": "send each alert to All Chat Rooms on the TAK Server"}],
      "confirm": "The thresholds change on this box now; alerts already open stay open until their condition clears.",
      "description": "Change what the box alerts on. Kept on the box; the screen and the MCP read the same settings."},
+    {"id": "fences", "title": "Fences", "risk": "read", "op": "fences", "inputs": [],
+     "description": "The areas drawn on the map: id, name, polygon points or a circle's centre and radius, whether a crossing in (enter), out (leave) or either alerts, the group it applies to (or everyone), and whether it is on."},
+    {"id": "fence_set", "title": "Draw or change a fence", "risk": "change", "op": "fence_set",
+     "inputs": [{"name": "id", "type": "text", "required": False, "max_bytes": 16, "description": "an existing fence's id, to change it; blank makes a new one"},
+                {"name": "name", "type": "text", "required": False, "max_bytes": 40, "description": "what to call it"},
+                {"name": "kind", "type": "enum", "values": ["polygon", "circle"], "required": False, "description": "a drawn outline or a circle"},
+                {"name": "points", "type": "text", "required": False, "max_bytes": 8000, "description": "the outline as JSON, a list of [lat, lon] pairs, three at least"},
+                {"name": "lat", "type": "text", "required": False, "max_bytes": 12, "description": "a circle's centre latitude"},
+                {"name": "lon", "type": "text", "required": False, "max_bytes": 12, "description": "a circle's centre longitude"},
+                {"name": "radius_m", "type": "int", "required": False, "min": 10, "max": 100000, "description": "a circle's radius in metres"},
+                {"name": "rule", "type": "enum", "values": ["enter", "leave", "both"], "required": False, "description": "alert on coming in, going out, or either"},
+                {"name": "group", "type": "text", "required": False, "max_bytes": 40, "description": "only this group's devices; blank means everyone"},
+                {"name": "enabled", "type": "enum", "values": ["on", "off"], "required": False, "description": "off keeps the fence drawn but silent"}],
+     "confirm": "Alerts on this box and in TAK chat when a device crosses. Nothing is sent to any device.",
+     "description": "Draw a fence on the map, or change one: a named area, a crossing rule, a group it applies to. Kept on the box; the alert pass raises geofence alerts as devices cross."},
+    {"id": "fence_delete", "title": "Remove a fence", "risk": "change", "op": "fence_delete",
+     "inputs": [{"name": "id", "type": "text", "required": True, "max_bytes": 16, "description": "the fence's id"}],
+     "confirm": "The fence goes from the map and no longer alerts. Nothing is sent to any device.",
+     "description": "Remove a fence from the box."},
     {"id": "alert_test", "title": "Send a test alert to TAK", "risk": "air", "op": "alert_test", "inputs": [],
      "description": "One GeoChat to All Chat Rooms saying it is a test, to prove the path from this box to the TAK Server's chat. In observe mode it is counted, not sent."},
     {"id": "health", "title": "Mesh health", "risk": "read", "op": "health",
@@ -212,9 +261,9 @@ ACTIONS = [
     {"id": "send_text", "title": "Send a message", "risk": "air", "op": "send_text",
      "inputs": [{"name": "text", "type": "text", "required": True, "max_bytes": 200, "description": "the message, 200 bytes at most"},
                 {"name": "channel", "type": "int", "required": False, "min": 0, "max": 7, "description": "channel index (default 0, the primary)"},
-                {"name": "to", "type": "node_or_all", "required": False, "description": "a node's radio id for a direct message, or ^all (default)"}],
+                {"name": "to", "type": "node_or_all", "required": False, "description": "a node's radio id for a direct message, ^all (default) for the channel, or group:<name> for one direct message to each member"}],
      "confirm": "Every device on the channel will see this message.",
-     "description": "Send a text to the mesh: to a channel (every device on it sees it) or to one node."},
+     "description": "Send a text to the mesh: to a channel (every device on it sees it), to one node, or to a group (one direct message per member, each with its own receipt; the answer lists the members and their packet ids)."},
     {"id": "traceroute", "title": "Traceroute", "risk": "air", "op": "traceroute",
      "inputs": [{"name": "dest", "type": "node", "required": True, "description": "the node's radio id"}],
      "description": "Ask the mesh for the route to a node; the answer arrives on the log and the event stream. Changes nothing."},
@@ -342,7 +391,7 @@ def validate(action, args, known_nodes=None):
             v = str(v).strip()
         elif t in ("node", "node_or_all"):
             v = str(v).strip()
-            if t == "node_or_all" and v == "^all":
+            if t == "node_or_all" and (v == "^all" or re.fullmatch(r"group:.{1,40}", v)):
                 pass
             elif not NODE.match(v):
                 return None, f"{i['name']} must be a radio id like !1a2b3c4d"

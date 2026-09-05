@@ -25,7 +25,7 @@ import urllib.parse
 import zlib
 
 from . import __version__
-from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, read_config
+from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, NODE_ICONS, read_config
 from . import catalogue as C
 from . import mgrs as MG
 from . import connections as K
@@ -341,12 +341,20 @@ def run_action(web, aid, args, who):
     if aid == "channels":
         res = {k: v for k, v in res.items() if k != "url"}
     if aid in ("nodes", "links"):
-        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"))
+        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web))
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
     if action["risk"] != "read":
         K.audit(web.etc_dir, who=who, event="run", action=aid, arguments=clean, outcome="error" if "error" in res else "ok")
     code = 400 if "error" in res and action["risk"] != "read" else 200
     return code, res
+
+
+def _silent_min(web):
+    """The Health threshold the node rows judge 'quiet' by; 30 minutes when the bridge cannot say."""
+    try:
+        return int(web.client.ask("alert_settings", timeout=2).get("silent_min") or 30)
+    except (BridgeDown, AttributeError, TypeError, ValueError):
+        return 30
 
 
 def mcp_tools(autonomy):
@@ -427,9 +435,9 @@ def qr_png(url, scale=6, quiet=4):
 # Spec 007: one token block, a dark theme on the same tokens, the state strip on every page, and
 # nothing that reloads under the operator's finger.
 CSS = """
-:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace}
-[data-theme=dark]{--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D}}
+:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--edge:#586F7C;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace}
+[data-theme=dark]{--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC}}
 *{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);font:14px/1.45 Manrope,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 input,select,textarea,button{font:inherit}
 header{background:var(--accent);color:var(--accent-ink);padding:0 var(--s4);display:flex;align-items:center;gap:var(--s4);min-height:var(--tap);position:relative;z-index:1100}
@@ -451,15 +459,15 @@ th{background:var(--surface-sunken);color:var(--ink-muted-strong);font-size:.72r
 pre.log{background:var(--surface-sunken);color:var(--ink);border:1px solid var(--line);padding:var(--s3);border-radius:var(--r);font:14px/1.45 var(--mono);max-height:70vh;overflow:auto;white-space:pre-wrap;margin:0}
 pre.log .ln{display:block}pre.log .ln--radio{color:var(--ink-muted-strong)}pre.log[data-show=bridge] .ln--radio{display:none}pre.log[data-show=radio] .ln--bridge{display:none}pre.log .ln--WARNING,pre.log .ln--ERROR{color:var(--bad)}pre.log[data-level=warn] .ln--INFO,pre.log[data-level=warn] .ln--DEBUG{display:none}
 .controls{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center;margin-bottom:var(--s3)}.controls label{display:inline-flex;align-items:center;gap:var(--s2)}.controls select{width:auto;margin:0}
-.sig{display:inline-flex;align-items:center;gap:var(--s2);white-space:nowrap}td time,td .pill{white-space:nowrap}.sig__bars{width:22px;height:16px;flex:none}.sig__bars rect{fill:var(--line)}.sig--4 rect,.sig--3 .b1,.sig--3 .b2,.sig--3 .b3{fill:var(--ok)}.sig--2 .b1,.sig--2 .b2{fill:var(--warn)}.sig--1 .b1{fill:var(--bad)}
+.sig{display:inline-flex;align-items:center;gap:var(--s2);white-space:nowrap}td time,td .pill{white-space:nowrap}.sig__bars{width:22px;height:16px;flex:none}.sig__bars rect{fill:var(--edge)}.sig--4 rect,.sig--3 .b1,.sig--3 .b2,.sig--3 .b3{fill:var(--ok)}.sig--2 .b1,.sig--2 .b2{fill:var(--warn)}.sig--1 .b1{fill:var(--bad)}
 .batt--low{color:var(--bad);font-weight:600}
-button{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:6px;padding:0 var(--s3);min-height:var(--tap);font-size:.9rem;cursor:pointer}button:hover{filter:brightness(1.15)}button.line{background:transparent;color:var(--ink);border-color:var(--line-strong)}button.danger{background:var(--bad)}button.quiet{background:var(--surface-sunken);color:var(--ink);border-color:var(--line)}
-button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:inherit;text-decoration:none;border-bottom:1px dotted var(--line-strong)}a.plain:hover{border-bottom-style:solid}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}.chart.avail{max-width:none;height:20px;padding:0;border:0;background:transparent}.chart.graph line{stroke-dasharray:none}.chart.graph text{fill:var(--ink);font-size:12px}.chart.graph{max-width:100%}.chart.avail rect.on{fill:var(--ok)}.chart.avail rect.off{fill:var(--line-strong)}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:1200;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
-input[type=text],input[type=number],input[type=password],select,textarea{width:100%;padding:var(--s1) var(--s2);min-height:var(--tap);font-size:.9rem;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface-raised);color:var(--ink);margin:var(--s1) 0 var(--s3)}
+button{background:var(--accent);color:var(--accent-ink);border:1px solid transparent;border-radius:6px;padding:0 var(--s3);min-height:var(--tap);font-size:.9rem;cursor:pointer}button:hover{filter:brightness(1.15)}button.line{background:transparent;color:var(--ink);border-color:var(--edge)}button.danger{background:var(--bad)}button.quiet{background:var(--surface-sunken);color:var(--ink);border-color:var(--line)}
+button:disabled{opacity:.5;cursor:not-allowed}.row-actions{display:flex;gap:var(--s1);flex-wrap:wrap;align-items:center}button.icon,details.fold.ctl.icon summary{width:28px;min-height:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}button.icon svg,details.fold.ctl.icon summary svg{width:16px;height:16px;display:block}details.fold.ctl.icon summary::after,details.fold.ctl.icon[open] summary::after{content:none}details.fold.ctl.icon[open]{flex-basis:100%}details.fold.ctl.icon[open] summary{margin-bottom:var(--s1)}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.mm-centre button{width:30px;height:30px;padding:0;border:0;border-radius:2px;background:var(--surface-raised);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}.mm-centre button:hover{background:var(--surface-sunken);filter:none}.mm-centre button:disabled{color:var(--ink-muted);cursor:not-allowed;opacity:1}.mm-centre button svg{width:18px;height:18px}a.plain{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}a.plain::after{content:' ›';color:var(--ink-muted)}a.plain:hover{text-decoration-thickness:2px}[data-theme=dark] a.plain{color:var(--gold)}.chart{width:100%;max-width:600px;height:auto;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}.chart polyline{fill:none;stroke:var(--accent);stroke-width:2}.chart.avail{max-width:none;height:20px;padding:0;border:0;background:transparent}.chart.graph line{stroke-dasharray:none}.chart.graph text{fill:var(--ink);font-size:12px}.chart.graph{max-width:100%}.chart.avail rect.on{fill:var(--ok)}.chart.avail rect.off{fill:var(--edge)}[data-theme=dark] .chart polyline{stroke:var(--gold)}.chart line{stroke-dasharray:3 4;stroke-width:1}.chart line.warn{stroke:var(--warn)}.chart line.bad{stroke:var(--bad)}.chart text{fill:var(--ink-muted);font-size:10px}.mm-readout{background:var(--surface-raised);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}.mm-readout:empty{display:none}.leaflet-tooltip.mm-grid{background:var(--surface-raised);color:var(--ink-muted);border:1px solid var(--line);box-shadow:none;padding:0 4px;font-size:10px;font-variant-numeric:tabular-nums}.leaflet-tooltip.mm-grid::before{display:none}.tip{position:fixed;z-index:1200;display:none;max-width:280px;padding:var(--s1) var(--s2);background:var(--ink);color:var(--surface);border-radius:6px;font-size:.8rem;line-height:1.35;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}.tip b{display:block;font-weight:600}.tip div{opacity:.85;margin-top:2px}
+input[type=text],input[type=number],input[type=password],select,textarea{width:100%;padding:var(--s1) var(--s2);min-height:var(--tap);font-size:.9rem;border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);margin:var(--s1) 0 var(--s3)}
 label{display:block}label.check{display:flex;gap:var(--s2);align-items:flex-start;min-height:var(--tap);margin:var(--s2) 0}label.check input{width:18px;height:18px;margin-top:2px;flex:none}
 form.card{max-width:560px}form.login{max-width:360px;margin:3rem auto}form.card.danger{border-color:var(--bad)}form.card.danger h2{color:var(--bad)}
-details.fold{margin-top:var(--s4)}details.fold summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;gap:var(--s2);color:var(--ink-muted-strong)}details.fold.ctl summary{display:inline-flex;padding:0 var(--s3);font-size:.9rem;border:1px solid var(--line-strong);border-radius:6px;color:var(--ink);list-style:none}details.fold.ctl summary::-webkit-details-marker{display:none}details.fold.ctl summary::after{content:' ▸';margin-left:var(--s1)}details.fold.ctl[open] summary::after{content:' ▾'}
-.sheet{position:fixed;inset:0;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s4);z-index:10;padding:var(--s4);text-align:center}.sheet[hidden]{display:none}.sheet img{max-width:min(90vw,70vh);height:auto}
+details.fold{margin-top:var(--s4)}details.fold summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;gap:var(--s2);color:var(--ink-muted-strong)}details.fold.ctl summary{display:inline-flex;white-space:nowrap;padding:0 var(--s3);font-size:.9rem;border:1px solid var(--edge);border-radius:6px;color:var(--ink);list-style:none}details.fold.ctl summary::-webkit-details-marker{display:none}details.fold.ctl summary::after{content:' ▸';margin-left:var(--s1)}details.fold.ctl[open] summary::after{content:' ▾'}
+.sheet{position:fixed;inset:0;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s4);z-index:1300;padding:var(--s4);text-align:center;overflow:auto}.sheet .close{position:absolute;top:var(--s3);right:var(--s3)}.sheet[hidden]{display:none}.sheet img{max-width:min(90vw,70vh);height:auto}
 .newlines{position:sticky;bottom:var(--s2);float:right}code{font-family:var(--mono);font-size:.9em}
 .pill.upd{background:var(--gold);color:var(--accent);border-color:var(--gold);text-decoration:none;margin-left:var(--s2)}.proposal.done{opacity:.6}.regform{display:grid;grid-template-columns:1fr 1fr auto;gap:var(--s1);align-items:start;min-width:220px}.regform input{margin:0}.regform .res{grid-column:1/-1}.manage{display:grid;gap:var(--s3);min-width:280px;margin-top:var(--s2)}.manage form{background:var(--surface-sunken);border:1px solid var(--line);border-radius:var(--r);padding:var(--s3)}.manage form.danger{border-color:var(--bad)}footer{padding:var(--s4);color:var(--ink-muted);font-size:.85rem;text-align:center}
 .map{width:100%;max-height:72vh;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}
@@ -472,10 +480,30 @@ details.fold{margin-top:var(--s4)}details.fold summary{cursor:pointer;min-height
 .linkbar .dir{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1);margin:var(--s1) 0}.linkbar .hop{display:inline-block;padding:0 var(--s2);border-left:6px solid var(--line);background:var(--surface-sunken);border-radius:0 4px 4px 0;white-space:nowrap}
 .linkbar .hop.band-4,.linkbar .hop.band-3{border-color:var(--ok)}.linkbar .hop.band-2{border-color:var(--warn)}.linkbar .hop.band-1,.linkbar .hop.band-0{border-color:var(--bad)}.linkbar .hop.origin{border-color:var(--accent)}
 .spark{width:72px;height:18px;vertical-align:middle}.spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5}.spark line{stroke:var(--line)}.sparkfig{font-size:.8rem;color:var(--ink-muted);white-space:nowrap}
-@media (max-width:700px){header nav.primary{position:fixed;bottom:0;left:0;right:0;background:var(--accent);justify-content:space-around;z-index:1100;border-top:1px solid var(--live)}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}}
+:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+button.icon .lbl,details.fold.ctl.icon summary .lbl{display:none}[data-labels=on] button.icon,[data-labels=on] details.fold.ctl.icon summary{width:auto;padding:0 var(--s2)}[data-labels=on] button.icon .lbl,[data-labels=on] details.fold.ctl.icon summary .lbl{display:inline;margin-left:var(--s1);font-size:.85rem}
+header button.head{background:transparent;color:var(--accent-ink);border:1px solid var(--live)}[data-labels=on] header button.icon,[data-labels=on] .state button.strip{width:var(--tap);padding:0}[data-labels=on] header button.icon .lbl,[data-labels=on] .state button.strip .lbl{display:none}header .headctl{display:flex;gap:var(--s1);margin-left:var(--s2)}
+details.more nav .k{font-size:.72rem;color:var(--ink-muted);text-transform:uppercase;letter-spacing:.04em;padding:var(--s2) var(--s4) 0}
+.state .state-rest{display:contents}.state button.strip{display:none}
+.seg{display:inline-flex;border:1px solid var(--edge);border-radius:6px;overflow:hidden;vertical-align:middle;margin:var(--s1) 0 var(--s3)}.seg label{display:inline-flex;margin:0;cursor:pointer}.seg input{position:absolute;opacity:0;width:0;height:0;margin:0}.seg span{display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);border-left:1px solid var(--edge);color:var(--ink);font-size:.9rem;white-space:nowrap}.seg label:first-child span{border-left:0}.seg input:checked+span{background:var(--accent);color:var(--accent-ink)}.seg.danger input:checked+span{background:var(--bad)}.seg input:disabled+span{opacity:.45}.seg input:focus-visible+span{outline:3px solid var(--gold);outline-offset:-3px}
+.confirm{background:var(--surface-sunken);border:1px solid var(--edge);border-left:4px solid var(--warn);border-radius:var(--r);padding:var(--s2) var(--s3);margin-top:var(--s2)}.confirm .row-actions{margin-top:var(--s2)}
+.filters{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-bottom:var(--s2)}.filters input[type=search]{width:auto;min-width:180px;margin:0;padding:var(--s1) var(--s2);min-height:var(--tap);border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);font:inherit}.chip{display:inline-flex;align-items:center;gap:var(--s1);min-height:var(--tap);padding:0 var(--s3);border-radius:999px;border:1px solid var(--edge);background:var(--surface-raised);color:var(--ink);cursor:pointer;font-size:.85rem}.chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.chip b{font-weight:600}
+.verdict{display:inline-block;margin-left:var(--s1);font-size:.75rem;font-weight:600}details.fold.ctl.primary summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}details.fold.ctl.bad summary{border-color:var(--bad);color:var(--bad)}.controls label.check{min-height:var(--tap);margin:0;align-items:center}.controls label.check input{width:24px;height:24px;margin:0}.fleet-out{white-space:pre-line}#play-rev.on{background:var(--accent);color:var(--accent-ink)}.iconpick{display:flex;flex-wrap:wrap;gap:var(--s1);margin:var(--s1) 0}.iconpick label{margin:0}.iconpick input{position:absolute;opacity:0;width:0;height:0}.iconpick span{display:inline-flex;width:40px;height:40px;align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;color:var(--ink);background:var(--surface-raised)}.iconpick input:checked+span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.iconpick input:focus-visible+span{outline:3px solid var(--gold)}.iconpick svg{width:20px;height:20px}.mm-pin{background:transparent;border:0}.mm-pin-in{display:flex;width:30px;height:30px;border-radius:50%;background:var(--surface-raised);border:2px solid var(--accent);align-items:center;justify-content:center;color:var(--accent)}.mm-pin-in svg{width:18px;height:18px}.mm-pin.play .mm-pin-in{background:var(--gold)}.mm-pin.stale .mm-pin-in{background:transparent;border-style:dashed}.nodeicon{display:inline-flex;width:20px;height:20px;vertical-align:-5px;margin-right:var(--s1);color:var(--accent)}.nodeicon svg{width:18px;height:18px}.controls>details.fold.ctl{margin-top:0}.controls>details.fold.ctl[open]{flex-basis:100%}.filters label{display:inline-flex;align-items:center;gap:var(--s1);margin:0}.filters select{width:auto;margin:0}ol.steps{margin:var(--s1) 0 0 var(--s4);padding:0}ol.steps li{margin:2px 0}.views>button svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}details.fold.ctl summary svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}
+@media (pointer:coarse){button.icon,details.fold.ctl.icon summary{width:40px;height:40px;min-height:40px}.row-actions{gap:var(--s2)}.mm-centre button{width:40px;height:40px}}
+@media (max-width:700px){:root{--tap:44px}header nav.primary{position:fixed;bottom:0;left:0;right:calc(var(--tap) + var(--s2));background:var(--accent);justify-content:space-around;z-index:1100;border-top:1px solid var(--live)}header nav.primary a{padding:0 var(--s2);font-size:.8rem}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}
+details.more{position:fixed;bottom:0;right:0;z-index:1101;margin:0;background:var(--accent);border-top:1px solid var(--live)}details.more summary{width:calc(var(--tap) + var(--s2));justify-content:center;padding:0}details.more summary .word{display:none}details.more nav{position:fixed;bottom:var(--tap);top:auto;right:0;left:0;max-height:70vh;overflow:auto;border-radius:var(--r) var(--r) 0 0}
+.state .state-rest{display:none}.state.open .state-rest{display:contents}.state button.strip{display:inline-flex;margin-left:auto}.state.open button.strip svg{transform:rotate(180deg)}
+button.icon,details.fold.ctl.icon summary{width:44px;height:44px;min-height:44px}.row-actions{gap:var(--s2)}.regform{grid-template-columns:1fr}
+header .brand small{display:none}}
 """
-NAV_PRIMARY = [("/", "Mesh"), ("/messages", "Messages"), ("/channels", "Channels"), ("/radio", "Radio")]
-NAV_MORE = [("/map", "Map"), ("/nodes", "Nodes"), ("/graph", "Graph"), ("/packets", "Packets"), ("/health", "Health"), ("/register", "Register"), ("/bench", "Bench"), ("/log", "Log"), ("/activity", "Activity"), ("/connections", "Connections"), ("/settings", "Settings"), ("/help", "Help"), ("/about", "About")]
+# The primary bar is where the operator lives (5 Sep 2026 reviews): the mesh, the nodes, the
+# messages, the channels, the health. Radio is a set-up page, pressed once a deployment, and sits
+# in More with the rest, grouped by what they are about.
+NAV_PRIMARY = [("/", "Mesh"), ("/nodes", "Nodes"), ("/messages", "Messages"), ("/channels", "Channels"), ("/health", "Health")]
+NAV_GROUPS = [("The fleet", [("/register", "Register"), ("/bench", "Bench"), ("/graph", "Neighbours"), ("/packets", "Packets")]),
+              ("The mesh", [("/map", "Map"), ("/log", "Log"), ("/activity", "Activity")]),
+              ("The box", [("/radio", "Radio"), ("/connections", "Connections"), ("/settings", "Settings"), ("/help", "Help"), ("/about", "About")])]
+NAV_MORE = [item for _, items in NAV_GROUPS for item in items]
 NAV = NAV_PRIMARY + NAV_MORE
 e = html.escape
 WRITE_TIMEOUT_S = 45   # above the bridge's read-back window, so a slow radio is never called a failure
@@ -505,12 +533,13 @@ def age(iso):
 
 
 def hhmm(iso=None):
-    """Local clock time for an ISO stamp, or for now."""
+    """Clock time for an ISO stamp, or for now: Zulu, and it says so. The box's clock and the
+    browser's used to render side by side, unlabelled and an hour apart in summer."""
     try:
         t = _utc_secs(iso) if iso else time.time()
     except (ValueError, TypeError):
         return str(iso or "")
-    return time.strftime("%H:%M", time.localtime(t))
+    return time.strftime("%H:%MZ", time.gmtime(t))
 
 
 LIVE_JS = r"""<script>
@@ -518,14 +547,22 @@ LIVE_JS = r"""<script>
   var root=document.documentElement;
   try{var t=localStorage.getItem('mm-theme'); if(t){root.dataset.theme=t;}}catch(x){}
   var tb=document.querySelector('[data-theme-toggle]');
-  if(tb){tb.addEventListener('click',function(){var cur=root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');var nx=cur==='dark'?'light':'dark';root.dataset.theme=nx;try{localStorage.setItem('mm-theme',nx);}catch(x){}});}
-  window.mmNow=function(){var d=new Date();return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);};
-  window.mmHm=function(iso){var d=new Date(iso||'');return isNaN(d.getTime())?(iso||''):('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);};
+  function themeGlyph(){if(!tb)return;var dark=(root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'))==='dark';var s=tb.querySelector('[data-sun]'),m=tb.querySelector('[data-moon]');if(s)s.style.display=dark?'block':'none';if(m)m.style.display=dark?'none':'block';}
+  if(tb){tb.addEventListener('click',function(){var cur=root.dataset.theme||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');var nx=cur==='dark'?'light':'dark';root.dataset.theme=nx;try{localStorage.setItem('mm-theme',nx);}catch(x){}themeGlyph();});themeGlyph();}
+  // words on icon buttons: the operator's choice, remembered; on by default on a narrow screen, where there is no hover to learn a glyph from (5 Sep 2026 reviews)
+  try{var l=localStorage.getItem('mm-labels');if(l===null){l=window.innerWidth<700?'on':'off';}root.dataset.labels=l;}catch(x){root.dataset.labels=window.innerWidth<700?'on':'off';}
+  var lbtn=document.querySelector('[data-labels-toggle]');
+  if(lbtn){lbtn.setAttribute('aria-pressed',root.dataset.labels==='on'?'true':'false');lbtn.addEventListener('click',function(){var nx=root.dataset.labels==='on'?'off':'on';root.dataset.labels=nx;lbtn.setAttribute('aria-pressed',nx==='on'?'true':'false');try{localStorage.setItem('mm-labels',nx);}catch(x){}});}
+  var sb=document.querySelector('.state button.strip'),strip=document.querySelector('.state');
+  if(sb&&strip){try{if(localStorage.getItem('mm-strip')==='open'){strip.classList.add('open');}}catch(x){}sb.addEventListener('click',function(){var on=strip.classList.toggle('open');sb.setAttribute('aria-expanded',on?'true':'false');try{localStorage.setItem('mm-strip',on?'open':'closed');}catch(x){}});}
+  function two(n){return ('0'+n).slice(-2);}
+  window.mmNow=function(){var d=new Date();return two(d.getUTCHours())+':'+two(d.getUTCMinutes())+'Z';};
+  window.mmHm=function(iso){var d=new Date(iso||'');return isNaN(d.getTime())?(iso||''):two(d.getUTCHours())+':'+two(d.getUTCMinutes())+'Z';};
   window.mmAge=function(iso){var t=Date.parse(iso||'');if(isNaN(t))return '';var s=Math.max(0,Math.round((Date.now()-t)/1000));if(s<60)return s+' s ago';var m=Math.floor(s/60);if(m<60)return m+' min ago';var h=Math.floor(m/60);if(h<48)return h+' h '+(m%60)+' min ago';return Math.floor(h/24)+' d ago';};
   function ages(){document.querySelectorAll('time[data-age]').forEach(function(t){var a=window.mmAge(t.getAttribute('datetime'));if(a){t.textContent=a;}});}
   setInterval(ages,15000);
   var lf=document.getElementById('live'),last=Date.now(),down=false;
-  function tick(){if(!lf)return;var s=Math.round((Date.now()-last)/1000);lf.className='live'+(down?' down':(s>60?' stale':''));lf.innerHTML=down?'feed <b>down</b>':('live <b>'+(s<2?'now':s+' s ago')+'</b>');}
+  function tick(){if(!lf)return;var s=Math.round((Date.now()-last)/1000);lf.className='live'+(down?' down':(s>60?' stale':''));lf.innerHTML=down?'updates <b>stopped</b>':('live <b>'+(s<2?'now':s+' s ago')+'</b>');lf.setAttribute('data-tip',down?'The box stopped sending updates to this browser':'How long since the box last spoke to this page');}
   setInterval(tick,1000);tick();
   var pend={};
   window.mmFrag=function(name,id,after){if(pend[name])return;pend[name]=true;setTimeout(function(){pend[name]=false;
@@ -577,30 +614,53 @@ def state_strip(st):
         else:
             glamp, gword = "ok", "GPS fix"
             sats = f" · {int(used)} sats used" if isinstance(used, int) else ""
-        tip = "  ".join(x for x in (
-            f"read from {via}" if via else "",
-            f"last read {when}" if when else "",
-            f"{int(seen)} seen" if isinstance(seen, int) else "",
-            f"{int(used)} used" if isinstance(used, int) else "") if x)
+        m_ = re.match(r"^([a-z]+)://", via)
+        src = m_.group(1) if m_ else via
+        tip = " · ".join(x for x in (
+            f"Receiver: {src}" if src else "",
+            f"last read {when[11:16]}Z" if len(when) >= 16 else (f"last read {when}" if when else ""),
+            (f"{int(seen)} satellites seen" + (f", {int(used)} used" if isinstance(used, int) else "")) if isinstance(seen, int) else "") if x)
         parts.append(f"<span class='word' data-tip='{e(tip)}' tabindex='0'>"
                      f"<i class='lamp lamp--{glamp}'></i>{e(gword + sats)}</span>")
+    alerts = ""
     if st.get("alerts_open"):
         n = int(st["alerts_open"])
-        parts.append(f"<a href='/health#alerts' class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)'>{n} alert{'s' if n != 1 else ''}</a>")
-    return "".join(parts)
+        alerts = f"<a href='/health#alerts' class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)'>{n} alert{'s' if n != 1 else ''}</a>"
+    # on a phone the standing facts fold behind a chevron; the lamp, the alerts and the live counter stay
+    return (parts[0] + alerts + "<span class='state-rest'>" + "".join(parts[1:]) + "</span>"
+            + icon_button("chevron", "Show the rest of the status", "The rest of the status", "Nodes, region, preset, channel and receiver", cls="line icon strip", attrs="aria-expanded='false'"))
 
 
-def page(title, body, active="", own="", st=None, pending=0, head="", update=None):
+# Spec 046: installable on a phone and a tablet. No service worker: the app is meaningless without the box,
+# and a cached shell would fight the updater.
+APP_MANIFEST = {"name": "Mesh Manager", "short_name": "Mesh", "start_url": "/", "scope": "/", "display": "standalone", "orientation": "any",
+                "background_color": "#F7F6EB", "theme_color": "#113308", "description": "The mesh as it is now, from the box that carries the radio.",
+                "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                          {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                          {"src": "/static/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+                          {"src": "/static/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+                          {"src": "/static/icons/icon.svg", "sizes": "any", "type": "image/svg+xml"}]}
+APP_HEAD = ("<link rel='manifest' href='/manifest.webmanifest'><meta name='theme-color' content='#113308'>"
+            "<meta name='mobile-web-app-capable' content='yes'><meta name='apple-mobile-web-app-capable' content='yes'><meta name='apple-mobile-web-app-title' content='Mesh'>"
+            "<link rel='apple-touch-icon' href='/static/icons/apple-touch-icon.png'><link rel='icon' href='/static/icons/icon.svg' type='image/svg+xml'>")
+VIEWPORT = "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
+
+
+def page(title, body, active="", own="", st=None, pending=0, head="", update=None, notice=""):
     prim = "".join(f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}</a>" for p, t in NAV_PRIMARY)
-    more = "".join(f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}{(' <span class=pill>' + str(pending) + '</span>') if (p == '/activity' and pending) else ''}</a>"
-                   for p, t in NAV_MORE)
+    more = ""
+    for group, items in NAV_GROUPS:
+        more += f"<div class='k'>{e(group)}</div>" + "".join(
+            f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}{(' <span class=pill>' + str(pending) + '</span>') if (p == '/activity' and pending) else ''}</a>" for p, t in items)
     more_on = any(p == active for p, _ in NAV_MORE)
-    return f"""<!doctype html><html lang='en-GB'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>{e(title)} · Mesh Manager</title><style>{CSS}</style>{head}</head><body data-own='{e(own)}'>
+    theme = ("<button type='button' class='theme head icon' data-theme-toggle aria-label='Light or dark' data-tip='Light or dark'>"
+             f"<span data-sun>{ICONS['sun']}</span><span data-moon style='display:none'>{ICONS['moon']}</span></button>")
+    return f"""<!doctype html><html lang='en-GB'><head><meta charset='utf-8'>{VIEWPORT}
+<title>{e(title)} · Mesh Manager</title>{APP_HEAD}<style>{CSS}</style>{head}</head><body data-own='{e(own)}'>
 <header><span class='brand'>Mesh Manager<small>{e(__version__)}</small></span><nav class='primary'>{prim}</nav>
-<details class='more'><summary>{'<b>More</b>' if more_on else 'More'}{(' <span class=pill>' + str(pending) + '</span>') if pending else ''}</summary><nav>{more}</nav></details>
-{("<a class='pill upd' href='/about'>update available: " + e(str(update)) + "</a>") if update else ""}<button type='button' class='theme' data-theme-toggle title='Light or dark'>◐</button></header>
-<div class='state' role='status'><span class='body' id='state-body'>{state_strip(st)}</span><span id='live' class='live'>live <b>…</b></span></div>
+<details class='more'><summary aria-label='More pages'>{ICONS['menu']}<span class='word'>{'<b>More</b>' if more_on else 'More'}</span>{(' <span class=pill>' + str(pending) + '</span>') if pending else ''}</summary><nav>{more}</nav></details>
+{("<a class='pill upd' href='/about'>update available: " + e(str(update)) + "</a>") if update else ""}<span class='headctl'>{icon_button("type", "Words on buttons", "Words on buttons", "Show a word beside every icon", cls="head icon", attrs="data-labels-toggle aria-pressed='false'")}{theme}</span></header>
+<div class='state' role='status'><span class='body' id='state-body'>{state_strip(st)}</span>{("<span class='pill' style='background:var(--warn);color:#fff;border-color:var(--warn)' data-tip='Sign-in is off' data-tip-more='Anyone who can reach this address is the operator'>" + e(notice) + "</span>") if notice else ""}<span id='live' class='live' data-tip='How long since the box last spoke to this page'>live <b>…</b></span></div>
 <main><h1>{e(title)}</h1>{body}</main>
 <footer>Mesh Manager by MilUX Ltd · GPL-3.0-or-later · the mesh as it is now, from the box that carries the radio</footer>
 {LIVE_JS}{TIP_JS}</body></html>"""
@@ -608,27 +668,35 @@ def page(title, body, active="", own="", st=None, pending=0, head="", update=Non
 
 TIP_JS = r"""<script>
 (function(){
-  // an instant tooltip for anything with data-tip (and data-tip-more): one fixed element placed by script, so no table wrapper clips it; on hover and on keyboard focus
-  var tip=null,onEl=null;
-  function show(el){var t=el.getAttribute('data-tip');if(!t)return;if(!tip){tip=document.createElement('div');tip.className='tip';tip.setAttribute('role','tooltip');document.body.appendChild(tip);}
+  // an instant tooltip for anything with data-tip (and data-tip-more): one fixed element placed by script, so no table wrapper clips it.
+  // Hover and keyboard focus show it; on a touch screen a press held for 450 ms shows it and swallows the tap, so a glyph can be learned
+  // without firing what it does (5 Sep 2026 reviews). Escape hides it; the description is exposed through aria-describedby.
+  var tip=null,onEl=null,holdTimer=null,swallow=false;
+  function place(el){var r=el.getBoundingClientRect();var w=tip.offsetWidth,h=tip.offsetHeight;var x=Math.min(Math.max(8,r.left+r.width/2-w/2),window.innerWidth-w-8);var y=r.top-h-8;if(y<8){y=r.bottom+8;}tip.style.left=x+'px';tip.style.top=y+'px';}
+  function show(el){var t=el.getAttribute('data-tip');if(!t)return;if(!tip){tip=document.createElement('div');tip.className='tip';tip.id='mm-tip';tip.setAttribute('role','tooltip');document.body.appendChild(tip);}
     tip.innerHTML='';var b=document.createElement('b');b.textContent=t;tip.appendChild(b);var m=el.getAttribute('data-tip-more');if(m){var d=document.createElement('div');d.textContent=m;tip.appendChild(d);}
-    tip.style.display='block';var r=el.getBoundingClientRect();var w=tip.offsetWidth,h=tip.offsetHeight;var x=Math.min(Math.max(8,r.left+r.width/2-w/2),window.innerWidth-w-8);var y=r.top-h-8;if(y<8){y=r.bottom+8;}
-    tip.style.left=x+'px';tip.style.top=y+'px';onEl=el;}
-  function hide(){if(tip){tip.style.display='none';}onEl=null;}
+    tip.style.display='block';place(el);if(onEl&&onEl!==el){onEl.removeAttribute('aria-describedby');}onEl=el;el.setAttribute('aria-describedby','mm-tip');}
+  function hide(){if(tip){tip.style.display='none';}if(onEl){onEl.removeAttribute('aria-describedby');}onEl=null;}
   document.addEventListener('mouseover',function(ev){var el=ev.target.closest&&ev.target.closest('[data-tip]');if(el&&el!==onEl){show(el);}else if(!el&&onEl){hide();}});
   document.addEventListener('mouseout',function(ev){var el=ev.target.closest&&ev.target.closest('[data-tip]');if(el&&!(ev.relatedTarget&&el.contains(ev.relatedTarget))){hide();}});
   document.addEventListener('focusin',function(ev){var el=ev.target.closest&&ev.target.closest('[data-tip]');if(el){show(el);}});
   document.addEventListener('focusout',function(){hide();});
-  document.addEventListener('click',function(ev){if(ev.target.closest&&ev.target.closest('[data-tip]')){hide();}});
-  window.addEventListener('scroll',hide,true);
+  document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&onEl){hide();}});
+  document.addEventListener('pointerdown',function(ev){if(ev.pointerType!=='touch')return;var el=ev.target.closest&&ev.target.closest('[data-tip]');if(!el)return;
+    holdTimer=setTimeout(function(){holdTimer=null;swallow=true;show(el);},450);});
+  function release(){if(holdTimer){clearTimeout(holdTimer);holdTimer=null;}}
+  document.addEventListener('pointerup',release);document.addEventListener('pointercancel',release);document.addEventListener('pointermove',function(ev){if(ev.pointerType==='touch')release();});
+  document.addEventListener('click',function(ev){if(swallow){swallow=false;ev.preventDefault();ev.stopImmediatePropagation();return;}if(ev.target.closest&&ev.target.closest('[data-tip]')){hide();}},true);
+  document.addEventListener('contextmenu',function(ev){if(onEl&&ev.target.closest&&ev.target.closest('[data-tip]')===onEl){ev.preventDefault();}});
+  window.addEventListener('scroll',function(){if(onEl&&tip&&tip.style.display==='block'){place(onEl);}},true);
 })();
 </script>"""
 
 
 def bare_page(title, body, head=""):
     """A page with nothing but its body: the map in a window of its own (Spec 019)."""
-    return f"""<!doctype html><html lang='en-GB'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>{e(title)} · Mesh Manager</title><style>{CSS}
+    return f"""<!doctype html><html lang='en-GB'><head><meta charset='utf-8'>{VIEWPORT}
+<title>{e(title)} · Mesh Manager</title>{APP_HEAD}<style>{CSS}
 body.bare{{margin:0}}body.bare .state{{display:none}}body.bare main{{padding:var(--s2);max-width:none}}body.bare .geo{{height:calc(100vh - 4.5rem);min-height:240px}}</style>{head}</head><body class='bare'>
 <div class='state' role='status' hidden><span class='body' id='state-body'></span><span id='live' class='live'></span></div>
 <main>{body}</main>{LIVE_JS}{TIP_JS}</body></html>"""
@@ -638,9 +706,21 @@ def card(k, v, cls=""):
     return f"<div class='card'><div class='k'>{e(k)}</div><div class='v {cls}'>{v}</div></div>"
 
 
+def dur(secs):
+    """A duration a person reads: minutes to ninety, then hours and minutes, past two days days and hours."""
+    m = max(0, int(secs or 0)) // 60
+    if m <= 90:
+        return f"{m} min"
+    h = m // 60
+    if h >= 48:
+        return f"{h // 24} d {h % 24} h"
+    return f"{h} h {m % 60} min"
+
+
 def overview_cards(st):
     if not st or "version" not in st:
-        return "<p class='bad'>The bridge is not answering on its socket. Is mesh-manager-bridge running? <code>journalctl -u mesh-manager-bridge</code></p>"
+        return ("<p class='bad'>The bridge is not answering, so the radio is not being read and nothing is reaching TAK. "
+                "Restart the box; if it comes back the same, read <code>journalctl -u mesh-manager-bridge</code> over SSH.</p>")
     radio = st.get("radio") or "(none)"
     present, boot, conn = st.get("radio_present"), st.get("bootloader"), st.get("connected")
     radio_txt = ("in bootloader mode" if boot else ("present" if present else "MISSING")) + (", connected" if conn else ", not connected")
@@ -650,21 +730,25 @@ def overview_cards(st):
     fwd = st.get("last_forwarded")
     act = st.get("last_activity")
     heard, db = int(st.get("nodes_seen") or 0), st.get("nodes_db")
-    return "".join([
-        card("Bridge", f"running · {e(mode)}", "ok"),
+    face = "".join([
         card("Radio", f"{e(radio_txt)}<div class='meta'>{e(radio)}</div>", radio_cls),
+        card("Channel utilisation", (f"<a href='/health'>{float(st['chutil']):.1f}% <span class='pill'>{e(st.get('verdict') or '')}</span></a>" if st.get("chutil") is not None else "<a href='/health'>no reading yet</a>")
+             + "<div class='meta'>how busy the channel is · now, from this radio</div>",
+             {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(st.get("verdict") or "", "")),
+        card("Last packet TAK would have had" if st.get("observe") else "Last packet sent to TAK",
+             (f"<time datetime='{e(fwd)}' data-age>{e(age(fwd))}</time>" if fwd else "none yet"), "ok" if fwd else "warn"),
+    ])
+    rest = "".join([
+        card("Bridge", f"running · {e(mode)}", "ok"),
         card("This radio", f"{e(own.get('name') or '?')} <span class='pill'>{e(own.get('id') or '')}</span>"),
         card("Region · preset", f"{e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}"),
         card("Primary channel", e(st.get("primary_channel") or "?")),
-        card("Nodes", f"{heard} heard here" + (f"<div class='meta'>{int(db)} in the radio's database</div>" if db is not None else "")),
-        card("Mesh health", (f"<a href='/health'>{float(st['chutil']):.1f}% <span class='pill'>{e(st.get('verdict') or '')}</span></a>" if st.get("chutil") is not None else "<a href='/health'>no reading yet</a>") + "<div class='meta'>channel utilisation</div>",
-             {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(st.get("verdict") or "", "")),
-        card("Last packet that would have gone to TAK" if st.get("observe") else "Last packet forwarded to TAK",
-             (f"<time datetime='{e(fwd)}' data-age>{e(age(fwd))}</time>" if fwd else "none yet"), "ok" if fwd else "warn"),
-        card("Last activity on the serial loop", (f"<time datetime='{e(act)}' data-age>{e(age(act))}</time>" if act else "none yet")),
+        card("Nodes", f"{heard} heard here" + (f"<div class='meta'>{int(db)} in the radio's database · now, from the radio</div>" if db is not None else "")),
+        card("Radio last spoke", (f"<time datetime='{e(act)}' data-age>{e(age(act))}</time>" if act else "none yet")),
         card("Watchdog", e(st.get("watchdog") or "?"), "ok" if st.get("watchdog") == "pinging" else "warn"),
-        card("Up for", f"{int(st.get('uptime') or 0) // 60} min"),
+        card("Up for", e(dur(st.get("uptime")))),
     ])
+    return (f"<div class='cards'>{face}</div><details class='fold' data-keep='box-detail'><summary>The box in detail</summary><div class='cards'>{rest}</div></details>")
 
 
 def position_words(own):
@@ -681,6 +765,8 @@ def _position_words(own):
     src = (own or {}).get("position_source")
     if src == "config":
         return "the position set at install"
+    if src == "declared":
+        return "the position set on Settings"
     if src == "gps":
         sats = own.get("sats")
         return f"the box's own GPS receiver ({sats} satellites, fix at {hhmm(own.get('time'))})" if sats else f"the box's own GPS receiver (fix at {hhmm(own.get('time'))})"
@@ -735,10 +821,10 @@ def survey_form(L):
     nodes = [n for n in (L.get("nodes") or []) if n.get("id") and n.get("heard_here", True)]
     opts = "".join(f"<option value='{e(n['id'])}'>{e(dname(n))} ({e(n['id'])})</option>" for n in nodes)
     return (f"<details class='fold' id='survey' style='margin-top:var(--s3)'><summary>Coverage survey</summary><p class='meta'>{e(a['description'])} Turn the coverage layer on above to watch it fill.</p>"
-            f"<form data-action='survey_start' class='regform' style='grid-template-columns:2fr 1fr 1fr auto;max-width:720px'>"
-            f"<select name='dest' aria-label='node'>{opts}</select>"
-            "<input type='number' name='interval' value='15' min='5' max='120' aria-label='seconds between asks' title='seconds between asks'>"
-            "<input type='number' name='minutes' value='10' min='1' max='120' aria-label='minutes' title='minutes to keep asking'>"
+            f"<form data-action='survey_start' class='regform' style='grid-template-columns:2fr 1fr 1fr auto;max-width:720px;align-items:end'>"
+            f"<label class='meta'>Node<select name='dest' aria-label='node'>{opts}</select></label>"
+            "<label class='meta'>Every (seconds)<input type='number' name='interval' value='15' min='5' max='120' aria-label='seconds between asks'></label>"
+            "<label class='meta'>For (minutes)<input type='number' name='minutes' value='10' min='1' max='120' aria-label='minutes to keep asking'></label>"
             "<button class='line'>Start</button><div class='res meta' role='status'></div></form>"
             "<form data-action='survey_stop' style='display:inline'><button class='quiet'>Stop</button><div class='res meta' role='status'></div></form>"
             "<div class='meta' id='survey-line'></div></details>"
@@ -756,12 +842,13 @@ def overview_body(st, bind, auth_on=True, nodes=None, links=None, tiles=None):
               + ("" if auth_on else "<b>Sign-in is off</b>: anyone who can reach this address is the operator. ")
               + "The bridge binds no port of its own; it owns the radio and speaks to TAK Server over the multicast input. "
               "Everything else on this box is closed until the operator opens it.</p>")
-    js = """<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='forwarded'||d.kind==='connection'){window.mmFrag('overview','overview-cards');}
-if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){if(window.mmNodes){window.mmNodes();}window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}}
-if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>"""
+    js = """<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='forwarded'||d.kind==='connection'){var o=document.querySelector('#overview-cards details'),was=!!(o&&o.open);window.mmFrag('overview','overview-cards',function(){var n=document.querySelector('#overview-cards details');if(n&&was){n.open=true;}});}
+if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}var h=document.getElementById('home-heard');if(h&&d.kind==='status'&&d.nodes_seen!==undefined){h.textContent=d.nodes_seen;}}};</script>"""
     L = links or {"own": {}, "nodes": nodes or [], "routes": {}}
-    return (f"<h2 style='margin-top:0'>The mesh</h2>{mesh_views(L, tiles or tile_sources({}))}{nodes_body(L.get('nodes') or [], intro=False, routes=L.get('routes'))}"
-            f"<h2>This box</h2><div class='cards' id='overview-cards'>{overview_cards(st)}</div>{closed}{js}")
+    heard = len([n for n in (L.get("nodes") or []) if n.get("heard_here", True)])
+    return (f"{mesh_views(L, tiles or tile_sources({}))}"
+            f"<p class='meta'><a href='/nodes'>Nodes</a>: <span id='home-heard'>{heard}</span> heard here since the bridge started. Who is where, who has gone quiet and who is low on battery is on the Nodes page, one press away.</p>"
+            f"<h2>This box</h2><div id='overview-cards'>{overview_cards(st)}</div>{closed}{js}")
 
 
 # -- nodes
@@ -778,7 +865,7 @@ def sig(snr, hops):
         return "<span class='sig sig--0'><span class='sub'>no reading</span></span>" + hop
     snr = float(snr)
     bars = 4 if snr >= 10 else 3 if snr >= 5 else 2 if snr >= -7 else 1 if snr >= -12 else 0
-    return f"<span class='sig sig--{bars}' title='SNR {snr:g} dB'>{SIG_SVG}<span>{snr:g} dB</span></span>{hop}"
+    return f"<span class='sig sig--{bars}' data-tip='SNR {snr:g} dB' data-tip-more='Signal to noise of the last packet straight from this node'>{SIG_SVG}<span>{snr:g} dB</span></span>{hop}"
 
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -1071,11 +1158,12 @@ OVERLAY_JS = r"""<script>
   function trailHours(){var el=document.getElementById('trail-hours');var v=el?el.value:'3';try{if(!el){v=localStorage.getItem('mm-trails')||'3';}}catch(e){}return v;}
   var lastRows=[];
   function drawTrails(rows){lastRows=rows||[];trails_.clearLayers();var hrs=parseFloat(trailHours());if(!(hrs>0)||!rows||!rows.length)return;var now=Date.now(),win=hrs*3600*1000;
-    var byNode={};rows.forEach(function(r){if(r.lat===null||r.lon===null)return;(byNode[r.node]=byNode[r.node]||[]).push(r);});
+    var g=groupChosen();var byNode={};rows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(g&&(groups_[r.node]||'')!==g)return;(byNode[r.node]=byNode[r.node]||[]).push(r);});
     var names={};(lastJ&&lastJ.nodes||[]).forEach(function(n){names[n.id]=n.label||n.name||n.id;});
     Object.keys(byNode).forEach(function(id,idx){var pts=byNode[id];pts.sort(function(a,b){return a.ts<b.ts?-1:1;});var stride=Math.max(1,Math.floor(pts.length/600));var col=tok(TRAIL_COLOURS[idx%TRAIL_COLOURS.length]);
       for(var i=stride;i<pts.length;i+=stride){var a=pts[i-stride],b=pts[i];var age=now-Date.parse(b.ts);if(age>win)continue;var d=map.distance([a.lat,a.lon],[b.lat,b.lon]);if(d>2000)continue;
-        var op=0.25+0.75*Math.max(0,1-age/win);L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:col,weight:4,opacity:op,interactive:true}).bindTooltip((names[id]||id)+' · '+b.ts.slice(11,16)+'Z',{sticky:true,className:'mm-link'}).addTo(trails_);}});}
+        var op=0.25+0.75*Math.max(0,1-age/win);L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:col,weight:4,opacity:op,interactive:true}).bindTooltip((names[id]||id)+' · '+b.ts.slice(11,16)+'Z',{sticky:true,className:'mm-link'}).addTo(trails_);}});
+    if(window.requestAnimationFrame){requestAnimationFrame(function(){if(typeof drawTimeline==='function')drawTimeline();});}}
   function fetchTrails(force){var th=parseFloat(trailHours()),ch=parseFloat(coverHours());var hrs=Math.max(th>0?th:0,ch>0?ch:0);if(!(hrs>0)){trails_.clearLayers();cover_.clearLayers();return;}var now=Date.now();if(!force&&now-trailLast<60000)return;trailLast=now;
     var since=new Date(now-hrs*3600*1000).toISOString().replace(/\.\d+Z$/,'Z');
     fetch('/api/history?kind=positions&since='+encodeURIComponent(since)+'&limit=5000').then(function(r){return r.json();}).then(function(j){drawTrails(j.rows||[]);drawCover(j.rows||[]);}).catch(function(){});}
@@ -1098,7 +1186,12 @@ OVERLAY_JS = r"""<script>
     function square(zone,x,y){return COLS[(zone-1)%3][Math.floor(x/100000)-1]+ROWS[(Math.floor(y/100000)+(zone%2===0?5:0))%20];}
     function pad(n,p){var s=String(n);while(s.length<p)s='0'+s;return s;}
     function mgrs(lat,lon,prec){var band=bandFor(lat);if(!band)return '';var u=toUtm(lat,lon);var sq=square(u.zone,u.x,u.y);var p=Math.max(0,Math.min(5,prec===undefined?5:prec));if(p===0)return u.zone+band+' '+sq;var div=Math.pow(10,5-p);return u.zone+band+' '+sq+' '+pad(Math.floor((u.x%100000)/div),p)+' '+pad(Math.floor((u.y%100000)/div),p);}
-    return {zoneFor:zoneFor,toUtm:toUtm,fromUtm:fromUtm,mgrs:mgrs};})();window.mmMgrs=MG.mgrs;
+    function parse(str){var t=String(str||'').toUpperCase().replace(/\s+/g,'');var m=/^(\d{1,2})([C-HJ-NP-X])([A-HJ-NP-Z])([A-HJ-NP-V])(\d*)$/.exec(t);if(!m)return null;var zone=parseInt(m[1],10),band=m[2],digits=m[5];if(zone<1||zone>60||digits.length%2)return null;
+      var p=digits.length/2,div=Math.pow(10,5-p);var ex=p?parseInt(digits.slice(0,p),10)*div+div/2:50000,ny=p?parseInt(digits.slice(p),10)*div+div/2:50000;
+      var col=COLS[(zone-1)%3].indexOf(m[3]);if(col<0)return null;var x=(col+1)*100000+ex;var row=ROWS.indexOf(m[4]);if(row<0)return null;row=(row-(zone%2===0?5:0)+20)%20;
+      var bi=BANDS.indexOf(band),minLat=-80+bi*8,maxLat=band==='X'?84:minLat+8,south=band<'N';
+      for(var k=0;k<10;k++){var y=row*100000+ny+k*2000000;if(y>10000000)break;var ll=fromUtm(zone,south?'S':'N',x,y);if(ll[0]>=minLat-0.01&&ll[0]<maxLat+0.01)return ll;}return null;}
+    return {zoneFor:zoneFor,toUtm:toUtm,fromUtm:fromUtm,mgrs:mgrs,parse:parse};})();window.mmMgrs=MG.mgrs;window.mmMgrsParse=MG.parse;
   // the readout: MGRS and degrees under the mouse; the box's own at rest
   var Readout=L.Control.extend({onAdd:function(){var d=L.DomUtil.create('div','mm-readout');d.id='map-readout';d.textContent='';return d;}});map.addControl(new Readout({position:'bottomleft'}));
   function readout(ll,label){var el=document.getElementById('map-readout');if(!el)return;if(!ll){el.textContent='';return;}el.textContent=(label?label+' ':'')+MG.mgrs(ll.lat,ll.lng,5)+' · '+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5);}
@@ -1138,7 +1231,7 @@ OVERLAY_JS = r"""<script>
   var rings_=L.layerGroup().addTo(map),centre=null;
   function niceStep(raw){if(!(raw>0))return 10;var mag=Math.pow(10,Math.floor(Math.log10(raw)));var c_=[1,2,5].map(function(x){return x*mag;}).filter(function(v){return v<=raw;});return c_.length?c_[c_.length-1]:mag;}
   function ringStep(){var b=map.getBounds(),m=map.getCenter();var h=map.distance([b.getNorth(),m.lng],[b.getSouth(),m.lng])/2,w=map.distance([m.lat,b.getWest()],[m.lat,b.getEast()])/2;return niceStep(Math.min(h,w)/3);}
-  function alpha(){var v=60;try{var s=localStorage.getItem('mm-ring-alpha');if(s!==null)v=parseInt(s,10);}catch(e){}var el=document.getElementById('ring-alpha');if(el&&el.value!==''){v=parseInt(el.value,10);}if(isNaN(v))v=60;return Math.max(0,Math.min(100,v))/100;}
+  function alpha(){var v=60;try{var s=localStorage.getItem('mm-ring-alpha');if(s!==null)v=parseInt(s,10);}catch(e){}var el=document.querySelector('input[name=rings]:checked');if(el){v=parseInt(el.value,10);}if(isNaN(v))v=60;return Math.max(0,Math.min(100,v))/100;}
   function rings(){rings_.clearLayers();if(!centre||!map._loaded)return;var a=alpha(),lbl=document.getElementById('ring-step');if(a<=0){if(lbl){lbl.textContent='rings off';}return;}var step=ringStep();if(lbl){lbl.textContent='rings every '+dist(step);}
     for(var k=1;k<=3;k++){L.circle(centre,{radius:k*step,color:tok('--accent'),weight:4,opacity:a*0.55,dashArray:'4 6',fill:false,interactive:false}).addTo(rings_);
       L.circle(centre,{radius:k*step,color:tok('--gold'),weight:2,opacity:a,dashArray:'4 6',fill:false,interactive:false}).addTo(rings_);
@@ -1150,43 +1243,148 @@ OVERLAY_JS = r"""<script>
       L.DomEvent.disableClickPropagation(d);L.DomEvent.on(b,'click',function(ev){L.DomEvent.stop(ev);if(!ownLL)return;map.invalidateSize();map.fitBounds(ownLL.toBounds(1000),{animate:false});});return d;}});
   map.addControl(new Centre({position:'topleft'}));
   function centreBtn(on){var b=document.getElementById('map-centre');if(!b)return;b.disabled=!on;b.setAttribute('data-tip-more',on?'A one-kilometre view with this box in the middle':'No position for this box yet');}
-  var slider=document.getElementById('ring-alpha');if(slider){try{var s0=localStorage.getItem('mm-ring-alpha');if(s0!==null){slider.value=s0;}}catch(e){}slider.addEventListener('input',function(){try{localStorage.setItem('mm-ring-alpha',slider.value);}catch(e){}rings();});}
+  (function(){var rs=document.querySelectorAll('input[name=rings]');if(!rs.length)return;try{var s0=localStorage.getItem('mm-ring-alpha');if(s0!==null){rs.forEach(function(r){r.checked=(r.value===s0);});}}catch(e){}
+    rs.forEach(function(r){r.addEventListener('change',function(){try{localStorage.setItem('mm-ring-alpha',r.value);}catch(e){}rings();});});})();
+  var lay=document.getElementById('layers');if(lay){try{var lo=localStorage.getItem('mm-layers');lay.open=lo===null?window.innerWidth>700:lo==='1';}catch(e){lay.open=window.innerWidth>700;}lay.addEventListener('toggle',function(){try{localStorage.setItem('mm-layers',lay.open?'1':'0');}catch(e){}});}
   var pop=document.getElementById('map-pop');if(pop){pop.addEventListener('click',function(){window.open('/map/full','mm-map','popup=yes,width=1100,height=800');});}
+  // place a waypoint by pressing the map, or type a grid reference: either fills the degrees the form sends
+  var placing=false,wpBtn=document.getElementById('wp-place'),wpNote=document.getElementById('wp-place-note');
+  function fillWp(ll){var la=document.getElementById('wp-lat'),lo=document.getElementById('wp-lon'),mg=document.getElementById('wp-mgrs');if(la)la.value=ll.lat.toFixed(5);if(lo)lo.value=ll.lng.toFixed(5);if(mg)mg.value=MG.mgrs(ll.lat,ll.lng,4);}
+  if(wpBtn){wpBtn.addEventListener('click',function(){placing=!placing;wpBtn.setAttribute('aria-pressed',placing?'true':'false');if(wpNote)wpNote.textContent=placing?'press the map where the waypoint goes':'';document.getElementById('map-geo').style.cursor=placing?'crosshair':'';});
+    map.on('click',function(ev){if(!placing)return;placing=false;wpBtn.setAttribute('aria-pressed','false');document.getElementById('map-geo').style.cursor='';fillWp(ev.latlng);if(wpNote)wpNote.textContent='placed at '+MG.mgrs(ev.latlng.lat,ev.latlng.lng,4);});}
+  var wpM=document.getElementById('wp-mgrs');if(wpM){wpM.addEventListener('input',function(){var n=document.getElementById('wp-mgrs-note');var p=MG.parse(wpM.value);if(!wpM.value.trim()){if(n)n.textContent='';return;}if(!p){if(n)n.textContent='not a grid reference this map can read';return;}var la=document.getElementById('wp-lat'),lo=document.getElementById('wp-lon');if(la)la.value=p[0].toFixed(5);if(lo)lo.value=p[1].toFixed(5);if(n)n.textContent=p[0].toFixed(5)+', '+p[1].toFixed(5);});}
+  // Spec 045: fences. A control under Centre enters draw mode: each press drops a corner, Finish (or a double press)
+  // closes the outline; Circle instead takes a centre and a radius. The outline goes to the form under the map.
+  var fences_=L.layerGroup().addTo(map),draft_=L.layerGroup().addTo(map),drawing=null,corners=[],fenceRadius=200;
+  var FenceCtl=L.Control.extend({onAdd:function(){var d=L.DomUtil.create('div','leaflet-bar mm-centre');var b=L.DomUtil.create('button','',d);b.type='button';b.id='fence-draw';b.setAttribute('aria-label','Draw a fence');b.setAttribute('data-tip','Draw a fence on the map');b.setAttribute('data-tip-more','Press the corners, then Finish; a crossing raises an alert');
+      b.innerHTML="<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M8 1.8l6 4.4-2.3 7H4.3L2 6.2z'/></svg>";
+      L.DomEvent.disableClickPropagation(d);L.DomEvent.on(b,'click',function(ev){L.DomEvent.stop(ev);if(drawing){fenceCancel();}else{fenceStart('polygon');}});return d;}});
+  map.addControl(new FenceCtl({position:'topleft'}));
+  var fenceBar=null;
+  function fenceReadout(t){var el=document.getElementById('map-readout');if(el){el.textContent=t;}}
+  function fenceStart(kind){drawing=kind;corners=[];draft_.clearLayers();document.getElementById('map-geo').style.cursor='crosshair';
+    if(!fenceBar){fenceBar=document.createElement('div');fenceBar.className='row-actions';fenceBar.id='fence-bar';fenceBar.style.margin='var(--s2) 0';
+      fenceBar.innerHTML="<span class='meta' id='fence-hint'></span><button type='button' class='line' id='fence-finish'>Finish</button><button type='button' class='quiet' id='fence-undo'>Undo</button><button type='button' class='quiet' id='fence-circle'>Circle instead</button><label class='meta' id='fence-rlabel' hidden>Radius (metres) <input type='number' id='fence-r' value='200' min='10' max='100000' style='width:7em;margin:0'></label><button type='button' class='quiet' id='fence-cancel2'>Cancel</button>";
+      var geo=document.getElementById('map-geo');geo.parentNode.insertBefore(fenceBar,geo.nextSibling);
+      fenceBar.querySelector('#fence-finish').addEventListener('click',fenceFinish);fenceBar.querySelector('#fence-undo').addEventListener('click',function(){corners.pop();fenceDraft();});
+      fenceBar.querySelector('#fence-cancel2').addEventListener('click',fenceCancel);
+      fenceBar.querySelector('#fence-circle').addEventListener('click',function(){drawing=drawing==='circle'?'polygon':'circle';corners=[];fenceDraft();});
+      fenceBar.querySelector('#fence-r').addEventListener('input',function(ev){fenceRadius=parseFloat(ev.target.value)||200;fenceDraft();});}
+    fenceBar.hidden=false;fenceDraft();}
+  function fenceDraft(){draft_.clearLayers();var hint=document.getElementById('fence-hint'),rl=document.getElementById('fence-rlabel'),cb=document.getElementById('fence-circle');
+    if(cb){cb.textContent=drawing==='circle'?'Outline instead':'Circle instead';}if(rl){rl.hidden=drawing!=='circle';}
+    if(drawing==='circle'){if(hint)hint.textContent=corners.length?'centre set: adjust the radius, then Finish':'press the map at the centre';
+      if(corners.length){L.circle(corners[0],{radius:fenceRadius,color:tok('--gold'),weight:3,dashArray:'6 6',fill:true,fillOpacity:.08}).addTo(draft_);}return;}
+    if(hint)hint.textContent=corners.length<3?('press the corners ('+corners.length+' of 3 at least)'):(corners.length+' corners: press Finish, or another corner');
+    corners.forEach(function(c,i){L.circleMarker(c,{radius:6,color:tok('--gold'),weight:2,fillColor:tok('--surface-raised'),fillOpacity:1}).bindTooltip(String(i+1),{permanent:true,direction:'top',className:'mm-ring'}).addTo(draft_);});
+    if(corners.length>1){L.polyline(corners.concat(corners.length>2?[corners[0]]:[]),{color:tok('--gold'),weight:3,dashArray:'6 6'}).addTo(draft_);}}
+  function fenceCancel(){drawing=null;corners=[];draft_.clearLayers();if(fenceBar)fenceBar.hidden=true;document.getElementById('map-geo').style.cursor='';var ff=document.getElementById('fence-form');if(ff)ff.hidden=true;}
+  function fenceFinish(){var form=document.getElementById('fence-form');if(!form)return;var f=form.querySelector('form'),shape=document.getElementById('fence-shape');
+    if(drawing==='circle'){if(!corners.length){return;}f.elements.kind.value='circle';f.elements.lat.value=corners[0][0].toFixed(6);f.elements.lon.value=corners[0][1].toFixed(6);f.elements.radius_m.value=Math.round(fenceRadius);f.elements.points.value='';
+      if(shape)shape.textContent='a circle of '+dist(fenceRadius)+' round '+MG.mgrs(corners[0][0],corners[0][1],4);}
+    else{if(corners.length<3){var h=document.getElementById('fence-hint');if(h)h.textContent='three corners at least';return;}f.elements.kind.value='polygon';f.elements.points.value=JSON.stringify(corners.map(function(c){return [+c[0].toFixed(6),+c[1].toFixed(6)];}));f.elements.lat.value='';f.elements.lon.value='';f.elements.radius_m.value='';
+      if(shape)shape.textContent=corners.length+' corners';}
+    form.hidden=false;f.elements.name.focus();}
+  map.on('click',function(ev){if(!drawing)return;if(drawing==='circle'){corners=[[ev.latlng.lat,ev.latlng.lng]];}else{corners.push([ev.latlng.lat,ev.latlng.lng]);}fenceDraft();});
+  map.on('dblclick',function(ev){if(drawing==='polygon'&&corners.length>=3){L.DomEvent.stop(ev);fenceFinish();}});
+  var fc=document.getElementById('fence-cancel');if(fc){fc.addEventListener('click',fenceCancel);}
+  function fetchFences(){fetch('/api/fences').then(function(r){return r.json();}).then(function(j){fences_.clearLayers();var tb=document.getElementById('fence-list');var rows='';
+    (j.fences||[]).forEach(function(f){var col=f.enabled===false?tok('--ink-muted'):tok('--gold');var lyr=f.kind==='circle'&&f.centre?L.circle(f.centre,{radius:f.radius_m||0,color:col,weight:3,dashArray:'6 6',fillOpacity:.06}):(f.points&&f.points.length>2?L.polygon(f.points,{color:col,weight:3,dashArray:'6 6',fillOpacity:.06}):null);
+      if(lyr){lyr.bindTooltip(f.name||f.id,{permanent:true,direction:'center',className:'mm-ring'}).addTo(fences_);}
+      var when={enter:'coming in',leave:'going out',both:'either way'}[f.rule]||f.rule;
+      var tr=document.createElement('tr');tr.innerHTML="<td><b></b><div class='sub'></div></td><td></td><td></td><td><div class='row-actions'></div><div class='res meta' role='status'></div></td>";
+      tr.querySelector('b').textContent=f.name||f.id;tr.querySelector('.sub').textContent=(f.kind==='circle'?('circle, '+dist(f.radius_m||0)):((f.points||[]).length+' corners'))+(f.enabled===false?' · off':'');
+      tr.children[1].textContent=when;tr.children[2].textContent=f.group||'everyone';
+      var ra=tr.querySelector('.row-actions');
+      var tog=document.createElement('button');tog.type='button';tog.className='line';tog.textContent=f.enabled===false?'Turn on':'Turn off';tog.addEventListener('click',function(){fetch('/api/fence_set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:f.id,enabled:f.enabled===false?'on':'off'})}).then(fetchFences);});
+      var rm=document.createElement('button');rm.type='button';rm.className='danger';rm.textContent='Remove';rm.addEventListener('click',function(){window.mmConfirm('Remove the fence '+(f.name||f.id)+'? It no longer alerts. Nothing is sent to any device.',tr.children[3],function(){fetch('/api/fence_delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:f.id})}).then(fetchFences);});});
+      ra.appendChild(tog);ra.appendChild(rm);if(tb){tb.appendChild(tr);}rows+='x';});
+    if(tb){while(tb.children.length>(j.fences||[]).length){tb.removeChild(tb.firstChild);}if(!(j.fences||[]).length){tb.innerHTML="<tr><td colspan=4 class='meta'>No fence yet. Press the outline on the map (under Centre) and draw one.</td></tr>";}}}).catch(function(){});}
+  document.addEventListener('mm-written',function(ev){var a=ev.detail&&ev.detail.action;if(a==='fence_set'||a==='fence_delete'){fenceCancel();fetchFences();}});
+  fetchFences();
   function band(v){if(v===null||v===undefined)return 0;return v>=10?4:v>=5?3:v>=-7?2:v>=-12?1:0;}
   function bandTok(b){return b>=3?'--ok':b===2?'--warn':'--bad';}
   function dist(m){return m>=1000?(m/1000).toFixed(m>=10000?0:1)+' km':Math.round(m)+' m';}
   function draw(J){lastJ=J;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
-    var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;if(n.heard_here===false)return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
+    var g=groupChosen();var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(n.heard_here===false)return;if(g&&(n.group||'')!==g)return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
     centre=c;rings();
     pts.forEach(function(n){var ll=[n.lat,n.lon],ds=n.direct_snr;
       if(ds!==null&&ds!==undefined){L.polyline([c,ll],{color:tok(bandTok(band(ds))),weight:3}).bindTooltip(ds+' dB',{permanent:true,direction:'center',className:'mm-link'}).addTo(overlay);}
       else{L.polyline([c,ll],{color:tok('--ink-muted'),weight:2,dashArray:'6 6'}).addTo(overlay);}});
     Object.keys(J.routes||{}).forEach(function(d){var rt=J.routes[d],path=[c];(rt.towards||[]).forEach(function(h){var n=byId[h.id];if(n&&n.lat!==null&&n.lat!==undefined&&n.lon!==null&&n.lon!==undefined){path.push([n.lat,n.lon]);}});
       if(path.length>1){L.polyline(path,{color:tok('--gold'),weight:5,opacity:.7}).addTo(overlay);}});
-    pts.forEach(function(n){L.circleMarker([n.lat,n.lon],{radius:8,color:tok('--accent'),weight:2,fillColor:tok('--surface-raised'),fillOpacity:1}).bindTooltip(n.label||n.name||n.id,{permanent:true,direction:'bottom',className:'mm-node'}).addTo(overlay);});
+    pts.forEach(function(n){L.marker([n.lat,n.lon],{icon:nodeIcon(n.icon,''),keyboard:false}).bindTooltip(n.label||n.name||n.id,{permanent:true,direction:'bottom',className:'mm-node'}).addTo(overlay);});
     L.circleMarker(c,{radius:9,color:tok('--gold'),weight:2,fillColor:tok('--accent'),fillOpacity:1}).bindTooltip(own.name||'this box',{permanent:true,direction:'bottom',className:'mm-node'}).addTo(overlay);
     var nopos=(J.nodes||[]).filter(function(n){return n.heard_here!==false&&(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined);});
-    var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>No position, not placed:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
+    var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>Heard, but no position, so not on the map:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
     if(!fitted&&sized()&&!benchAt){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}
     if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}}
-  // Spec 040: playback. Every node where it last was at instant t, and the trail it had walked by then,
-  // from the trails rows the map already holds. The live overlay hides while the slider is off "now".
-  var play_=L.layerGroup().addTo(map),playT=document.getElementById('play-t'),playGo=document.getElementById('play-go'),playAt=document.getElementById('play-at'),playing=null;
+  // Spec 040 and Spec 047: playback. Every node where it last was at instant T (nothing interpolated), the run it had
+  // walked since its last gap, hollow with the age when its last report is older than its gap; a timeline with a row per
+  // node and a tick per report, seekable by press or drag; speeds, reverse, fit, keys. Built from the trails rows the map holds.
+  /* pure:start */
   function posAt(rows,node,t){var best=null;for(var i=0;i<rows.length;i++){var r=rows[i];if(r.node!==node)continue;var ts=Date.parse(r.ts);if(ts<=t&&(!best||ts>Date.parse(best.ts)))best=r;}return best;}
+  function medianInterval(times){if(!times||times.length<2)return null;var d=[];for(var i=1;i<times.length;i++)d.push(times[i]-times[i-1]);d.sort(function(a,b){return a-b;});var m=Math.floor(d.length/2);return d.length%2?d[m]:(d[m-1]+d[m])/2;}
+  function gapFor(times){var med=medianInterval(times);return Math.max(120000,med?4*med:120000);}
+  function isStaleAt(t,times,gap){var last=null;for(var i=0;i<times.length;i++){if(times[i]<=t&&(last===null||times[i]>last))last=times[i];}return last===null||(t-last)>gap;}
+  // one step of the clock: forward stops only at the end, backward only at the start; the window slides with now, so a T just below
+  // the start is clamped, never mistaken for the end of a backward run (found on the demo: play stopped before its first frame)
+  function stepPlay(T,dt,dir,spd,rg){var nT=T+dt*dir*spd,playing=true;if(dir>0&&nT>=rg[1]){nT=rg[1];playing=false;}else if(dir<0&&nT<=rg[0]){nT=rg[0];playing=false;}if(nT<rg[0])nT=rg[0];if(nT>rg[1])nT=rg[1];return {T:nT,playing:playing};}
+  /* pure:end */
+  var play_=L.layerGroup().addTo(map),playT=document.getElementById('play-t'),playGo=document.getElementById('play-go'),playAt=document.getElementById('play-at'),playPos=document.getElementById('play-pos');
+  var SPEEDS=[1,10,60,300,1000],speedSel=document.getElementById('play-speed'),tl=document.getElementById('timeline'),tctx=tl?tl.getContext('2d'):null;
+  var T=null,playing=false,dir=1,lastFrame=null,hidden_={},scrubbing=false,tlLabelW=110,tlHead=16,tlRows=[],tlRowH=12;
+  var names_={},groups_={};
+  function groupChosen(){var el=document.getElementById('group-filter');return el?el.value:'';}
+  function nodeIcon(kind,extra){var svg=(window.mmNodeIcons||{})[kind]||(window.mmNodeIcons||{}).radio||'';return L.divIcon({className:'mm-pin '+(extra||''),html:"<span class='mm-pin-in'>"+svg+"</span>",iconSize:[30,30],iconAnchor:[15,15],tooltipAnchor:[0,15]});}
+  var gsel_=document.getElementById('group-filter');if(gsel_){gsel_.addEventListener('change',function(){if(lastJ)draw(lastJ);drawTrails(lastRows);renderPlay();});}
   function playRange(){var hrs=parseFloat(trailHours());if(!(hrs>0))hrs=3;var now=Date.now();return [now-hrs*3600*1000,now];}
-  function renderPlay(){if(!playT)return;var v=parseInt(playT.value,10);play_.clearLayers();
-    if(v>=1000){if(!map.hasLayer(overlay))map.addLayer(overlay);if(!map.hasLayer(trails_))map.addLayer(trails_);if(playAt)playAt.textContent='';return;}
+  function speed(){return SPEEDS[speedSel?parseInt(speedSel.value,10):0]||1;}
+  function tracks(){var g=groupChosen();var by={};lastRows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(g&&(groups_[r.node]||'')!==g)return;(by[r.node]=by[r.node]||[]).push(r);});
+    return Object.keys(by).sort(function(a,b){return (names_[a]||a).toLowerCase()<(names_[b]||b).toLowerCase()?-1:1;}).map(function(id){var pts=by[id].slice().sort(function(a,b){return a.ts<b.ts?-1:1;});var times=pts.map(function(r){return Date.parse(r.ts);});return {id:id,pts:pts,times:times,gap:gapFor(times)};});}
+  function two(n){return ('0'+n).slice(-2);}
+  function fmtUTC(t){var d=new Date(t);return two(d.getUTCHours())+':'+two(d.getUTCMinutes())+':'+two(d.getUTCSeconds())+'Z';}
+  function fmtDur(ms){var s=Math.max(0,Math.round(ms/1000));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return (h?h+' h ':'')+m+' min';}
+  function fmtAge(ms){var s=Math.max(0,Math.round(ms/1000));if(s<60)return s+' s';var m=Math.floor(s/60);if(m<60)return m+' min';return Math.floor(m/60)+' h '+(m%60)+' min';}
+  function atEnd(){var rg=playRange();return T===null||T>=rg[1]-1000;}
+  function renderPlay(){play_.clearLayers();var rg=playRange();
+    if(atEnd()){if(!map.hasLayer(overlay))map.addLayer(overlay);if(!map.hasLayer(trails_))map.addLayer(trails_);if(playAt)playAt.textContent='now';if(playPos)playPos.textContent='';if(playT&&!scrubbing)playT.value=1000;drawTimeline();return;}
     if(map.hasLayer(overlay))map.removeLayer(overlay);if(map.hasLayer(trails_))map.removeLayer(trails_);
-    var rg=playRange(),t=rg[0]+(rg[1]-rg[0])*v/1000;if(playAt)playAt.textContent=new Date(t).toISOString().slice(0,19)+'Z';
-    var nodes={};lastRows.forEach(function(r){nodes[r.node]=true;});
-    Object.keys(nodes).forEach(function(id){var p=posAt(lastRows,id,t);if(!p)return;var path=lastRows.filter(function(r){return r.node===id&&Date.parse(r.ts)<=t&&Date.parse(r.ts)>=rg[0];}).map(function(r){return [r.lat,r.lon];});
-      if(path.length>1)L.polyline(path,{color:tok('--gold'),weight:3,opacity:.7}).addTo(play_);
-      L.circleMarker([p.lat,p.lon],{radius:8,color:tok('--accent'),weight:2,fillColor:tok('--gold'),fillOpacity:1}).bindTooltip((names_[id]||id),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});}
-  var names_={};
-  if(playT){playT.addEventListener('input',renderPlay);}
-  if(playGo){playGo.addEventListener('click',function(){if(playing){clearInterval(playing);playing=null;playGo.textContent='Play';return;}
-    if(parseInt(playT.value,10)>=1000)playT.value=0;playGo.textContent='Pause';
-    playing=setInterval(function(){var v=parseInt(playT.value,10)+5;if(v>=1000){v=1000;clearInterval(playing);playing=null;playGo.textContent='Play';}playT.value=v;renderPlay();},200);});}
+    if(playAt)playAt.textContent=fmtUTC(T);if(playPos)playPos.textContent=fmtDur(T-rg[0])+' of '+fmtDur(rg[1]-rg[0]);if(playT&&!scrubbing)playT.value=Math.round((T-rg[0])/(rg[1]-rg[0])*1000);
+    tracks().forEach(function(tr){if(hidden_[tr.id])return;var p=posAt(tr.pts,tr.id,T);if(!p)return;var stale=isStaleAt(T,tr.times,tr.gap);
+      var run=[];for(var i=tr.pts.length-1;i>=0;i--){var ts=tr.times[i];if(ts>T)continue;if(run.length&&(Date.parse(run[0].ts)-ts)>tr.gap)break;run.unshift(tr.pts[i]);}
+      if(run.length>1)L.polyline(run.map(function(r){return [r.lat,r.lon];}),{color:tok('--gold'),weight:4,opacity:.8}).addTo(play_);
+      var nn=(lastJ&&lastJ.nodes||[]).filter(function(x){return x.id===tr.id;})[0]||{};
+      L.marker([p.lat,p.lon],{icon:nodeIcon(nn.icon,'play'+(stale?' stale':'')),keyboard:false}).bindTooltip((names_[tr.id]||tr.id)+(stale?' · '+fmtAge(T-Date.parse(p.ts))+' old':''),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});
+    drawTimeline();}
+  function tlLayout(){if(!tl)return null;var r=tl.getBoundingClientRect(),dpr=window.devicePixelRatio||1;var w=Math.max(200,Math.floor(r.width)),h=Math.max(40,Math.floor(r.height));if(tl.width!==Math.round(w*dpr)||tl.height!==Math.round(h*dpr)){tl.width=Math.round(w*dpr);tl.height=Math.round(h*dpr);}tctx.setTransform(dpr,0,0,dpr,0,0);return [w,h];}
+  function drawTimeline(){if(!tctx)return;tlRows=tracks();var want=Math.max(60,tlHead+Math.max(1,tlRows.length)*14+6);if(Math.abs(tl.clientHeight-want)>2){tl.style.height=want+'px';}
+    var dims=tlLayout();if(!dims)return;var W=dims[0],H=dims[1];var rg=playRange(),W0=rg[0],W1=rg[1];tctx.clearRect(0,0,W,H);
+    tlRowH=Math.max(8,Math.min(18,(H-tlHead-2)/Math.max(1,tlRows.length)));var x=function(t){return tlLabelW+(t-W0)/(W1-W0)*(W-tlLabelW-6);};
+    tctx.font='10px -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';tctx.textBaseline='top';var span=W1-W0;var step=span>30*36e5?6*36e5:span>8*36e5?36e5:span>2*36e5?15*6e4:5*6e4;
+    for(var m=Math.ceil(W0/step)*step;m<W1;m+=step){tctx.fillStyle=tok('--line');tctx.fillRect(x(m),tlHead-3,1,H-tlHead+3);tctx.fillStyle=tok('--ink-muted');tctx.fillText(fmtUTC(m).slice(0,5)+'Z',x(m)+3,2);}
+    if(!tlRows.length){tctx.fillStyle=tok('--ink-muted');tctx.fillText('no position reports in the window',tlLabelW,tlHead+4);}
+    tlRows.forEach(function(tr,i){var y=tlHead+i*tlRowH;tctx.globalAlpha=hidden_[tr.id]?.45:1;tctx.fillStyle=tok('--ink');tctx.fillText((names_[tr.id]||tr.id).slice(0,16),4,y+Math.max(0,(tlRowH-11)/2));
+      tctx.fillStyle=tok('--accent');tr.times.forEach(function(t){tctx.fillRect(x(t),y+1,1.5,Math.max(2,tlRowH-2));});tctx.globalAlpha=1;});
+    var cx=x(atEnd()?W1:T);tctx.fillStyle=tok('--gold');tctx.fillRect(cx-1,0,2,H);}
+  function seekFromEvent(ev){var r=tl.getBoundingClientRect();var rg=playRange();var f=Math.min(1,Math.max(0,(ev.clientX-r.left-tlLabelW)/(r.width-tlLabelW-6)));T=rg[0]+f*(rg[1]-rg[0]);renderPlay();}
+  if(tl){tl.addEventListener('pointerdown',function(ev){var r=tl.getBoundingClientRect();if(ev.clientX-r.left<tlLabelW){var row=Math.floor((ev.clientY-r.top-tlHead)/tlRowH);var tr=tlRows[row];if(tr){hidden_[tr.id]=!hidden_[tr.id];renderPlay();}return;}scrubbing=true;try{tl.setPointerCapture(ev.pointerId);}catch(e){}seekFromEvent(ev);});
+    tl.addEventListener('pointermove',function(ev){if(scrubbing)seekFromEvent(ev);});tl.addEventListener('pointerup',function(ev){scrubbing=false;try{tl.releasePointerCapture(ev.pointerId);}catch(e){}});tl.addEventListener('pointercancel',function(){scrubbing=false;});
+    if(window.ResizeObserver){new ResizeObserver(function(){drawTimeline();}).observe(tl);}}
+  function setPlaying(p){playing=p;lastFrame=null;if(playGo){var ic=window.mmIcons||{};playGo.setAttribute('aria-label',p?'Pause':'Play the window back');playGo.setAttribute('data-tip',p?'Pause':'Play the window back');playGo.innerHTML=(p?(ic.pause||''):(ic.play||''))+"<span class='lbl'>"+(p?'Pause':'Play')+"</span>";}}
+  function frame(now){if(playing&&!scrubbing){var rg=playRange();if(T===null)T=dir>0?rg[0]:rg[1];if(lastFrame!==null){var st=stepPlay(T,now-lastFrame,dir,speed(),rg);T=st.T;if(!st.playing)setPlaying(false);}lastFrame=now;renderPlay();}requestAnimationFrame(frame);}
+  requestAnimationFrame(frame);
+  if(playT){playT.addEventListener('input',function(){var rg=playRange();T=rg[0]+(rg[1]-rg[0])*parseInt(playT.value,10)/1000;scrubbing=true;renderPlay();scrubbing=false;});}
+  if(playGo){playGo.addEventListener('click',function(){if(playing){setPlaying(false);return;}if(atEnd()&&dir>0){T=playRange()[0];}setPlaying(true);});}
+  var ps=document.getElementById('play-start');if(ps){ps.addEventListener('click',function(){var rg=playRange();T=dir>0?rg[0]:rg[1];renderPlay();});}
+  var pr=document.getElementById('play-rev');if(pr){pr.addEventListener('click',function(){dir=-dir;pr.setAttribute('aria-pressed',dir<0?'true':'false');pr.classList.toggle('on',dir<0);});}
+  var pf=document.getElementById('play-fit');if(pf){pf.addEventListener('click',function(){var b=null;tracks().forEach(function(tr){if(hidden_[tr.id])return;tr.pts.forEach(function(r){var ll=L.latLng(r.lat,r.lon);b=b?b.extend(ll):L.latLngBounds([ll]);});});if(b&&b.isValid()){map.fitBounds(b.pad(0.25));}});}
+  // keys: space, the arrows (one per cent of the window, ten with shift), [ and ] for speed, r to reverse, f to fit; never while typing
+  window.addEventListener('keydown',function(ev){var tg=ev.target&&ev.target.tagName;if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA')return;var geo=document.getElementById('map-geo');if(!geo||geo.closest('[hidden]'))return;var rg=playRange(),win=rg[1]-rg[0];
+    if(ev.code==='Space'||ev.key===' '){ev.preventDefault();if(playGo)playGo.click();}
+    else if(ev.key==='ArrowLeft'||ev.key==='ArrowRight'){ev.preventDefault();if(T===null)T=rg[1];T=Math.min(rg[1],Math.max(rg[0],T+(ev.key==='ArrowRight'?1:-1)*win*(ev.shiftKey?0.1:0.01)));renderPlay();}
+    else if(ev.key==='['||ev.key===']'){if(speedSel){var i=parseInt(speedSel.value,10)+(ev.key===']'?1:-1);if(i>=0&&i<SPEEDS.length)speedSel.value=String(i);}}
+    else if(ev.key==='r'){if(pr)pr.click();}else if(ev.key==='f'){if(pf)pf.click();}});
   // Spec 041: waypoints heard on the mesh, as pins; Spec 042: neighbour edges between positioned nodes
   var wps_=L.layerGroup().addTo(map),graph_=L.layerGroup().addTo(map),wpsOn=document.getElementById('wps-on'),graphOn=document.getElementById('graph-on');
   function fetchWaypoints(){if(wpsOn&&!wpsOn.checked){wps_.clearLayers();return;}fetch('/api/waypoints').then(function(r){return r.json();}).then(function(j){wps_.clearLayers();(j.waypoints||[]).forEach(function(w){if(w.lat===null||w.lat===undefined)return;
@@ -1220,17 +1418,60 @@ def mesh_views(L, tiles, size=640, bare=False):
     own = L.get("own") or {}
     has = own.get("lat") is not None and own.get("lon") is not None
     attr = json.dumps(tiles).replace("&", "&amp;").replace("'", "&#39;").replace('"', "&quot;")
-    why = "" if has else "<p class='meta'>no position for this box: the map view needs one. Set --map-lat and --map-lon at install, or give the radio a fix; the plan view places nodes by hops meanwhile.</p>"
+    why = "" if has else "<p class='meta'>No position for this box, so the map view is off and the plan view places nodes by hops. Give the box its position on <a href='/settings#position'>Settings</a>, or plug in a GPS receiver.</p>"
+    groups = sorted({str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
+    gsel = ("<label class='meta' data-tip='Group' data-tip-more='Only this group&#39;s devices on the map, the trails and the playback'>Group <select id='group-filter'><option value=''>everyone</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>") if groups else "<select id='group-filter' hidden aria-hidden='true'><option value=''></option></select>"
+    layers = ("<details class='fold ctl' id='layers' style='margin-top:0'><summary data-tip='Layers, trails, rings and grid' data-tip-more='What the map draws besides the nodes'>" + ICONS["layers"] + "Map layers</summary><div class='controls' style='margin:var(--s2) 0 0'>" + gsel +
+              "<span class='meta' data-tip='Rings' data-tip-more='Range rings and their labels: geometry, not what the radio will reach'>Rings</span>" + seg("rings", (("0", "off"), ("60", "faint"), ("100", "solid")), "60") + "<span class='meta' id='ring-step'></span>"
+              "<label class='meta' for='trail-hours' data-tip='Trails' data-tip-more='Each node&#39;s track over the window, fading with age'>Trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option><option value='72'>3 d</option></select></label>"
+              "<label class='meta check' data-tip='Neighbours' data-tip-more='Who hears whom, from the neighbour reports nodes broadcast'><input type='checkbox' id='graph-on'> Neighbours</label>"
+              "<label class='meta check' data-tip='Waypoints' data-tip-more='Waypoints heard on the mesh, as pins'><input type='checkbox' id='wps-on' checked> Waypoints</label>"
+              "<label class='meta' for='cover-hours' data-tip='Coverage' data-tip-more='Every position heard, coloured by signal; hollow came through a relay'>Coverage <select id='cover-hours'><option value='0' selected>off</option><option value='3'>3 h</option><option value='24'>24 h</option><option value='168'>7 d</option></select></label>"
+              "<label class='meta check' for='grid-on' data-tip='Grid' data-tip-more='MGRS: 1 km lines from zoom 13, 10 km below'><input type='checkbox' id='grid-on'> Grid</label>"
+              "</div></details>")
+    wp = ("<details class='fold ctl' style='margin-top:var(--s3)'><summary>Drop a waypoint on the mesh</summary><form class='card' data-action='waypoint_send' data-risk='air' data-confirm='This reaches every device on the primary channel and is forwarded to TAK as a marker.'>"
+          "<label>Name (30 bytes at most)<input type='text' name='name' maxlength='30' required></label><label>Description (100 bytes at most)<input type='text' name='description' maxlength='100'></label>"
+          "<div class='row-actions' style='margin-bottom:var(--s2)'>" + icon_button("place", "Place it on the map", "Place it on the map", "Then press the map where the waypoint goes; the fields fill in", attrs="id='wp-place'") + "<span class='meta' id='wp-place-note'></span></div>"
+          "<label>Grid (MGRS), or the degrees below<input type='text' id='wp-mgrs' placeholder='30U XC 9988 0936' autocomplete='off' aria-describedby='wp-mgrs-note'><span class='meta' id='wp-mgrs-note'></span></label>"
+          "<label>Latitude<input type='text' name='lat' id='wp-lat' inputmode='decimal' required placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' id='wp-lon' inputmode='decimal' required placeholder='-0.1200'></label>"
+          "<label>Expires in (minutes)<input type='number' name='expire_min' value='60' min='1' max='10080'></label><button type='submit'>Send the waypoint</button><div class='res meta' role='status'></div></form></details>")
     return (f"<div id='mesh-views' data-default-view='{'map' if has else 'plan'}' data-has-position='{'1' if has else '0'}' data-tiles='{attr}'>"
-            "<div class='controls views'><button type='button' class='line' data-view='map'>Map</button><button type='button' class='line' data-view='plan'>Plan</button>"
-            "<label class='meta' for='ring-alpha' title='The range rings and their labels, from solid to invisible'>rings <input type='range' id='ring-alpha' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:110px'></label><span class='meta' id='ring-step'></span>"
-            "<label class='meta' for='trail-hours' title='Each node&#39;s track over the window, fading with age'>trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option></select></label> <label class='meta'>playback <input type='range' id='play-t' min='0' max='1000' value='1000' style='width:160px;vertical-align:middle'></label><button type='button' class='line' id='play-go'>Play</button><span id='play-at' class='meta'></span> <label class='meta'><input type='checkbox' id='graph-on'> graph</label> <label class='meta'><input type='checkbox' id='wps-on' checked> waypoints</label>"
-            "<label class='meta' for='cover-hours' title='Every position heard, a dot coloured by its signal band; hollow when it came through a relay'>coverage <select id='cover-hours'><option value='0' selected>off</option><option value='3'>3 h</option><option value='24'>24 h</option><option value='168'>7 d</option></select></label>"
-            "<label class='meta' for='grid-on' title='The MGRS grid: 1 km lines from zoom 13, 10 km below, kilometre digits along the edges'><input type='checkbox' id='grid-on' style='width:auto;min-height:0;margin:0 4px 0 0;vertical-align:middle'>grid</label>"
-            + ("" if bare else "<button type='button' class='line' id='map-pop' title='The map on its own, in a window of its own'>Pop out</button>")
-            + "<span class='meta' id='tiles-now'></span><span class='meta warn' id='tiles-note'></span></div>"
-            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div><details class='fold ctl' style='margin-top:var(--s3)'><summary>Drop a waypoint on the mesh</summary><form class='card' data-action='waypoint_send' data-risk='air' data-confirm='This reaches every device on the primary channel and is forwarded to TAK as a marker.'><label>Name (30 bytes)<input type='text' name='name' maxlength='30' required></label><label>Description<input type='text' name='description' maxlength='100'></label><label>Latitude<input type='text' name='lat' inputmode='decimal' required placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' inputmode='decimal' required placeholder='-0.1200'></label><label>Expires in (minutes)<input type='number' name='expire_min' value='60' min='1' max='10080'></label><button type='submit'>Send waypoint</button><div class='res meta' role='status'></div></form></details></div>"
-            f"<div data-view='plan' id='map-box'>{map_svg(L, size)}</div></div>{OVERLAY_JS}")
+            f"<div class='controls views'><button type='button' class='line' data-view='map' aria-label='Map view' data-tip='The map with imagery'>{ICONS['map']}Map</button><button type='button' class='line' data-view='plan' aria-label='Plan view' data-tip='Range rings from this box' data-tip-more='The mesh drawn round this box, without imagery'>{ICONS['plan']}Plan</button>"
+            + ("" if bare else icon_button("popout", "Open the map in a window", "Open the map in a window", "The map on its own, in a window of its own", attrs="id='map-pop'"))
+            + layers + "<span class='meta' id='tiles-now'></span><span class='meta warn' id='tiles-note'></span></div>"
+            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>{playback_bar()}{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div>{fence_forms(L)}{wp}</div>"
+            f"<div data-view='plan' id='map-box'>{map_svg(L, size)}</div></div><script>window.mmNodeIcons={json.dumps(NODE_ICON_SVG)};window.mmIcons={json.dumps({'play': ICONS['play'], 'pause': ICONS['pause']})};</script>{OVERLAY_JS}")
+
+
+def playback_bar():
+    """Spec 047: the playback controls and the timeline under the map. The window is the trails window."""
+    speeds = "".join(f"<option value='{i}'{' selected' if v == 60 else ''}>{v}x</option>" for i, v in enumerate((1, 10, 60, 300, 1000)))
+    return ("<div id='playback' style='margin-top:var(--s2)'><div class='controls' style='margin-bottom:var(--s1)'>"
+            + icon_button("skip_back", "To the start", "To the start", "Of the window, or its end when playing backwards", attrs="id='play-start'")
+            + icon_button("play", "Play the window back", "Play the window back", "Space plays and pauses", attrs="id='play-go'")
+            + icon_button("reverse", "Reverse", "Reverse", "Play backwards (r)", attrs="id='play-rev' aria-pressed='false'")
+            + f"<label class='meta' data-tip='Speed' data-tip-more='[ and ] change it'>Speed <select id='play-speed'>{speeds}</select></label>"
+            + icon_button("fit", "Fit the map to the tracks", "Fit the map to the tracks", "The whole window's tracks in view (f)", attrs="id='play-fit'")
+            + "<input type='range' id='play-t' min='0' max='1000' value='1000' aria-label='Scrub the window' style='width:160px;vertical-align:middle;margin:0'>"
+            "<span id='play-at' class='meta' style='font-variant-numeric:tabular-nums'></span><span id='play-pos' class='meta'></span></div>"
+            "<canvas id='timeline' style='width:100%;height:80px;display:block;border:1px solid var(--line);border-radius:var(--r);background:var(--surface-raised);touch-action:none' aria-label='Timeline: a row per node, a tick per report; press or drag to seek, press a name to hide it'></canvas>"
+            "<p class='meta' style='margin:var(--s1) 0 0'>A row per node, a tick per position report; press or drag to seek, press a name to hide it. Nothing is interpolated: a node sits where it last reported, hollow with the age when that is older than its usual gap. For a record, export the positions on Health and open them in Pinecone.</p></div>")
+
+
+def fence_forms(L):
+    """Spec 045: the card that names a drawn fence, and the list of fences on this box."""
+    fs = _act("fence_set")
+    groups = sorted({str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
+    gsel = "<label>Applies to<select name='group'><option value=''>everyone</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>"
+    return (f"<div id='fence-form' class='card' hidden style='margin-top:var(--s3);max-width:560px'><form data-action='fence_set' data-risk='change' data-confirm=\"{e(fs.get('confirm') or '')}\" data-clear='1'>"
+            "<h2 style='margin-top:0'>Name the fence</h2><p class='meta' id='fence-shape'></p>"
+            "<input type='hidden' name='kind' value='polygon'><input type='hidden' name='points'><input type='hidden' name='lat'><input type='hidden' name='lon'><input type='hidden' name='radius_m'>"
+            "<label>Name (40 bytes at most)<input type='text' name='name' maxlength='40' required placeholder='e.g. Compound'></label>"
+            "<div><span class='meta'>Alert when</span><br>" + seg("rule", (("enter", "Coming in"), ("leave", "Going out"), ("both", "Either")), "both") + "</div>"
+            + gsel +
+            "<div class='row-actions'><button type='submit'>Save the fence</button><button type='button' class='quiet' id='fence-cancel'>Cancel</button></div><div class='res meta' role='status'></div></form></div>"
+            "<details class='fold' id='fences' style='margin-top:var(--s3)'><summary>Fences</summary><p class='meta'>Areas drawn on the map. A device crossing one raises a geofence alert here and in TAK chat, by the same path as the quiet and battery alerts. A device with no position is neither in nor out.</p>"
+            "<div class='tablewrap'><table><thead><tr><th>Fence</th><th>Alert when</th><th>Applies to</th><th></th></tr></thead><tbody id='fence-list'><tr><td colspan=4 class='meta'>loading</td></tr></tbody></table></div></details>")
 
 
 def band(snr):
@@ -1394,7 +1635,45 @@ def dname(n):
     return str((n or {}).get("label") or (n or {}).get("name") or (n or {}).get("id") or "?")
 
 
+def _svg(inner, fill="none"):
+    return (f"<svg viewBox='0 0 16 16' fill='{fill}' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>{inner}</svg>")
+
+
+# One drawing per meaning, the same on every page: 16 px, stroke only, drawn for this product.
 ICONS = {
+    "check": _svg("<path d='M3 8.5l3 3 7-7'/>"),
+    "forget": _svg("<circle cx='8' cy='8' r='6'/><path d='M3.8 3.8l8.4 8.4'/>"),
+    "sliders": _svg("<path d='M3 4h10M3 8h10M3 12h10'/><circle cx='6' cy='4' r='1.6' fill='currentColor'/><circle cx='10.5' cy='8' r='1.6' fill='currentColor'/><circle cx='5' cy='12' r='1.6' fill='currentColor'/>"),
+    "read": _svg("<path d='M8 2v8M4.5 6.5 8 10l3.5-3.5M3 13.5h10'/>"),
+    "export": _svg("<rect x='2' y='9' width='12' height='4.5' rx='1'/><path d='M8 1.5v5M6 4.5 8 6.5l2-2M11.5 11.3h.01'/>"),
+    "restore": _svg("<path d='M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v4h4'/>"),
+    "flash": _svg("<path d='M9 1.5 3.5 9h4l-1 5.5L13 7H9z'/>"),
+    "onboard": _svg("<circle cx='8' cy='8' r='6'/><path d='M5.2 8.2l1.9 1.9L11 6.2'/>"),
+    "trash": _svg("<path d='M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 7v4M9.2 7v4'/>"),
+    "key": _svg("<circle cx='5.5' cy='10.5' r='3'/><path d='M7.6 8.4 13.5 2.5M11 5l2 2'/>"),
+    "qr": _svg("<rect x='2' y='2' width='4.5' height='4.5'/><rect x='9.5' y='2' width='4.5' height='4.5'/><rect x='2' y='9.5' width='4.5' height='4.5'/><path d='M9.5 9.5h2v2h-2zM14 9.5v1M9.5 14h1M12.5 12.5H14V14'/>"),
+    "users": _svg("<circle cx='6' cy='5.5' r='2.5'/><path d='M1.5 14c.5-2.7 2.2-4 4.5-4s4 1.3 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 10c1.6.4 2.4 1.7 2.5 4'/>"),
+    "shapes": _svg("<circle cx='11.5' cy='4.5' r='2.5'/><rect x='2' y='9' width='5' height='5' rx='1'/><path d='M4.5 2 7 6.5H2zM9.5 9.5h5v5h-5z'/>"),
+    "fence": _svg("<path d='M8 1.8l6 4.4-2.3 7H4.3L2 6.2z'/>"),
+    "layers": _svg("<path d='M8 2l6.5 3.5L8 9 1.5 5.5zM1.5 8.5 8 12l6.5-3.5M1.5 11.5 8 15l6.5-3.5'/>"),
+    "type": _svg("<path d='M3 4V2.5h10V4M8 2.5v11M6 13.5h4'/>"),
+    "sun": _svg("<circle cx='8' cy='8' r='3'/><path d='M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1'/>"),
+    "moon": _svg("<path d='M13.5 9.5A6 6 0 1 1 6.5 2.5a4.8 4.8 0 0 0 7 7z'/>"),
+    "menu": _svg("<path d='M2.5 4h11M2.5 8h11M2.5 12h11'/>"),
+    "help": _svg("<circle cx='8' cy='8' r='6.5'/><path d='M6 6.2a2 2 0 1 1 3 1.7c-.7.4-1 .8-1 1.6M8 12h.01'/>"),
+    "refresh": _svg("<path d='M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v4h-4'/>"),
+    "popout": _svg("<path d='M6.5 3H3v10h10V9.5M9.5 2.5h4v4M13.5 2.5 7.5 8.5'/>"),
+    "play": _svg("<path d='M4.5 2.5v11l9-5.5z'/>", fill="currentColor"),
+    "pause": _svg("<path d='M5 2.5v11M11 2.5v11' stroke-width='2.4'/>"),
+    "skip_back": _svg("<path d='M3 2.5v11M13 3l-8 5 8 5z'/>", fill="currentColor"),
+    "reverse": _svg("<path d='M8 3 2.5 8 8 13zM14 3 8.5 8l5.5 5z'/>", fill="currentColor"),
+    "fit": _svg("<path d='M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10'/>"),
+    "close": _svg("<path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/>"),
+    "chevron": _svg("<path d='M3 6l5 5 5-5'/>"),
+    "filter": _svg("<path d='M2 3h12L9.5 8.5v4.5l-3 1.5V8.5z'/>"),
+    "map": _svg("<path d='M1.5 4l4-1.5 5 1.5 4-1.5v10l-4 1.5-5-1.5-4 1.5zM5.5 2.5v10M10.5 4v10'/>"),
+    "plan": _svg("<circle cx='8' cy='8' r='6.5'/><circle cx='8' cy='8' r='3.5'/><circle cx='8' cy='8' r='1' fill='currentColor'/>"),
+    "place": _svg("<path d='M8 14.5s-4.5-4.2-4.5-8A4.5 4.5 0 0 1 12.5 6.5c0 3.8-4.5 8-4.5 8z'/><path d='M8 4.5v4M6 6.5h4'/>"),
     # traceroute: a path through two relays
     "traceroute": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><circle cx='2.5' cy='13.5' r='1.5'/><circle cx='8' cy='6' r='1.5'/><circle cx='13.5' cy='2.5' r='1.5'/><path d='M3.6 12.4 6.9 7.1M9.1 4.9l3.3-1.3'/></svg>",
     # position: a map pin
@@ -1408,50 +1687,130 @@ ICONS = {
 }
 
 
-def node_row(n, db=False, routes=None):
+NODE_ICON_SVG = {
+    "radio": _svg("<rect x='3' y='6' width='10' height='8' rx='1.5'/><path d='M8 6V2.5M5.5 2.5h5M6 9.5h.01M8 11.5h2'/>"),
+    "person": _svg("<circle cx='8' cy='4.5' r='2.5'/><path d='M3 14c.4-3 2.3-4.5 5-4.5s4.6 1.5 5 4.5'/>"),
+    "vehicle": _svg("<path d='M2 10l1.5-4h9L14 10v3H2z'/><circle cx='4.8' cy='12.5' r='1.3' fill='currentColor'/><circle cx='11.2' cy='12.5' r='1.3' fill='currentColor'/><path d='M2 10h12'/>"),
+    "router": _svg("<path d='M8 2v12M4 14h8M8 2 4.5 8.5M8 2l3.5 6.5M5.6 6.8h4.8'/>"),
+    "repeater": _svg("<path d='M8 14V6M6.5 3.5 8 2l1.5 1.5'/><path d='M3.5 6.5a6 6 0 0 1 9 0M5.5 8.5a3.5 3.5 0 0 1 5 0'/>"),
+    "base": _svg("<path d='M2.5 8 8 2.5 13.5 8M4 7v7h8V7M6.5 14v-4h3v4'/>"),
+    "drone": _svg("<circle cx='3.5' cy='3.5' r='1.8'/><circle cx='12.5' cy='3.5' r='1.8'/><circle cx='3.5' cy='12.5' r='1.8'/><circle cx='12.5' cy='12.5' r='1.8'/><path d='M5 5l6 6M11 5l-6 6'/><circle cx='8' cy='8' r='1.2' fill='currentColor'/>"),
+    "boat": _svg("<path d='M2 10h12l-2 3.5H4zM8 10V2.5M8 3l4.5 6.5M8 3 4.5 9'/>"),
+    "bike": _svg("<circle cx='4' cy='11' r='2.5'/><circle cx='12' cy='11' r='2.5'/><path d='M4 11 6.5 5.5H10L12 11M6.5 5.5H9M8.5 11l1.5-5'/>"),
+    "dog": _svg("<path d='M3 9.5 4.5 5h4l2 2.5H13l.5 3.5-2 .5-.5 2.5h-2l-.5-2h-3l-.5 2h-2z'/><circle cx='6' cy='7.2' r='.6' fill='currentColor'/>"),
+    "box": _svg("<path d='M2.5 5 8 2.5 13.5 5v6L8 13.5 2.5 11zM2.5 5 8 7.5 13.5 5M8 7.5v6'/>"),
+    "medic": _svg("<path d='M6 2.5h4v3.5h3.5v4H10v3.5H6V10H2.5V6H6z'/>"),
+    "flag": _svg("<path d='M3.5 14V2.5M3.5 3h8l-1.5 3 1.5 3h-8'/>"),
+    "star": _svg("<path d='M8 2l1.8 3.9 4.2.5-3.1 2.9.8 4.2L8 11.4l-3.7 2.1.8-4.2L2 6.4l4.2-.5z'/>"),
+}
+assert set(NODE_ICON_SVG) >= set(NODE_ICONS)
+
+
+def icon_picker(field, current, inherit=True):
+    """The map icon chooser: a row of the drawings, one chosen, each with its word in the tip."""
+    opts = ([("inherit", "From the group")] if inherit else []) + [(k, k) for k in NODE_ICONS]
+    cur = current if current in NODE_ICONS else ("inherit" if inherit else "radio")
+    out = "<span class='iconpick' role='radiogroup' aria-label='Map icon'>"
+    for v, word in opts:
+        svg = NODE_ICON_SVG.get(v) or ICONS["users"]
+        out += f"<label data-tip='{e(word)}'><input type='radio' name='{e(field)}' value='{e(v)}'{' checked' if v == cur else ''} aria-label='{e(word)}'><span>{svg}</span></label>"
+    return out + "</span>"
+
+
+def icon_button(name, label, tip, more="", cls="line icon", attrs="", btn_type="button"):
+    """Every icon control on every page goes through here, so a glyph cannot ship without its
+    name, its tip and the word the labels switch reveals (5 Sep 2026 reviews)."""
+    return (f"<button type='{btn_type}' class='{e(cls)}' aria-label='{e(label)}' data-tip='{e(tip)}'"
+            + (f" data-tip-more='{e(more)}'" if more else "") + (" " + attrs if attrs else "")
+            + f">{ICONS[name]}<span class='lbl'>{e(label)}</span></button>")
+
+
+def seg(name, options, value, danger=(), attrs="", disabled=()):
+    """A segmented control: radio inputs under the hood, so a form reads it like a select.
+    options: (value, word) pairs; the chosen one is filled, a danger one fills red."""
+    out = f"<span class='seg{' danger' if any(str(value) == str(d) for d in danger) else ''}' role='radiogroup' data-seg='{e(name)}' {attrs}>"
+    for v, word in options:
+        out += (f"<label><input type='radio' name='{e(name)}' value='{e(str(v))}'{' checked' if str(v) == str(value) else ''}{' disabled' if v in disabled else ''}"
+                f"{' data-danger' if v in danger else ''}><span>{e(word)}</span></label>")
+    return out + "</span>"
+
+
+ASK_NOUN = {"traceroute": "a route", "request_position": "a position", "request_telemetry": "a battery", "request_nodeinfo": "its name"}
+ASK_MORE = {"traceroute": "Asks for the hops out and back; a minute is normal", "request_position": "Asks the node to send its position now",
+            "request_telemetry": "Asks for battery, voltage and uptime now", "request_nodeinfo": "Brings back a name changed over the air"}
+
+
+def node_row(n, db=False, routes=None, silent_min=30):
     nid = str(n.get("id") or "")
     name = dname(n)
     own_name = str(n.get("name") or "") if n.get("label") and n.get("name") else ""
-    pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if n.get("lat") is not None and n.get("lon") is not None else "no fix")
+    has_fix = n.get("lat") is not None and n.get("lon") is not None
+    pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if has_fix else "no fix")
     sub = " · ".join(x for x in (own_name, str(n.get("hw") or ""), pos) if x)
     heard = n.get("heard") or n.get("last_heard_db")
-    heard_html = f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" if heard else "<span class='sub'>never</span>"
+    quiet = False
+    try:
+        quiet = bool(heard) and not db and (time.time() - _utc_secs(heard)) > int(silent_min) * 60
+    except (TypeError, ValueError):
+        quiet = False
+    heard_html = (f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" + (f"<span class='verdict warn' data-tip='Quiet' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet</span>" if quiet else "")) if heard else "<span class='sub'>never</span>"
     batt = n.get("battery")
     # one line for the figure, one small line for the voltage and the age together (0.2.10: short rows)
     ts = n.get("battery_ts")
     bits = ([f"{float(n['voltage']):g} V"] if n.get("voltage") else []) + ([f"<time datetime='{e(str(ts))}' data-age>{e(age(ts))}</time>"] if ts else [])
     under = f"<div class='sub'>{' · '.join(bits)}</div>" if bits else ""
+    low = False
     if n.get("charging"):
         batt_html = f"<span class='ok'>on charge</span>{under}"
     elif batt is None:
         batt_html = "<span class='sub'>no reading</span>"
     elif float(batt) < 20:
+        low = True
         batt_html = f"<span class='batt batt--low'>{int(batt)}%</span>{under}"
     else:
         batt_html = f"{int(batt)}%{under}"
-    # the asks as icon buttons: the words live in the tooltip and the label the result line uses
-    asks = "".join(f"<button class='line icon' data-action='{e(a['id'])}' data-dest='{e(nid)}' data-label='{e(a['title'])}' data-tip='{e(a['title'])}' data-tip-more='{e(a['description'])}' aria-label='{e(a['title'])}'>{ICONS[a['id']]}</button>"
-                   for a in C.ACTIONS if a["risk"] == "air" and len(a["inputs"]) == 1
-                   and a["inputs"][0]["type"] == "node" and a["id"] in ICONS)
-    return (f"<tr data-id='{e(nid)}' class='{'db' if db else ''}'><td><b><a href='/node?id={e(nid)}' class='plain' title='This node over time'>{e(name)}</a></b><div class='sub'>{e(nid)}{('<span class=hide-narrow> · ' + e(sub) + '</span>') if sub else ''}</div></td>"
+    # the asks as icon buttons: a name, a tip and the noun the result line uses (5 Sep 2026 reviews)
+    asks = "".join(icon_button(a["id"], a["title"], a["title"], ASK_MORE.get(a["id"], ""),
+                               attrs=f"data-action='{e(a['id'])}' data-dest='{e(nid)}' data-label='{e(a['title'])}' data-ask='{e(ASK_NOUN.get(a['id'], 'it'))}'")
+                   for a in C.ACTIONS if a["risk"] == "air" and len(a["inputs"]) == 1 and a["inputs"][0]["type"] == "node" and a["id"] in ICONS)
+    search = " ".join(x for x in (name, nid, own_name, str(n.get("hw") or ""), str(n.get("holder") or ""), str(n.get("group") or ""), " ".join(n.get("tags") or [])) if x).lower()
+    try:
+        heard_secs = int(_utc_secs(heard)) if heard else 0
+    except (TypeError, ValueError):
+        heard_secs = 0
+    attrs = (f"data-quiet='{1 if quiet else 0}' data-low='{1 if low else 0}' data-nofix='{0 if has_fix else 1}' data-search='{e(search)}' "
+             f"data-heard='{heard_secs}' data-batt='{'' if batt is None else int(batt)}' data-group='{e(str(n.get('group') or ''))}'")
+    glyph = f"<span class='nodeicon' data-tip='{e(str(n.get('icon') or 'radio'))}{(' · ' + e(str(n.get('group')))) if n.get('group') else ''}'>{NODE_ICON_SVG.get(str(n.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span>"
+    gtags = " ".join([f"<span class='pill'>{e(str(n.get('group')))}</span>"] if n.get("group") else []) + "".join(f" <span class='pill' style='opacity:.8'>{e(str(t))}</span>" for t in (n.get("tags") or [])[:4])
+    return (f"<tr data-id='{e(nid)}' class='{'db' if db else ''}' {attrs}><td>{glyph}<b><a href='/node?id={e(nid)}' class='plain' data-tip='This node over time' data-tip-more='Battery, voltage, hours heard and messages'>{e(name)}</a></b>{(' ' + gtags) if gtags else ''}<div class='sub'>{e(nid)}{('<span class=hide-narrow> · ' + e(sub) + '</span>') if sub else ''}</div></td>"
             f"<td>{sig(n.get('snr'), n.get('hops'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
             f"<td><div class='row-actions'>{asks}"
-            + ("" if db else f"<details class='fold ctl icon'><summary data-tip='Name' data-tip-more='A display name for this device, kept on the box; it changes nothing on the radio' aria-label='Name'>{ICONS['name']}</summary><form data-action='register_set' class='regform' data-refresh='' style='grid-template-columns:1fr auto'><input type='hidden' name='id' value='{e(nid)}'>"
-                                f"<input type='text' name='label' value='{e(str(n.get('label') or ''))}' maxlength='80' placeholder='display name (changes nothing on the radio)' aria-label='display name'>"
-                                "<button type='submit' class='line'>Save</button><div class='res meta' role='status'></div></form></details>")
+            + ("" if db else node_name_fold(n))
             + f"</div><div class='res meta' role='status'></div>"
             f"<div class='route-slot'>{route_bar((routes or {}).get(nid)) if (routes or {}).get(nid) else ''}</div></td></tr>")
+
+
+def node_name_fold(n):
+    """The row's own control for what the box knows about the device: a name, a group, tags and a map
+    icon (Spec 044), kept on the box, never written to the radio."""
+    nid = str(n.get("id") or "")
+    return (f"<details class='fold ctl icon'><summary data-tip='Name, group and icon' data-tip-more='Kept on the box, not the radio' aria-label='Name, group and icon'>{ICONS['name']}<span class='lbl'>Name</span></summary><form data-action='register_set' class='regform' data-refresh='' style='grid-template-columns:1fr 1fr'><input type='hidden' name='id' value='{e(nid)}'>"
+            f"<input type='text' name='label' value='{e(str(n.get('label') or ''))}' maxlength='80' placeholder='display name' aria-label='display name'>"
+            f"<input type='text' name='group' value='{e(str(n.get('group') or ''))}' maxlength='40' placeholder='group (e.g. Recce)' aria-label='group' list='groups'>"
+            f"<input type='text' name='tags' value='{e(', '.join(n.get('tags') or []))}' maxlength='300' placeholder='tags, comma separated' aria-label='tags' style='grid-column:1/-1'>"
+            f"<div style='grid-column:1/-1'><span class='meta'>Map icon</span>{icon_picker('icon', str(n.get('icon_own') or ''), inherit=True)}</div>"
+            "<button type='submit' class='line'>Save</button><span class='meta' style='align-self:center'>kept on the box, not the radio</span><div class='res meta' role='status'></div></form></details>")
 
 
 NODES_JS = r"""<script>
 (function(){
   document.addEventListener('click',function(ev){var b=ev.target.closest('button[data-action][data-dest]');if(!b)return;
     var tr=b.closest('tr'),res=tr?tr.querySelector('.res'):null,nm=tr&&tr.querySelector('b')?tr.querySelector('b').textContent:b.dataset.dest;
-    if(res){res.textContent=b.dataset.label+': asking the box';res.className='res meta warn';}
+    if(res){res.textContent='asking the box for '+(b.dataset.ask||'it');res.className='res meta warn';}
     fetch('/api/'+b.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dest:b.dataset.dest})})
       .then(function(r){return r.json().then(function(j){return [r.status,j];});})
-      .then(function(x){if(!res)return;if(x[0]>=400){res.textContent='not asked: '+(x[1].error||x[0]);res.className='res meta bad';}else{res.textContent=b.dataset.label+' asked of '+nm+' at '+window.mmNow()+(b.dataset.action==='traceroute'?' · no answer yet':'');res.className='res meta '+(b.dataset.action==='traceroute'?'warn':'ok');}})
-      .catch(function(){if(res){res.textContent='could not ask the box';res.className='res meta bad';}});});
+      .then(function(x){if(!res)return;if(x[0]>=400){res.textContent='not asked: '+(x[1].error||x[0]);res.className='res meta bad';}else{res.textContent='asked '+nm+' for '+(b.dataset.ask||'it')+' at '+window.mmNow()+(b.dataset.action==='traceroute'?' · no answer yet':'');res.className='res meta '+(b.dataset.action==='traceroute'?'warn':'ok');}})
+      .catch(function(){if(res){res.textContent=window.mmNoAnswer;res.className='res meta bad';}});});
   var last=0;
   window.mmNodes=function(){var now=Date.now();if(now-last<1500)return;last=now;
     fetch('/api/links').then(function(r){return r.json();}).then(function(j){
@@ -1470,7 +1829,21 @@ NODES_JS = r"""<script>
       var h=document.getElementById('nodes-heard-count');if(h&&j.heard!==undefined){h.textContent=j.heard;}
       var d=document.getElementById('nodes-db-count');if(d&&j.db!==undefined){d.textContent=j.db;}
       document.querySelectorAll('time[data-age]').forEach(function(t){var a=window.mmAge(t.getAttribute('datetime'));if(a){t.textContent=a;}});
+      if(window.mmNodeFilter){window.mmNodeFilter();}
     }).catch(function(){});};
+  // the filter row: a search, three chips with counts, and an order (5 Sep 2026 reviews: at fifty radios nobody wants all of them)
+  var chips={},q=document.getElementById('nf-q'),sortSel=document.getElementById('nf-sort'),groupSel=document.getElementById('group-filter');
+  document.querySelectorAll('.chip[data-nf]').forEach(function(c){c.addEventListener('click',function(){var k=c.dataset.nf;chips[k]=!chips[k];c.classList.toggle('on',!!chips[k]);c.setAttribute('aria-pressed',chips[k]?'true':'false');window.mmNodeFilter();});});
+  if(q){q.addEventListener('input',function(){window.mmNodeFilter();});}if(sortSel){sortSel.addEventListener('change',function(){window.mmNodeFilter();});}if(groupSel){groupSel.addEventListener('change',function(){window.mmNodeFilter();});}
+  window.mmNodeFilter=function(){var tb=document.getElementById('nodes');if(!tb)return;var rows=[].slice.call(tb.querySelectorAll('tr[data-id]'));var text=(q&&q.value||'').trim().toLowerCase();var g=groupSel?groupSel.value:'';
+    var counts={quiet:0,low:0,nofix:0};
+    rows.forEach(function(tr){['quiet','low','nofix'].forEach(function(k){if(tr.dataset[k]==='1')counts[k]++;});
+      var ok=(!text||(tr.dataset.search||'').indexOf(text)>=0)&&(!g||tr.dataset.group===g)&&(!chips.quiet||tr.dataset.quiet==='1')&&(!chips.low||tr.dataset.low==='1')&&(!chips.nofix||tr.dataset.nofix==='1');tr.hidden=!ok;});
+    document.querySelectorAll('.chip[data-nf] b').forEach(function(b){var k=b.parentNode.dataset.nf;b.textContent=counts[k];});
+    var mode=sortSel?sortSel.value:'';if(mode){rows.sort(function(a,b){if(mode==='quiet'){var qa=(a.dataset.quiet==='1')?0:1,qb=(b.dataset.quiet==='1')?0:1;if(qa!==qb)return qa-qb;return parseInt(a.dataset.heard||'0',10)-parseInt(b.dataset.heard||'0',10);}
+      var ba=a.dataset.batt===''?999:parseInt(a.dataset.batt,10),bb=b.dataset.batt===''?999:parseInt(b.dataset.batt,10);return ba-bb;});rows.forEach(function(r){tb.appendChild(r);});}
+    var none=document.getElementById('nf-none');if(none){none.hidden=!(rows.length&&rows.every(function(r){return r.hidden;}));}};
+  window.mmNodeFilter();
   window.mmPosition=function(d){if(!d||!d.id)return;var tr=document.querySelector("tr[data-id='"+d.id+"']");if(!tr)return;var res=tr.querySelector('.res');if(!res)return;
     if(d.lat===null||d.lat===undefined){res.textContent='position: answered '+window.mmNow()+' without a fix';res.className='res meta warn';}
     else{res.textContent='position received '+window.mmNow()+': '+Number(d.lat).toFixed(5)+', '+Number(d.lon).toFixed(5);res.className='res meta ok';}
@@ -1488,23 +1861,39 @@ NODES_JS = r"""<script>
 </script>"""
 
 
-def nodes_tables(nodes, routes=None):
+def nodes_tables(nodes, routes=None, silent_min=30):
     heard = [n for n in nodes if n.get("heard_here", True)]
     db = [n for n in nodes if not n.get("heard_here", True)]
-    rows = "".join(node_row(n, routes=routes) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak.</td></tr>"
-    db_rows = "".join(node_row(n, db=True) for n in db)
+    rows = "".join(node_row(n, routes=routes, silent_min=silent_min) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
+    db_rows = "".join(node_row(n, db=True, silent_min=silent_min) for n in db)
     return rows, db_rows, len(heard), len(db)
 
 
-def nodes_body(nodes, intro=True, routes=None):
-    rows, db_rows, heard, db = nodes_tables(nodes, routes)
+def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None):
+    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min)
+    live = [n for n in nodes if n.get("heard_here", True)]
     head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Heard</th><th>Ask</th></tr></thead>"
     lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here since the bridge started, "
             f"<span id='nodes-db-count'>{db}</span> more in the radio's database. Joined on radio id; names are labels, never identity.</p>") if intro else ""
+    def cnt(k):
+        if k == "quiet":
+            return sum(1 for n in live if n.get("heard") and (time.time() - _utc_secs(n["heard"])) > int(silent_min) * 60)
+        if k == "low":
+            return sum(1 for n in live if n.get("battery") is not None and not n.get("charging") and float(n["battery"]) < 20)
+        return sum(1 for n in live if n.get("lat") is None or n.get("lon") is None)
+    gsel = ""
+    if groups:
+        gsel = "<label class='meta'>Group <select id='group-filter'><option value=''>every group</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>"
+    filters = ("<div class='filters' id='node-filters'><input type='search' id='nf-q' placeholder='Find a node' aria-label='Find a node by name, id or hardware'>"
+               f"<button type='button' class='chip' data-nf='quiet' aria-pressed='false' data-tip='Only the quiet ones' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet <b>{cnt('quiet')}</b></button>"
+               f"<button type='button' class='chip' data-nf='low' aria-pressed='false' data-tip='Only low batteries' data-tip-more='Under 20 per cent'>battery low <b>{cnt('low')}</b></button>"
+               f"<button type='button' class='chip' data-nf='nofix' aria-pressed='false' data-tip='Only nodes without a fix'>no fix <b>{cnt('nofix')}</b></button>"
+               f"{gsel}<label class='meta'>Show <select id='nf-sort'><option value=''>as heard</option><option value='quiet'>quiet first</option><option value='low'>low battery first</option></select></label></div>")
     fold = (f"<details class='fold'><summary><span id='nodes-db-count'>{db}</span>&nbsp;in the radio's database only, not heard since this bridge started <span class='pill'>database only</span></summary>"
             f"<div class='tablewrap'><table>{head}<tbody id='nodes-db'>{db_rows}</tbody></table></div></details>") if db or not intro else ""
     js = NODES_JS if intro else NODES_JS + "<script>window.onMesh=window.onMesh||function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}};</script>"
-    return f"{lead}<div class='tablewrap'><table>{head}<tbody id='nodes'>{rows}</tbody></table></div>{fold}{js}"
+    dl = "<datalist id='groups'>" + "".join(f"<option value='{e(g)}'>" for g in (groups or [])) + "</datalist>"
+    return f"{lead}{filters}{dl}<div class='tablewrap'><table>{head}<tbody id='nodes'>{rows}</tbody></table></div><p class='meta' id='nf-none' hidden>No node matches that filter.</p>{fold}{js}"
 
 
 def nodes_rows_html(nodes):
@@ -1533,7 +1922,7 @@ def log_body(lines):
     var s=document.createElement('span');s.className='ln ln--'+(radio?'radio':'bridge')+' ln--'+(lvl||'INFO');s.textContent=(ts?'['+ts+'] ':'')+(lvl?lvl+' ':'')+msg;return s;}
   window.onMesh=function(d){if(d.kind!=='log'||!p)return;var was=atBottom();p.appendChild(render(d.line||''));
     while(p.children.length>600){p.removeChild(p.firstChild);}
-    if(was){p.scrollTop=p.scrollHeight;}else{pending++;nb.textContent=pending+' new line'+(pending===1?'':'s');nb.style.display='inline-block';}};
+    if(was){p.scrollTop=p.scrollHeight;}else{pending++;nb.textContent=pending+' new line'+(pending===1?'':'s')+' · go to the end';nb.style.display='inline-block';}};
   nb.addEventListener('click',function(){p.scrollTop=p.scrollHeight;pending=0;nb.style.display='none';});
   p.addEventListener('scroll',function(){if(atBottom()){pending=0;nb.style.display='none';}});
   document.querySelector('[data-log-filter]').addEventListener('change',function(ev){p.dataset.show=ev.target.value;});
@@ -1542,8 +1931,8 @@ def log_body(lines):
 </script>"""
     body = "".join(log_line_html(x) for x in lines)
     return (f"<p class='meta'>The bridge's last {len(lines)} lines; new ones arrive as they happen. The radio's own chatter, roughly every minute, is normal; silence is what the watchdog watches.</p>"
-            "<div class='controls'><label>Show <select data-log-filter><option value='bridge'>the bridge's lines</option><option value='all'>the bridge's and the radio's lines</option><option value='radio'>the radio's lines only</option></select></label>"
-            "<label>Level <select data-log-level><option value='all'>everything</option><option value='warn'>warnings and errors</option></select></label></div>"
+            "<div class='controls'><span data-tip='Show' data-tip-more='The bridge&#39;s own lines, or the radio&#39;s chatter as well'><span class='meta'>Show</span> " + seg("logshow", (("bridge", "The bridge"), ("all", "Both"), ("radio", "The radio only")), "bridge", attrs="data-log-filter") + "</span>"
+            "<span><span class='meta'>Level</span> " + seg("loglevel", (("all", "Everything"), ("warn", "Warnings and errors")), "all", attrs="data-log-level") + "</span></div>"
             f"<pre class='log' id='log' data-show='bridge' data-level='all'>{body}</pre><button type='button' class='quiet newlines' id='newlines' style='display:none'>new lines</button>{js}")
 
 
@@ -1563,11 +1952,21 @@ WRITE_JS = r"""<script>
     else if(j.asked){msg=(j.note||'asked')+' at '+window.mmHm(j.asked);cls='warn';}
     else {msg=j.error?('not done: '+j.error):('done at '+window.mmNow()+(Object.keys(j).length?': '+summ(j):''));cls=j.error?'bad':'ok';}
     el.textContent=msg;el.className='res meta '+cls;}
+  window.mmNoAnswer='no answer from the box: check you are still on its Wi-Fi, then try again';
+  // one in-page confirm instead of the browser's: readable in sunlight, styled, focus on No, Escape cancels (5 Sep 2026 reviews)
+  window.mmConfirm=function(text,host,onYes){if(!text){onYes();return;}var slot=host||document.body;var old=slot.querySelector(':scope > .confirm');if(old){old.remove();}
+    var p=document.createElement('div');p.className='confirm';p.setAttribute('role','alertdialog');var s=document.createElement('div');s.textContent=text;p.appendChild(s);
+    var row=document.createElement('div');row.className='row-actions';var yes=document.createElement('button');yes.type='button';yes.textContent='Yes, do it';var no=document.createElement('button');no.type='button';no.className='quiet';no.textContent='No';
+    row.appendChild(yes);row.appendChild(no);p.appendChild(row);
+    function done(){p.remove();document.removeEventListener('keydown',esc,true);}function esc(ev){if(ev.key==='Escape'){ev.preventDefault();done();}}
+    yes.addEventListener('click',function(){done();onYes();});no.addEventListener('click',done);document.addEventListener('keydown',esc,true);slot.appendChild(p);no.focus();};
+  window.mmTick=function(f){var tick=f.querySelector('input[name=confirm_tick]');if(!tick||tick.checked)return true;
+    var rs=f.querySelector('.res');if(rs){rs.textContent='Tick the box that says you understand, then press again.';rs.className='res meta bad';}var lab=tick.closest('label');if(lab){lab.style.outline='2px solid var(--bad)';lab.style.outlineOffset='2px';}tick.focus();return false;};
   function post(url,body,el){
     return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json().then(function(j){return [r.status,j];});})
       .then(function(x){show(el,x[0],x[1]);return x;})
-      .catch(function(){if(el){el.textContent='could not ask the box';el.className='res meta bad';}return [0,{}];});
+      .catch(function(){if(el){el.textContent=window.mmNoAnswer;el.className='res meta bad';}return [0,{}];});
   }
   function fixText(p){ // Spec 033: what the device says about its own receiver
     if(!p)return '';
@@ -1594,40 +1993,43 @@ WRITE_JS = r"""<script>
           if(x[0]>=400||j.error){out.textContent='not done: '+(j.error||x[0]);out.className='out meta bad';return;}
           out.textContent=(f.dataset.render==='device'?device(j):('export written at '+window.mmNow()+': '+(j.export||'')+' ('+(j.bytes||0)+' bytes)'));out.className='out meta ok';
           if(f.dataset.render==='device'){mapLink(host,j.position);document.dispatchEvent(new CustomEvent('mm-device',{detail:{card:host,device:j}}));}})
-        .catch(function(){if(btn){btn.disabled=false;}if(out){out.textContent='could not ask the box';out.className='out meta bad';}});})();},true);
+        .catch(function(){if(btn){btn.disabled=false;}if(out){out.textContent=window.mmNoAnswer;out.className='out meta bad';}});})();},true);
   document.addEventListener('submit',function(ev){var f=ev.target.closest('form[data-action]:not([data-method=get]):not([id=send])');if(!f)return;
     (function(){ev.preventDefault();
       var action=f.dataset.action,body={},unreachable=f.dataset.risk==='unreachable';
       new FormData(f).forEach(function(v,k){if(v!==''&&k!=='confirm_tick'){var el=f.elements[k];body[k]=(el&&el.type==='number')?parseInt(v,10):v;}});
       if(f.dataset.action==='node_channel_push'&&parseInt(f.elements.index.value,10)>0){unreachable=false;}
-      if(unreachable){var tick=f.querySelector('input[name=confirm_tick]');if(tick&&!tick.checked){alert('Tick the consequence first.');return;}var card=f.closest('.card');body.confirm=f.dataset.target||(card&&card.dataset.own)||own;}
-      if(f.dataset.action==='bench_flash'){var sel=f.querySelector('select[data-pins]');var o=sel&&sel.options[sel.selectedIndex];if(o&&o.dataset.note&&!confirm(o.dataset.note+' Continue?'))return;var st=f.querySelector('.stages');if(st){st.textContent='';}}
+      if(unreachable){if(!window.mmTick(f))return;var card=f.closest('.card');body.confirm=f.dataset.target||(card&&card.dataset.own)||own;}
       var text=fill(f.dataset.confirm);
-      if(text&&!confirm(text))return;
-      var url=f.dataset.proposal?'/api/proposal/run':('/api/'+action);
-      if(f.dataset.proposal){body={id:f.dataset.proposal,arguments:body};}
-      var btn=f.querySelector('button[type=submit]');if(btn){btn.disabled=true;}
-      var rs=f.querySelector('.res');if(rs){rs.textContent=(f.dataset.risk?'sent at '+window.mmNow()+', waiting for the read-back':'sending');rs.className='res meta warn';}
-      post(url,body,rs).then(function(x){if(btn){btn.disabled=false;}
-        if(x[0]&&x[0]<400){if(f.dataset.proposal){f.classList.add('done');f.querySelectorAll('button').forEach(function(b){b.disabled=true;});}
-          if(f.dataset.refresh){var p=f.dataset.refresh.split(':');window.mmFrag(p[0],p[1]);}
-          if(f.dataset.clear){f.reset();}}});
+      if(f.dataset.action==='bench_flash'){var sel=f.querySelector('select[data-pins]');var o=sel&&sel.options[sel.selectedIndex];if(o&&o.dataset.note){text=(text?text+' ':'')+'Note on this image: '+o.dataset.note;}var st=f.querySelector('.stages');if(st){st.textContent='';}}
+      window.mmConfirm(text,f,function(){
+        var url=f.dataset.proposal?'/api/proposal/run':('/api/'+action);
+        if(f.dataset.proposal){body={id:f.dataset.proposal,arguments:body};}
+        var btn=f.querySelector('button[type=submit]');if(btn){btn.disabled=true;}
+        var rs=f.querySelector('.res');if(rs){rs.textContent=(f.dataset.risk?'sent at '+window.mmNow()+', waiting for the read-back':'sending');rs.className='res meta warn';}
+        post(url,body,rs).then(function(x){if(btn){btn.disabled=false;}
+          if(x[0]&&x[0]<400){document.dispatchEvent(new CustomEvent('mm-written',{detail:{action:action,result:x[1]}}));}
+          if(action==='bench_onboard'&&x[0]&&x[0]<400&&x[1].confirmed&&rs){var rb=x[1].read_back||{};var ch=(rb.channels&&rb.channels[0]&&rb.channels[0].name)||rb.channel0||'';
+            rs.textContent=(rb.long_name||body.long_name||'The device')+' is on the mesh and managed by this radio. Read back at '+window.mmNow()+': role '+(rb.role||body.role||'?')+(ch?', channel '+ch:'')+(rb.region?', '+rb.region+' '+(rb.modem_preset||''):'')+'. ';
+            var a=document.createElement('a');a.href='/register';a.textContent='See it on the register';rs.appendChild(a);}
+          if(x[0]&&x[0]<400){if(f.dataset.proposal){f.classList.add('done');f.querySelectorAll('button').forEach(function(b){b.disabled=true;});}
+            if(f.dataset.refresh){var p=f.dataset.refresh.split(':');window.mmFrag(p[0],p[1]);}
+            if(f.dataset.clear){f.reset();}}});});
     })();
   });
   document.addEventListener('click',function(ev){var b=ev.target.closest('button[data-action][data-index]');if(!b)return;
     (function(){
       var action=b.dataset.action,idx=parseInt(b.dataset.index,10),body={index:idx};
       var text=fill(b.dataset.confirm);
-      if(b.dataset.risk==='unreachable'&&idx===0){if(!confirm(text))return;body.confirm=own;}
-      else if(text&&!confirm(text))return;
-      var res=b.parentNode.parentNode.querySelector('.res');
-      post('/api/'+action,body,res).then(function(x){if(x[0]&&x[0]<400&&b.dataset.refresh){var p=b.dataset.refresh.split(':');window.mmFrag(p[0],p[1]);}});
+      if(b.dataset.risk==='unreachable'&&idx===0){body.confirm=own;}
+      var host=b.closest('td')||b.parentNode.parentNode;var res=host.querySelector('.res');
+      window.mmConfirm(text,host,function(){post('/api/'+action,body,res).then(function(x){if(x[0]&&x[0]<400&&b.dataset.refresh){var p=b.dataset.refresh.split(':');window.mmFrag(p[0],p[1]);}});});
     })();
   });
   document.addEventListener('click',function(ev){var b=ev.target.closest('button[data-dismiss]');if(!b)return;
-    (function(){if(!confirm('Dismiss this proposal? Its rationale stays in the audit.'))return;
-      var f=b.closest('form');
-      post('/api/proposal/dismiss',{id:b.dataset.dismiss},f?f.querySelector('.res'):null).then(function(x){if(x[0]&&x[0]<400&&f){f.classList.add('done');f.querySelectorAll('button').forEach(function(x){x.disabled=true;});}});})();
+    (function(){var f=b.closest('form');
+      window.mmConfirm('Dismiss this proposal? Its rationale stays in the audit.',f,function(){
+      post('/api/proposal/dismiss',{id:b.dataset.dismiss},f?f.querySelector('.res'):null).then(function(x){if(x[0]&&x[0]<400&&f){f.classList.add('done');f.querySelectorAll('button').forEach(function(x){x.disabled=true;});}});});})();
   });
   var dec=document.getElementById('decode');
   if(dec){dec.addEventListener('click',function(){var url=document.querySelector('form[data-action=channel_adopt] input[name=url]').value;
@@ -1636,9 +2038,23 @@ WRITE_JS = r"""<script>
       if(j.error){out.textContent='cannot read it: '+j.error;out.className='meta bad';btn.disabled=true;return;}
       out.textContent='This URL carries '+j.count+' channel(s): '+j.channels.map(function(n){return n||'(unnamed)';}).join(', ')+' · region '+(j.region||'not set')+' · preset '+(j.modem_preset||'not set')+'. Read that before you adopt it.';
       out.className='meta ok';btn.disabled=false;});});}
-  document.querySelectorAll('[data-qr-open]').forEach(function(b){b.addEventListener('click',function(){document.getElementById('qr-sheet').hidden=false;});});
-  document.querySelectorAll('[data-qr-close]').forEach(function(b){b.addEventListener('click',function(){document.getElementById('qr-sheet').hidden=true;});});
-  document.querySelectorAll('[data-read-again]').forEach(function(b){b.addEventListener('click',function(){window.location.href=window.location.pathname;});});
+  // the join QR sheet is a dialog: focus moves to Close, Escape closes, focus returns, and it closes itself after a minute
+  var sheet=document.getElementById('qr-sheet'),qrTimer=null,qrOpener=null;
+  function qrClose(){if(!sheet)return;sheet.hidden=true;if(qrTimer){clearInterval(qrTimer);qrTimer=null;}if(qrOpener){qrOpener.focus();}}
+  document.querySelectorAll('[data-qr-open]').forEach(function(b){b.addEventListener('click',function(){if(!sheet)return;qrOpener=b;var img=sheet.querySelector('img');
+    if(img&&b.dataset.qrIndex!==undefined){img.src='/channels/qr.png?index='+encodeURIComponent(b.dataset.qrIndex)+'&t='+Date.now();img.alt='Join QR for '+(b.dataset.qrName||'this channel');}
+    var nm=sheet.querySelector('[data-qr-name]');if(nm&&b.dataset.qrName){nm.textContent=b.dataset.qrName;}
+    sheet.hidden=false;var left=60,cd=sheet.querySelector('[data-qr-count]');if(cd){cd.textContent='closes itself in '+left+' s';}
+    qrTimer=setInterval(function(){left--;if(cd){cd.textContent='closes itself in '+left+' s';}if(left<=0){qrClose();}},1000);
+    var c=sheet.querySelector('[data-qr-close]');if(c){c.focus();}});});
+  document.querySelectorAll('[data-qr-close]').forEach(function(b){b.addEventListener('click',qrClose);});
+  document.addEventListener('keydown',function(ev){if(ev.key==='Escape'&&sheet&&!sheet.hidden){qrClose();}});
+  // Read again without a reload (Spec 007): fetch the page, swap the parts that came from the radio
+  document.addEventListener('click',function(ev){var b=ev.target.closest('[data-read-again]');if(!b)return;b.disabled=true;
+    var stamp=document.querySelector('[data-read-stamp]');if(stamp){stamp.textContent='reading the radio…';}
+    fetch(window.location.pathname).then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');
+      ['channel-rows','radio-cards','read-line'].forEach(function(id){var n=d.getElementById(id),o=document.getElementById(id);if(n&&o){o.innerHTML=n.innerHTML;}});})
+      .catch(function(){var st=document.querySelector('[data-read-stamp]');if(st){st.textContent=window.mmNoAnswer;}var bb=document.querySelector('[data-read-again]');if(bb){bb.disabled=false;}});});
   document.querySelectorAll('[data-copy]').forEach(function(b){b.addEventListener('click',function(){var t=b.dataset.copy;
     (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){b.textContent='Copied';},function(){window.prompt('Copy the token:',t);});});});
 })();
@@ -1651,7 +2067,8 @@ def _act(aid):
 
 def read_line(res, page_path):
     at = hhmm(res.get("read_at")) if res.get("read_at") else hhmm()
-    return f"<p class='meta'>read from the radio at {e(at)} <button type='button' class='quiet' data-read-again>Read again</button></p>"
+    return (f"<p class='meta' id='read-line'><span data-read-stamp>read from the radio at {e(at)}</span> "
+            + icon_button("refresh", "Read the radio again", "Read the radio again", "Asks the radio and refreshes this page in place") + "</p>")
 
 
 def channel_rows(ch):
@@ -1661,42 +2078,76 @@ def channel_rows(ch):
     rows = ""
     for c in live:
         i = int(c.get("index", 0))
+        nm = c.get("name") or f"slot {i}"
         ctl = (f"<button class='line' data-action='channel_rotate' data-index='{i}' data-risk='{'unreachable' if i == 0 else 'change'}' data-refresh='channels:channel-rows' "
-               f"data-confirm=\"{e(rot['confirm'] if i == 0 else 'A fresh key on ' + (c.get('name') or 'slot ' + str(i)) + '. Devices on it need the new QR.')}\">Rotate key</button>")
+               f"data-confirm=\"{e(rot['confirm'] if i == 0 else 'A fresh key on ' + nm + '. Devices on it need the new QR.')}\">Rotate key</button>")
         if i >= 1:
             ctl += f" <button class='danger' data-action='channel_delete' data-index='{i}' data-refresh='channels:channel-rows' data-confirm=\"{e(dele['confirm'])}\">Delete</button>"
-        rows += (f"<tr><td>{i}</td><td>{e(c.get('name') or '(unnamed)')}</td><td><span class='pill'>{e(c.get('role') or '')}</span></td>"
-                 f"<td>{'set' if c.get('has_key') else 'none'}</td><td><div class='row-actions'>{ctl}</div><div class='res meta' role='status'></div></td></tr>")
+        if c.get("has_key"):
+            ctl += icon_button("qr", f"Join QR for {nm}", "Join QR for this channel", "Shows the key as a QR; only to a device you mean to join", attrs=f"data-qr-open data-qr-index='{i}' data-qr-name='{e(nm)}'")
+        push = (f"<details class='fold ctl' style='margin-top:var(--s2)'><summary>Push to the fleet</summary><form data-fleet-push='{i}' data-fleet-name='{e(nm)}' style='margin-top:var(--s2)'>"
+                "<p class='meta'>This slot's name, key and role are copied to the same slot on every managed device, one after another over the air, each read back.</p>"
+                + (f"<label class='check'><input type='checkbox' name='confirm_tick'><span>Slot 0 replaces each device's primary channel; a device whose key then differs from this radio's will not hear this mesh.</span></label>" if i == 0 else "")
+                + f"<button type='submit' class='line'>Push slot {i} to every managed device</button><div class='res meta' role='status'></div><div class='fleet-out meta'></div></form></details>")
+        rows += (f"<tr><td>{i}</td><td>{e(nm)}</td><td><span class='pill'>{e(c.get('role') or '')}</span></td>"
+                 f"<td>{'set' if c.get('has_key') else 'no key'}</td><td><div class='row-actions'>{ctl}</div><div class='res meta' role='status'></div>{push}</td></tr>")
     free = 8 - len(live)
     rows += f"<tr><td colspan=5 class='meta'>{free} free slot{'s' if free != 1 else ''} of 8.</td></tr>"
     return rows
+
+
+FLEET_PUSH_JS = r"""<script>
+(function(){
+  document.addEventListener('submit',function(ev){var f=ev.target.closest('form[data-fleet-push]');if(!f)return;ev.preventDefault();ev.stopImmediatePropagation();
+    var idx=parseInt(f.dataset.fleetPush,10),name=f.dataset.fleetName||('slot '+idx),res=f.querySelector('.res'),out=f.querySelector('.fleet-out');
+    if(idx===0&&!window.mmTick(f))return;
+    fetch('/api/register').then(function(r){return r.json();}).then(function(j){
+      var devs=(j.rows||[]).filter(function(r){return r.managed;});
+      if(!devs.length){res.textContent='no managed device to push to: the bench is where a device becomes managed';res.className='res meta warn';return;}
+      window.mmConfirm('Push slot '+idx+' ('+name+') to '+devs.length+' managed device'+(devs.length===1?'':'s')+' over the air, one after another; each is read back before it counts.',f,function(){
+        out.textContent='';res.textContent='pushing to '+devs.length+'…';res.className='res meta warn';var ok=0,i=0;
+        (function next(){if(i>=devs.length){res.textContent=ok+' of '+devs.length+' read back at '+window.mmNow();res.className='res meta '+(ok===devs.length?'ok':'warn');return;}
+          var d=devs[i++],body={id:d.id,index:idx};if(idx===0){body.confirm=d.id;}
+          fetch('/api/node_channel_push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json().then(function(x){return [r.status,x];});})
+            .then(function(x){var nm=d.label||d.name||d.id;if(x[0]<400&&x[1].confirmed){ok++;out.textContent+=nm+': written and read back\n';}else{out.textContent+=nm+': '+(x[1].error||x[1].unconfirmed||'not confirmed')+'\n';}next();})
+            .catch(function(){out.textContent+=(d.label||d.name||d.id)+': '+window.mmNoAnswer+'\n';next();});})();});
+    }).catch(function(){res.textContent=window.mmNoAnswer;res.className='res meta bad';});},true);
+  var seg=document.querySelector("form[data-action=channel_adopt] [data-seg=mode]");
+  if(seg){var f=seg.closest('form');function mode(){var v=(f.querySelector('input[name=mode]:checked')||{}).value||'add';var rep=v==='replace';f.classList.toggle('danger',rep);f.dataset.risk=rep?'unreachable':'change';var t=f.querySelector('label.check');if(t){t.hidden=!rep;}}
+    seg.addEventListener('change',mode);mode();}
+})();
+</script>"""
 
 
 def channels_body(ch, own_id="?", st=None, rotation=None):
     st = st or {}
     primary = next((c.get("name") for c in ch.get("channels", []) if c.get("role") == "PRIMARY"), None) or st.get("primary_channel") or "the primary channel"
     err = f"<p class='warn'>{e(ch['error'])}</p>" if ch.get("error") else ""
-    qr = ("<h2>Join the primary channel</h2><p class='meta'>The join QR carries the channel name, the key, the region and the modem preset; the key appears nowhere else on this screen. "
-          "Show it only to a device you mean to join.</p><button type='button' data-qr-open>Show the join QR</button>"
-          f"<div class='sheet' id='qr-sheet' hidden><img src='/channels/qr.png' alt='Join QR for {e(primary)}' width='320' height='320'>"
-          f"<div><b>{e(primary)}</b> · {e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</div><p class='meta'>Scan it in the Meshtastic app, or hold it up to a tracker's onboarding.</p>"
-          "<button type='button' class='line' data-qr-close>Close</button></div>"
+    qr = ("<h2>Join a channel</h2><p class='meta'>The join QR carries the channel name, the key, the region and the modem preset; the key appears nowhere else on this screen. "
+          "Show it only to a device you mean to join. Each channel row has its own QR.</p><button type='button' data-qr-open data-qr-index='0' data-qr-name='" + e(primary) + "'>Show the join QR for " + e(primary) + "</button>"
+          f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Join QR' hidden><img src='/channels/qr.png' alt='Join QR for {e(primary)}' width='320' height='320'>"
+          f"<div><b data-qr-name>{e(primary)}</b> · {e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</div><p class='meta'>Scan it in the Meshtastic app, or hold it up to a tracker's onboarding.</p>"
+          "<span class='meta' data-qr-count></span>" + icon_button("close", "Close the join QR", "Close the join QR", cls="line icon close", attrs="data-qr-close") + "</div>"
           if ch.get("url") else "<p class='meta'>No primary channel with a key is readable yet.</p>")
     cre, ado = _act("channel_create"), _act("channel_adopt")
     create = (f"<form class='card' data-action='channel_create' data-risk='change' data-refresh='channels:channel-rows' data-clear='1' data-confirm=\"{e(cre['confirm'])}\">"
               f"<h2 style='margin-top:0'>{e(cre['title'])}</h2><p class='meta'>{e(cre['description'])}</p>"
               "<label>Name (11 bytes at most)<input type='text' name='name' maxlength='11' required></label>"
               "<label>Slot<select name='index'><option value=''>first free</option>" + "".join(f"<option value='{i}'>{i}</option>" for i in range(1, 8)) + "</select></label>"
-              "<button type='submit'>Create and read back</button><div class='res meta' role='status'></div></form>")
-    adopt = (f"<form class='card danger' data-action='channel_adopt' data-risk='unreachable' data-refresh='channels:channel-rows' data-confirm=\"{e(ado['confirm'])}\">"
+              "<button type='submit'>Create the channel</button><div class='res meta' role='status'></div></form>")
+    adopt = (f"<form class='card' data-action='channel_adopt' data-risk='change' data-refresh='channels:channel-rows' data-confirm=\"{e(ado['confirm'])}\">"
              f"<h2 style='margin-top:0'>{e(ado['title'])}</h2><p class='meta'>{e(ado['description'])}</p>"
              "<label>Join URL<input type='text' name='url' required autocomplete='off'></label>"
              "<button type='button' class='line' id='decode'>Read it first</button><div id='decoded' class='meta' style='margin:.4rem 0'></div>"
-             "<label>Mode<select name='mode'><option value='add'>add its channels to free slots</option><option value='replace'>replace this radio's channels and region</option></select></label>"
-             f"<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand a replace moves this radio to the URL's channels and region; devices on the old ones will not hear it. This radio is {e(own_id)}.</span></label>"
-             "<button type='submit' disabled>Adopt and read back</button><div class='res meta' role='status'></div></form>")
-    return (f"{err}{read_line(ch, '/channels')}<div class='tablewrap'><table><thead><tr><th>#</th><th>Name</th><th>Role</th><th>Key</th><th></th></tr></thead><tbody id='channel-rows'>{channel_rows(ch)}</tbody></table></div>"
-            f"<div class='cards' style='margin-top:1rem'>{create}{adopt}</div>{qr}<div id='rotation-body'>{rotation_section(rotation)}</div>{ROTATION_JS}{WRITE_JS}")
+             "<div><span class='meta'>Mode</span><br>" + seg("mode", (("add", "Add to free slots"), ("replace", "Replace everything")), "add", danger=("replace",)) + "</div>"
+             f"<label class='check' hidden><input type='checkbox' name='confirm_tick'><span>I understand a replace moves this radio to the URL's channels and region; devices on the old ones will not hear it. This radio is {e(own_id)}.</span></label>"
+             "<button type='submit' disabled>Adopt these channels</button><div class='res meta' role='status'></div></form>")
+    rot_open = bool((rotation or {}).get("rotation"))
+    rot_block = f"<div id='rotation-body'>{rotation_section(rotation)}</div>"
+    return (f"{err}{read_line(ch, '/channels')}<div class='tablewrap'><table><thead><tr><th>Slot</th><th>Name</th><th>Role</th><th>Key</th><th></th></tr></thead><tbody id='channel-rows'>{channel_rows(ch)}</tbody></table></div>"
+            f"<p class='meta'>Every write is shown only once the radio has answered with it.</p>"
+            + (rot_block if rot_open else "") + qr
+            + f"<div class='cards' style='margin-top:1rem'>{create}{adopt}</div>" + ("" if rot_open else rot_block) + f"{ROTATION_JS}{FLEET_PUSH_JS}{WRITE_JS}")
 
 
 def manage_forms(r):
@@ -1709,23 +2160,23 @@ def manage_forms(r):
     read = (f"<form data-action='node_read' data-method='get' data-render='device'><input type='hidden' name='id' value='{e(nid)}'><button type='submit' class='line'>Read over the air</button></form><div class='out meta' role='status'></div>")
     setf = (f"<form data-action='node_set' data-risk='change' data-target='{e(nid)}' data-confirm=\"{e(ns.get('confirm') or '')}\"><input type='hidden' name='id' value='{e(nid)}'>"
             f"<h2 style='margin-top:0;font-size:.95rem'>{e(ns.get('title') or '')}</h2>"
-            "<label>Long name<input type='text' name='long_name' maxlength='39'></label><label>Short name (4 bytes)<input type='text' name='short_name' maxlength='4'></label>"
-            "<label>TX power, dBm<input type='number' name='tx_power' min='0' max='30'></label><label>Position broadcast, seconds<input type='number' name='position_broadcast_secs' min='32' max='86400'></label>"
-            "<button type='submit'>Write over the air and read back</button><div class='res meta' role='status'></div></form>")
+            "<label>Long name (39 bytes at most)<input type='text' name='long_name' maxlength='39'></label><label>Short name (4 bytes at most)<input type='text' name='short_name' maxlength='4'></label>"
+            "<label>Transmit power (dBm)<input type='number' name='tx_power' min='0' max='30'></label><label>Position every (seconds)<input type='number' name='position_broadcast_secs' min='32' max='86400'></label>"
+            "<button type='submit'>Write over the air</button><div class='res meta' role='status'></div></form>")
     regf = (f"<form class='danger' data-action='node_set_region' data-risk='unreachable' data-target='{e(nid)}' data-confirm=\"{e(nr.get('confirm') or '')}\"><input type='hidden' name='id' value='{e(nid)}'>"
             f"<h2 style='margin-top:0;font-size:.95rem;color:var(--bad)'>{e(nr.get('title') or '')}</h2>"
             f"<label>Region{sel('region', ins.get('region', {}).get('values', []))}</label><label>Modem preset{sel('modem_preset', ins.get('modem_preset', {}).get('values', []))}</label><label>Role{sel('role', ins.get('role', {}).get('values', []))}</label>"
             f"<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand this device may be unreachable over the air afterwards and reboots. This device is {e(nid)}.</span></label>"
-            "<button type='submit' class='danger'>Write over the air and read back</button><div class='res meta' role='status'></div></form>")
+            "<button type='submit' class='danger'>Write and reboot the device</button><div class='res meta' role='status'></div></form>")
     push = (f"<form data-action='node_channel_push' data-risk='unreachable' data-target='{e(nid)}' data-confirm=\"{e(npush.get('confirm') or '')}\"><input type='hidden' name='id' value='{e(nid)}'>"
             f"<h2 style='margin-top:0;font-size:.95rem'>{e(npush.get('title') or '')}</h2>"
             "<label>Slot<select name='index'>" + "".join(f"<option value='{i}'{' selected' if i == 1 else ''}>{i}{' (primary)' if i == 0 else ''}</option>" for i in range(8)) + "</select></label>"
             f"<label class='check'><input type='checkbox' name='confirm_tick'><span>For slot 0: I understand the device's primary channel is replaced. This device is {e(nid)}.</span></label>"
-            "<button type='submit'>Push and read back</button><div class='res meta' role='status'></div></form>")
+            "<button type='submit'>Push the channel</button><div class='res meta' role='status'></div></form>")
     reboot = (f"<form data-action='node_reboot' data-risk='unreachable' data-target='{e(nid)}' data-confirm=\"{e(nrb.get('confirm') or '')}\"><input type='hidden' name='id' value='{e(nid)}'>"
               f"<label class='check'><input type='checkbox' name='confirm_tick'><span>Reboot in ten seconds; off the mesh while it does. This device is {e(nid)}.</span></label>"
               "<button type='submit' class='line'>Reboot over the air</button><div class='res meta' role='status'></div></form>")
-    return (f"<details class='fold ctl'><summary>Manage</summary><div class='manage'>{read}{setf}{regf}{push}{reboot}</div></details>")
+    return (f"<details class='fold ctl'><summary data-tip='Over the air' data-tip-more='Read and write this device through the mesh under this radio&#39;s admin key'>{ICONS['sliders']}Over the air</summary><div class='manage'><p class='meta' style='margin:0'>Every write is shown only once the device has answered with it.</p>{read}{setf}{regf}{push}{reboot}</div></details>")
 
 
 def _avcell(a):
@@ -1740,8 +2191,38 @@ def _avcell(a):
             f"data-tip-more='{e(blocks)}' style='font-variant-numeric:tabular-nums;color:var(--{tone})'>{pct}%</td>")
 
 
-def register_rows(reg, availability=None):
+def _fwcell(r, iv):
+    """Spec 043: the firmware a device itself reported, and whether the shelf holds something newer for it."""
+    iv = iv or {}
+    fw = r.get("firmware") or iv.get("firmware")
+    if not fw:
+        return f"<td class='hide-narrow'><span class='sub' data-tip='Firmware unknown' data-tip-more='Read the device on the bench or over the air; nothing is inferred from the hardware'>firmware unknown</span></td>"
+    behind = iv.get("behind")
+    pill = (f"<div><span class='pill behind' style='background:var(--warn);color:#fff;border-color:var(--warn)' data-tip='Behind the shelf' data-tip-more='{e(str(iv.get('behind_reason') or ''))}'>behind</span></div>" if behind
+            else (f"<div class='sub'>{e(str(iv.get('behind_reason') or ''))}</div>" if iv.get("behind_reason") else ""))
+    return f"<td class='hide-narrow'>{e(str(fw))}{pill}</td>"
+
+
+def _keycell(nid, iv):
+    """Spec 043: the key's fingerprint and since when; a change the operator has not accepted is an alarm."""
+    iv = iv or {}
+    fp = iv.get("fingerprint")
+    if not fp:
+        return "<td class='hide-narrow'><span class='sub'>no key seen</span></td>"
+    since = f"<div class='sub'>since <time datetime='{e(str(iv.get('key_since') or ''))}' data-age>{e(age(iv.get('key_since') or ''))}</time></div>" if iv.get("key_since") else ""
+    alarm = ""
+    if iv.get("key_alarm"):
+        ka = _act("key_accept")
+        alarm = (f"<div><span class='pill key-changed' style='background:var(--bad);color:#fff;border-color:var(--bad)' data-tip='Key changed' data-tip-more='A changed key is a reflashed radio or an impostor; accept it only when you know which'>changed {e(str(iv.get('key_changed') or '')[:10])}</span> "
+                 f"<form data-action='key_accept' data-risk='change' data-confirm=\"{e(ka.get('confirm') or '')}\" data-refresh='register:register-rows' style='display:inline'><input type='hidden' name='id' value='{e(nid)}'><button type='submit' class='line'>Accept the new key</button><div class='res meta' role='status'></div></form></div>")
+    elif iv.get("key_changed"):
+        alarm = f"<div class='sub'>changed {e(str(iv.get('key_changed') or '')[:10])}, accepted</div>"
+    return f"<td class='hide-narrow'><code data-tip='Key fingerprint' data-tip-more='Twelve hex of the sha256 of the device&#39;s public key; the same radio keeps the same fingerprint'>{e(fp)}</code>{since}{alarm}</td>"
+
+
+def register_rows(reg, availability=None, inv=None):
     availability = availability or {}
+    inv = {r.get("id"): r for r in ((inv or {}).get("rows") or [])}
     rows = ""
     for r in reg.get("rows", []):
         nid = str(r.get("id") or "")
@@ -1755,16 +2236,34 @@ def register_rows(reg, availability=None):
                 "<button type='submit' class='line'>Save</button><div class='res meta' role='status'></div></form>")
         fg = _act("node_forget")
         forget = (f"<details class='fold ctl'><summary>Forget</summary><form data-action='node_forget' data-risk='change' data-confirm=\"{e(fg.get('confirm') or '')}\" data-refresh='register:register-rows'>"
-                  f"<input type='hidden' name='id' value='{e(nid)}'><label>Its label and holder<select name='register'><option value='keep'>keep, for when it is heard again</option><option value='drop'>drop</option></select></label>"
+                  f"<input type='hidden' name='id' value='{e(nid)}'><div><span class='meta'>Its label and holder</span><br>" + seg("register", (("keep", "Keep the label"), ("drop", "Drop it")), "keep") + "</div>"
                   "<button type='submit' class='danger'>Forget this node</button><div class='res meta' role='status'></div></form></details>")
         rows += (f"<tr data-id='{e(nid)}'><td><b>{e(dname(r))}</b><div class='sub'>{e(nid)}{(' · ' + e(str(r.get('name') or ''))) if r.get('label') and r.get('name') else ''}</div>{forget}</td><td>{form}</td>"
-                 f"<td>{e(str(r.get('hw') or ''))}<div class='sub'>{e(str(r.get('firmware') or 'firmware unknown'))}</div></td><td>{e(str(r.get('role') or ''))}</td>"
-                 f"<td>{managed}</td><td>{heard_html}</td>{_avcell(availability.get(str(r.get('id') or '')))}</tr>")
-    return rows or "<tr><td colspan=7 class='meta'>No device in the register and none in the radio's database.</td></tr>"
+                 f"<td class='hide-narrow'>{e(str(r.get('hw') or ''))}<div class='sub'>{e(str(r.get('role') or ''))}</div></td>{_fwcell(r, inv.get(nid))}{_keycell(nid, inv.get(nid))}"
+                 f"<td>{managed}</td><td>{heard_html}</td>{_avcell(availability.get(str(r.get('id') or ''))).replace('<td ', '<td class=hide-narrow ', 1)}</tr>")
+    return rows or "<tr><td colspan=8 class='meta'>No device yet. Plug one into the box by USB, then onboard it on the <a href='/bench'>Bench</a> page; it appears here.</td></tr>"
 
 
-def register_body(reg, drift=None, availability=None):
+def groups_section(gs):
+    """Spec 044: the groups on this box, each with its icon and its count; create, change an icon, remove."""
+    gs = gs or {}
+    gset, gdel = _act("group_set"), _act("group_delete")
+    rows = ""
+    for g in gs.get("groups") or []:
+        nm = str(g.get("name") or "")
+        rows += (f"<tr data-group='{e(nm)}'><td><span class='nodeicon'>{NODE_ICON_SVG.get(str(g.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span><b>{e(nm)}</b></td><td>{int(g.get('count') or 0)} device{'s' if int(g.get('count') or 0) != 1 else ''}</td>"
+                 f"<td><form data-action='group_set' data-risk='change' data-confirm=\"{e(gset.get('confirm') or '')}\" data-refresh='groups:groups-body' class='regform' style='grid-template-columns:1fr auto;min-width:320px'><input type='hidden' name='name' value='{e(nm)}'>{icon_picker('icon', str(g.get('icon') or 'radio'), inherit=False)}<button type='submit' class='line'>Set the icon</button><div class='res meta' role='status'></div></form></td>"
+                 f"<td><form data-action='group_delete' data-risk='change' data-confirm=\"{e(gdel.get('confirm') or '')}\" data-refresh='groups:groups-body'><input type='hidden' name='name' value='{e(nm)}'><button type='submit' class='danger'>Remove the group</button><div class='res meta' role='status'></div></form></td></tr>")
+    create = (f"<form data-action='group_set' class='card' data-risk='change' data-clear='1' data-confirm=\"{e(gset.get('confirm') or '')}\" data-refresh='groups:groups-body' style='margin-top:var(--s3)'><h2 style='margin-top:0'>Create a group</h2>"
+              "<label>Name<input type='text' name='name' maxlength='40' required placeholder='e.g. Recce'></label><span class='meta'>Map icon</span>" + icon_picker("icon", "radio", inherit=False)
+              + "<button type='submit' class='line'>Create the group</button><div class='res meta' role='status'></div></form>")
+    return (f"<details class='fold' data-keep='groups'><summary>Groups</summary><p class='meta'>A group is a word you give devices (a section, a vehicle, the routers). Its icon is what its devices carry on the map unless one has its own; the map, the lists, the alerts and the exports filter by group. Kept on the box; nothing is written to any radio.</p>"
+            f"<div class='tablewrap'><table><thead><tr><th>Group</th><th>Devices</th><th>Icon</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No group yet. Give a device a group on the Nodes page, or create one below.</td></tr>'}</tbody></table></div>{create}</details>")
+
+
+def register_body(reg, drift=None, availability=None, inv=None, groups=None):
     availability = availability or {}
+    inv = inv or {}
     js = r"""<script>
 (function(){var last=0;
   window.mmRegister=function(){var now=Date.now();if(now-last<1500)return;last=now;
@@ -1784,8 +2283,9 @@ def register_body(reg, drift=None, availability=None):
     managed = sum(1 for r in reg.get("rows", []) if r.get("managed"))
     return (f"<p class='meta'>{n} device{'s' if n != 1 else ''} the radio knows of or the bench has seen, {managed} managed. Joined on radio id and nothing else: the node's own name from the air sits beside your label, never in its place. "
             "A device is managed only when a read of the device itself showed this radio's public key among its admin keys; the bench is where that happens.</p>"
-            "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Label · holder</th><th>Hardware · firmware</th><th>Role</th><th>Managed</th><th>Heard</th><th title='how much of the last 24 hours the node was heard for'>Heard %</th></tr></thead>"
-            f"<tbody id='register-rows'>{register_rows(reg, availability)}</tbody></table></div>{stale_form()}<div id='drift-body' style='margin-top:var(--s4)'>{drift_section(drift)}</div>{DRIFT_JS}{js}{WRITE_JS}")
+            + (f"<p class='meta'><b>{int(inv.get('behind') or 0)} behind the shelf</b>, <b class='{'bad' if inv.get('key_alarms') else ''}'>{int(inv.get('key_alarms') or 0)} changed key{'s' if int(inv.get('key_alarms') or 0) != 1 else ''}</b> to accept. <a href='/export/inventory.csv'>Export the inventory (CSV)</a>.</p>" if inv else "")
+            + "<div class='tablewrap'><table><thead><tr><th>Device</th><th>Label · holder</th><th class='hide-narrow'>Hardware</th><th class='hide-narrow'>Firmware</th><th class='hide-narrow'>Key</th><th>Managed</th><th>Heard</th><th class='hide-narrow' data-tip='Heard %' data-tip-more='How much of the last 24 hours the node was heard for'>Heard %</th></tr></thead>"
+            f"<tbody id='register-rows'>{register_rows(reg, availability, inv)}</tbody></table></div>{stale_form()}<div id='groups-body' style='margin-top:var(--s4)'>{groups_section(groups)}</div><div id='drift-body' style='margin-top:var(--s4)'>{drift_section(drift)}</div>{DRIFT_JS}{js}{WRITE_JS}")
 
 
 DRIFT_JS = "<script>(function(){var prev=window.onMesh||function(){};window.onMesh=function(d){prev(d);if(d.kind==='node'){window.mmFrag('drift','drift-body');}};})();</script>"
@@ -1800,8 +2300,8 @@ def drift_section(d):
         return "" if prof.get(k) is None else e(str(prof.get(k)))
     form = (f"<form data-action='profile_set' class='card' data-risk='change' data-confirm=\"{e(ps.get('confirm') or '')}\" data-refresh='drift:drift-body' style='max-width:760px'><h2 style='margin-top:0'>Fleet profile</h2><p class='meta'>{e(ps['description'])} Blank leaves a field unenforced.</p>"
             f"<div class='regform' style='grid-template-columns:repeat(5,1fr)'><label>Role<input type='text' name='role' value='{v('role')}' placeholder='TRACKER'></label>"
-            f"<label>Power (dBm)<input type='number' name='tx_power' value='{v('tx_power')}' min='0' max='30'></label>"
-            f"<label>Position every (s)<input type='number' name='position_broadcast_secs' value='{v('position_broadcast_secs')}' min='32' max='86400'></label>"
+            f"<label>Transmit power (dBm)<input type='number' name='tx_power' value='{v('tx_power')}' min='0' max='30'></label>"
+            f"<label>Position every (seconds)<input type='number' name='position_broadcast_secs' value='{v('position_broadcast_secs')}' min='32' max='86400'></label>"
             f"<label>Region<input type='text' name='region' value='{v('region')}' placeholder='EU_868'></label>"
             f"<label>Preset<input type='text' name='modem_preset' value='{v('modem_preset')}' placeholder='SHORT_FAST'></label></div>"
             "<button class='line' style='margin-top:var(--s2)'>Save the profile</button><div class='res meta' role='status'></div></form>")
@@ -1827,7 +2327,7 @@ def drift_section(d):
         when = f"<time datetime='{e(dev.get('read_at'))}' data-age>{e(age(dev.get('read_at')))}</time>" if dev.get("read_at") else ""
         rows += f"<tr><td><b>{e(dev.get('name'))}</b><div class='sub'>{e(dev.get('id'))}</div></td><td>{what}</td><td class='meta'>{when}</td><td>{fix}</td></tr>"
     return (f"{form}<h2>Drift</h2><p class='meta'>Every registered device's last read-back against the profile: <b>{int(c.get('in_line') or 0)} in line</b>, {int(c.get('drifted') or 0)} drifted, {int(c.get('unread') or 0)} never read. Enforced: {e(', '.join(d.get('enforced') or []) or 'nothing yet')}.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>Against the profile</th><th>Read</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No devices in the register.</td></tr>'}</tbody></table></div>")
+            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>Against the profile</th><th>Read</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No device in the register yet, so there is nothing to check against the profile.</td></tr>'}</tbody></table></div>")
 
 
 def stale_form():
@@ -1846,57 +2346,87 @@ def shelf_card(sh):
                  f"<td><span class='{cls}'>{e(st)}</span><div class='sub'>{e(str(i.get('file') or ''))}</div>{('<div class=sub>put it at ' + e(str(i.get('path') or '')) + '</div>') if st != 'verified' else ''}</td>"
                  f"<td class='meta'>{e(str(i.get('note') or ''))}</td></tr>")
     return (f"<div class='card' style='grid-column:1/-1'><div class='k'>Shelf</div><div class='v'>Firmware pinned for the fleet</div><p class='meta'>Images live on the box under {e(str(sh.get('dir') or ''))}, put there by the installer or by you; the bridge flashes only a file whose sha256 matches its pin.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Image</th><th>On this box</th><th>Note</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No pins in this release.</td></tr>'}</tbody></table></div></div>")
+            f"<div class='tablewrap'><table><thead><tr><th>Image</th><th>On this box</th><th>Note</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No firmware pinned in this release.</td></tr>'}</tbody></table></div></div>")
+
+
+ROLE_HINTS = {"TRACKER": "sends its position, does not relay", "ROUTER": "relays for everyone, costs battery, best up high", "CLIENT": "talks and relays a little",
+              "CLIENT_MUTE": "talks, never relays", "ROUTER_CLIENT": "relays like a router and can be used like a client", "REPEATER": "relays only, no position, no messages",
+              "SENSOR": "sends telemetry, sleeps between", "TAK": "for a radio tethered to ATAK", "CLIENT_HIDDEN": "talks, never appears in node lists", "LOST_AND_FOUND": "broadcasts its position often to be found",
+              "TAK_TRACKER": "a tracker for TAK, position only", "ROUTER_LATE": "relays after the others have, for the edge of a mesh"}
+
+
+def bench_name(path):
+    """The device as the operator calls it, from its by-id name: usb-Seeed_T1000-E_9F3A-if00 reads Seeed T1000-E."""
+    n = os.path.basename(str(path or ""))
+    n = re.sub(r"^usb-", "", n); n = re.sub(r"-if\d+$", "", n)
+    parts = [p for p in n.split("_") if p]
+    if len(parts) > 1 and re.fullmatch(r"[0-9A-Fa-f:]{4,}", parts[-1]):
+        parts = parts[:-1]
+    return " ".join(parts) or n
+
+
+def recovery_steps(path, shelf):
+    """The bootloader drill as three numbered steps, naming the file for that hardware."""
+    n = os.path.basename(str(path or "")).upper()
+    hw = "TRACKER_T1000_E" if "T1000" in n else ("RAK4631" if "RAK4631" in n else None)
+    img = next((i for i in (shelf or {}).get("images", []) if hw and hw in (i.get("hw") or []) and i.get("recommended") and not str(i.get("version") or "").startswith("erase")), None)
+    file = (f"<code>{e(str(img['file']))}</code>" if img and img.get("file") else "the pinned firmware UF2 from the shelf below")
+    vol = str((img or {}).get("volume") or "")
+    return (f"<ol class='steps'><li>Double-press reset.</li><li>Copy {file} onto the volume that appears{(' (' + e(vol) + ')') if vol else ''}.</li><li>Wait for it to come back.</li></ol>")
 
 
 def bench_cards(d, shelf=None):
     onb = _act("bench_onboard")
     roles = next((i.get("values", []) for i in onb.get("inputs", []) if i["name"] == "role"), [])
+    hints = json.dumps(ROLE_HINTS).replace("'", "&#39;")
     cards = ""
     for dev in d.get("devices", []):
         path, name = str(dev.get("path") or ""), os.path.basename(str(dev.get("path") or ""))
+        head = f"<div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(bench_name(path))}</div><div class='sub'>{e(name)}</div>"
         if dev.get("bootloader"):
-            cards += (f"<div class='card' data-path='{e(path)}'><div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(name)}</div>"
-                      f"<p class='bad'>In bootloader mode: it answers nothing. {e(str(dev.get('recovery') or ''))}</p></div>")
+            cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='bad'>In bootloader mode: it answers nothing.</p>{recovery_steps(path, shelf)}</div>"
             continue
         if dev.get("kind") == "gps":
-            cards += (f"<div class='card' data-path='{e(path)}'><div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(name)}</div>"
-                      "<p class='meta'>The box's own GPS receiver on the same USB bus: not a radio, so nothing here opens it.</p></div>")
+            cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='meta'>The box's own GPS receiver on the same USB bus: not a radio, so nothing here opens it.</p></div>"
             continue
-        cards += (f"<div class='card' data-path='{e(path)}'><div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(name)}</div>"
+        cards += (f"<div class='card' data-path='{e(path)}'>{head}"
                   "<div class='row-actions' style='margin:.5rem 0'>"
-                  f"<form data-action='bench_read' data-method='get' data-render='device'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line'>Read</button></form>"
-                  f"<form data-action='bench_export' data-method='get'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line'>Export its configuration</button></form>"
+                  f"<form data-action='bench_read' data-method='get' data-render='device'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line' data-tip='Read' data-tip-more='Opens the device on its cable and shows what it says about itself'>Read</button></form>"
                   "</div><div class='out meta' role='status'></div>"
-                  f"<details class='fold ctl'><summary>Onboard</summary><form data-action='bench_onboard' data-risk='change' data-confirm=\"{e(onb.get('confirm') or '')}\">"
+                  f"<details class='fold ctl primary'><summary data-tip='Onboard' data-tip-more='Names, a role, this radio&#39;s channel, region and admin key, each read back'>{ICONS['onboard']}Onboard</summary><form data-action='bench_onboard' data-risk='change' data-confirm=\"{e(onb.get('confirm') or '')}\">"
                   f"<input type='hidden' name='path' value='{e(path)}'>"
-                  "<label>Long name<input type='text' name='long_name' maxlength='39' required></label>"
-                  "<label>Short name (4 bytes)<input type='text' name='short_name' maxlength='4' required></label>"
-                  "<label>Role<select name='role'>" + "".join(f"<option value='{e(str(rv))}'{' selected' if rv == 'TRACKER' else ''}>{e(str(rv))}</option>" for rv in roles) + "</select></label>"
-                  "<button type='submit'>Onboard and read back</button><div class='res meta' role='status'></div></form></details>"
-                  + restore_flash_forms(path, shelf) + "</div>")
-    return cards or "<p class='meta'>No device on the bench: plug one into the box by USB. The gateway's own radio is never listed here.</p>"
+                  "<label>Long name (39 bytes at most)<input type='text' name='long_name' maxlength='39' required></label>"
+                  "<label>Short name (4 bytes at most)<input type='text' name='short_name' maxlength='4' required></label>"
+                  f"<label>Role<select name='role' data-hints='{hints}' data-tip='What this device does'>" + "".join(f"<option value='{e(str(rv))}'{' selected' if rv == 'TRACKER' else ''}>{e(str(rv))}</option>" for rv in roles) + "</select></label><div class='meta role-hint' style='margin:-6px 0 var(--s2)'>" + e(ROLE_HINTS.get("TRACKER", "")) + "</div>"
+                  "<label>Label (kept on the box)<input type='text' name='label' maxlength='80' placeholder='e.g. Recce lead'></label>"
+                  "<label>Who holds it<input type='text' name='holder' maxlength='80'></label>"
+                  "<button type='submit'>Onboard it</button><div class='res meta' role='status'></div></form></details>"
+                  f"<details class='fold ctl' style='margin-top:var(--s2)'><summary>More for this device</summary>"
+                  f"<form data-action='bench_export' data-method='get' style='margin-top:var(--s2)'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line' data-tip='Export' data-tip-more='Saves its settings and keys on the box, readable only by root'>{ICONS['export']} Export its configuration</button></form>"
+                  + restore_flash_forms(path, shelf) + "</details></div>")
+    return cards or "<p class='meta'>No device on the bench: plug one into the box by USB. This box's own radio is never listed here.</p>"
 
 
 def restore_flash_forms(path, shelf):
     res, fl = _act("bench_restore"), _act("bench_flash")
     pins = [i for i in (shelf or {}).get("images", []) if i.get("state") == "verified"]
-    opts = "".join(f"<option value='{e(str(i['id']))}' data-hw='{e(','.join(i.get('hw') or []))}' data-note='{e(str(i.get('note') or ''))}'>{e(str(i.get('version') or ''))} · {e(', '.join(i.get('hw') or []))}{' · recommended' if i.get('recommended') else ''}</option>"
+    opts = "".join(f"<option value='{e(str(i['id']))}' data-hw='{e(','.join(i.get('hw') or []))}' data-note='{e(str(i.get('note') or ''))}' hidden>{e(str(i.get('version') or ''))} · {e(', '.join(i.get('hw') or []))}{' · recommended' if i.get('recommended') else ''}</option>"
                    for i in sorted(pins, key=lambda x: (not x.get("recommended"), x.get("version") or "")))
-    restore = (f"<details class='fold ctl'><summary>Restore</summary><form data-action='bench_restore' data-risk='unreachable' data-confirm=\"{e(res.get('confirm') or '')}\">"
+    gate = "<div class='meta' data-read-first>Read the device first.</div>"
+    restore = (f"<details class='fold ctl' style='margin-top:var(--s2)'><summary data-tip='Restore' data-tip-more='Put a saved configuration back'>{ICONS['restore']}Restore</summary><form data-action='bench_restore' data-risk='unreachable' data-confirm=\"{e(res.get('confirm') or '')}\">"
                f"<input type='hidden' name='path' value='{e(path)}'>"
                "<label>Export on the box<select name='export' data-exports><option value=''>Read the device first, then pick one of its exports</option></select></label>"
                "<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand the device's names, channels and settings are replaced by the export's; its own keys stay. Ticked, this also allows an export made from a different device (a clone).</span></label>"
-               "<button type='submit'>Restore and read back</button><div class='res meta' role='status'></div></form></details>")
-    flash = (f"<details class='fold ctl'><summary>Flash</summary><form data-action='bench_flash' data-risk='unreachable' data-flash='1' data-confirm=\"{e(fl.get('confirm') or '')}\">"
+               f"<button type='submit' data-needs-read disabled>Restore it</button>{gate}<div class='res meta' role='status'></div></form></details>")
+    flash = (f"<details class='fold ctl bad' style='margin-top:var(--s2)'><summary data-tip='Flash' data-tip-more='Writes new firmware; the device is off the mesh while it does'>{ICONS['flash']}Flash</summary><form data-action='bench_flash' data-risk='unreachable' data-flash='1' data-confirm=\"{e(fl.get('confirm') or '')}\" style='border-left:4px solid var(--bad);padding-left:var(--s2)'>"
              f"<input type='hidden' name='path' value='{e(path)}'>"
-             f"<label>Pinned image<select name='image' data-pins>{opts or NO_IMAGE_OPT}</select></label>"
+             f"<label>Firmware from the shelf<select name='image' data-pins data-tip='Firmware from the shelf' data-tip-more='Only images this release pins and this box has verified, for this hardware'>{opts or NO_IMAGE_OPT}</select></label>"
              "<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand: the configuration is exported first, then the device is flashed and reboots; a factory image loses every setting; a flash that does not come back needs the recovery step. This device is the one named on Read.</span></label>"
-             "<button type='submit' class='danger'>Export, flash and read the version back</button><div class='res meta' role='status'></div><div class='stages meta'></div></form></details>")
+             f"<button type='submit' class='danger' data-needs-read disabled>Flash it</button>{gate}<div class='res meta' role='status'></div><div class='stages meta'></div></form></details>")
     return restore + flash
 
 
-NO_IMAGE_OPT = "<option value=''>no verified image on the shelf</option>"
+NO_IMAGE_OPT = "<option value=''>no verified image on the shelf: see The shelf below</option>"
 
 
 def bench_body(d, shelf=None):
@@ -1909,12 +2439,13 @@ def bench_body(d, shelf=None):
     card.dataset.own=j.id;card.querySelectorAll('input[name=confirm]').forEach(function(x){x.value=j.id;});
     fetch('/api/bench_exports?id='+encodeURIComponent(j.id)).then(function(r){return r.json();}).then(function(x){var sel=card.querySelector('select[data-exports]');if(!sel)return;
       sel.innerHTML=(x.exports||[]).length?(x.exports||[]).map(function(e){return "<option value='"+e.path+"'>"+e.when+" ("+e.bytes+" bytes)</option>";}).join(''):"<option value=''>no export of "+j.id+" on this box yet</option>";}).catch(function(){});
-    var pins=card.querySelector('select[data-pins]');if(pins){[].forEach.call(pins.options,function(o){var hw=(o.dataset.hw||'').split(',');o.hidden=!!o.value&&hw.indexOf(j.hw)<0;});}});
+    var pins=card.querySelector('select[data-pins]');if(pins){[].forEach.call(pins.options,function(o){var hw=(o.dataset.hw||'').split(',');o.hidden=!!o.value&&hw.indexOf(j.hw)<0;});}
+    card.querySelectorAll('[data-needs-read]').forEach(function(b){b.disabled=false;});card.querySelectorAll('[data-read-first]').forEach(function(x){x.hidden=true;});});
+  document.addEventListener('change',function(ev){var sel=ev.target.closest('select[name=role][data-hints]');if(!sel)return;var h=sel.closest('form').querySelector('.role-hint');if(!h)return;try{h.textContent=(JSON.parse(sel.dataset.hints)||{})[sel.value]||'';}catch(e){}});
 })();
 </script>"""
-    return (f"<p class='meta'>Devices plugged into this box by USB, by their by-id name; the gateway radio ({e(os.path.basename(str(d.get('gateway') or '')) or 'none')}) is set from the Radio page and never opened here. "
-            "Read opens the device and shows what it says about itself; Onboard gives it names and a role, this radio's primary channel and key, this radio's region and preset, and this radio's public key as an admin key, every one read back before it shows; "
-            "Export saves its configuration, keys included, on the box at mode 0600.</p>"
+    return (f"<p class='meta'>Radios plugged into this box by USB. This box's own radio ({e(bench_name(d.get('gateway') or '') or 'none')}) is set on the Radio page and never opened here. "
+            "Read first, then Onboard; Export, Restore and Flash are under More. Every write is shown only once the device has answered with it.</p>"
             f"<div class='cards' id='bench-cards'>{bench_cards(d, shelf)}</div><div class='cards' style='margin-top:1rem'>{shelf_card(shelf or {})}</div>{js}{WRITE_JS}")
 
 
@@ -1952,7 +2483,7 @@ def help_body(st, cfg, reg, shelf, declared_region):
     else:
         region = f"<p class='ok'>The radio is on <b>{e(str(radio_region or '?'))}</b>, the region the installer declared. Before the kit travels to another country, the whole fleet and this radio move together: the devices on the bench first, this radio last.</p>"
     pins = "".join(f"<tr><td><b>{e(str(i.get('version') or ''))}</b>{' <span class=pill>recommended</span>' if i.get('recommended') else ''}{' <span class=pill>recovery</span>' if str(i.get('version') or '').startswith('erase') or 'factory' in str(i.get('id') or '') else ''}<div class='sub'>{e(', '.join(i.get('hw') or []))} · {e(str(i.get('method') or ''))}</div></td>"
-                   f"<td><span class='{ {'verified': 'ok', 'wrong': 'bad', 'missing': 'warn'}.get(i.get('state') or 'missing', '') }'>{e(str(i.get('state') or 'missing'))}</span></td><td class='meta'>{e(str(i.get('note') or ''))}</td></tr>" for i in shelf.get("images", [])) or "<tr><td colspan=3 class='meta'>No pins in this release.</td></tr>"
+                   f"<td><span class='{ {'verified': 'ok', 'wrong': 'bad', 'missing': 'warn'}.get(i.get('state') or 'missing', '') }'>{e(str(i.get('state') or 'missing'))}</span></td><td class='meta'>{e(str(i.get('note') or ''))}</td></tr>" for i in shelf.get("images", [])) or "<tr><td colspan=3 class='meta'>No firmware pinned in this release.</td></tr>"
     states = ("<table><thead><tr><th>What the line says</th><th>What it means</th></tr></thead><tbody>"
               "<tr><td>sent hh:mm, waiting for the read-back</td><td>The write went to the device; nothing is shown as true until the device itself answers.</td></tr>"
               "<tr><td>written and read back at hh:mm</td><td>The device's own answer matched what was written. This is the only state that means done.</td></tr>"
@@ -1962,7 +2493,14 @@ def help_body(st, cfg, reg, shelf, declared_region):
     where = (f"<p class='meta'>Units <code>mesh-manager-bridge</code> (owns the radio, forwards to TAK) and <code>mesh-manager-web</code> (this screen). The bridge answers on <code>{e(str(st.get('socket') or ''))}</code>; "
              f"its state, the register, the exports and the firmware shelf live under <code>{e(str(st.get('state_dir') or ''))}</code>. When something is wrong: <code>journalctl -u mesh-manager-bridge -n 200</code>. "
              "A radio in bootloader mode presents a serial port and answers nothing; the bridge waits rather than restarting, and the Bench page names the recovery step.</p>")
-    return (f"<h2 style='margin-top:0'>The kit</h2><div class='cards'>{card('This radio', e(str(own.get('name') or '?')) + ' <span class=pill>' + e(str(own.get('id') or '')) + '</span>')}"
+    setup = ("<h2 style='margin-top:0'>Setting the kit up</h2><ol class='steps'>"
+             "<li><a href='/radio'>Name this radio</a> and check its region and preset: every device on the mesh must share them.</li>"
+             "<li><a href='/channels'>Mint a channel</a> of your own, or adopt a join URL you were given. The default key is everyone's key.</li>"
+             "<li><a href='/channels'>Show the join QR</a> to a phone, or <a href='/bench'>onboard a device on the bench</a> by USB: names, a role, this radio's channel and admin key, each read back.</li>"
+             "<li><a href='/settings#position'>Say where this box is</a> if it has no GPS receiver, so the map has a centre.</li>"
+             "<li><a href='/'>Watch the picture</a>: nodes, signal, battery and who has gone quiet. <a href='/health'>Health</a> holds the alerts and their thresholds.</li>"
+             "<li>Point it at TAK: the bridge speaks to the TAK Server the installer was given; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li></ol>")
+    return (f"{setup}<h2>The kit</h2><div class='cards'>{card('This radio', e(str(own.get('name') or '?')) + ' <span class=pill>' + e(str(own.get('id') or '')) + '</span>')}"
             f"{card('Rides', e(str(st.get('region') or '?')) + ' · ' + e(str(st.get('modem_preset') or '?')) + '<div class=meta>primary ' + e(str(st.get('primary_channel') or '?')) + '</div>')}"
             f"{card('The fleet', str(len(rows)) + ' device' + ('s' if len(rows) != 1 else '') + '<div class=meta>' + str(len(managed)) + ' managed by this radio</div>')}"
             f"{card('The radio is at', e(str(st.get('radio') or '?')))}</div>"
@@ -1970,7 +2508,7 @@ def help_body(st, cfg, reg, shelf, declared_region):
             f"<h2>Before the kit travels</h2>{region}"
             f"<h2>The shelf</h2><p class='meta'>Firmware the fleet may carry, pinned in this release; recovery images are the way back when a device will not boot.</p><div class='tablewrap'><table><thead><tr><th>Image</th><th>On this box</th><th>Note</th></tr></thead><tbody>{pins}</tbody></table></div>"
             f"<h2>What goes wrong</h2><p class='meta'>The same rules the connected agent reads; every one was paid for on a real mesh.</p>{lessons_html()}"
-            f"<h2>The four states of a write</h2>{states}<h2>Where things are</h2>{where}")
+            f"<h2>The four states of a write</h2>{states}<p class='meta'>Every time on this screen is Zulu.</p><h2>Where things are</h2>{where}")
 
 
 def update_box(web):
@@ -1978,7 +2516,7 @@ def update_box(web):
     mode = web.update_mode()
     tok = bool(web.github_token())
     if not rec:
-        last = "never checked" if tok else "never checked; no GitHub token yet (Settings)"
+        last = "never checked" if tok else "never checked: add a GitHub token on Settings when the box has internet"
     elif rec.get("error"):
         last = f"checked {hhmm(rec.get('checked'))}: {rec['error']}"
     elif U.is_available(rec):
@@ -2003,14 +2541,14 @@ UPDATE_JS = r"""<script>
   var chk=document.querySelector('[data-update-check]');if(chk){chk.addEventListener('click',function(){chk.disabled=true;res('asking GitHub');
     fetch('/api/update/check',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(function(r){return r.json();}).then(function(j){chk.disabled=false;
       if(j.error){res('checked: '+j.error,'warn');return;}res(j.available?(j.version+' is available; the page will show it'):('up to date: '+j.version+' is the newest'),'ok');setTimeout(function(){window.location.href='/about';},1200);})
-    .catch(function(){chk.disabled=false;res('could not ask the box','bad');});});}
+    .catch(function(){chk.disabled=false;res(window.mmNoAnswer,'bad');});});}
   var ap=document.querySelector('[data-update-apply]');if(ap){ap.addEventListener('click',function(){var v=ap.dataset.updateApply;
-    if(!confirm('Update to '+v+'? The release is downloaded and checked, then the bridge and this screen restart; the mesh is off TAK for about a minute.'))return;
+    window.mmConfirm('Update to '+v+'? The release is downloaded and checked, then the bridge and this screen restart; the mesh is off TAK for about a minute.',ap.closest('.card'),function(){
     ap.disabled=true;res('downloading and checking '+v);
     fetch('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})}).then(function(r){return r.json();}).then(function(j){
       if(j.error){res('not applied: '+j.error,'bad');ap.disabled=false;return;}res('installing '+v+'; the screen will come back on the new version','warn');
       var t0=Date.now();(function poll(){setTimeout(function(){fetch('/healthz').then(function(r){return r.json();}).then(function(h){if(h.version&&h.version!==j.running){window.location.href='/about';}else if(Date.now()-t0<600000){poll();}else{res('the screen is back but still on '+h.version+': read the last update log below','bad');}}).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: ssh to the box and read journalctl -u mesh-manager-update','bad');}});},3000);})();})
-    .catch(function(){res('the box went away mid-request; it may be restarting','warn');});});}
+    .catch(function(){res('the box went away mid-request; it may be restarting','warn');});});});}
 })();
 </script>"""
 
@@ -2074,14 +2612,14 @@ def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
             + (f"<p class='meta'>On charge at {e(', '.join(charging[-6:]))}{' and earlier' if len(charging) > 6 else ''} (shown as 100%).</p>" if charging else "")
             + f"<h2>Voltage</h2>{series_chart(tel, 'voltage', ' V', None, None, ((3.3, 'bad'),), 'voltage')}"
             + envblock +
-            f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>None in the window.</td></tr>'}</tbody></table></div>")
+            f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No message from this node in the window.</td></tr>'}</tbody></table></div>")
 
 
 def health_chart(h):
     """Channel utilisation by the hour, the 25 and 40 percent lines drawn."""
     pts = h.get("hourly") or []
     if len(pts) < 2:
-        return "<p class='meta'>Not enough of the gateway's own telemetry yet for a chart; it reports every few minutes.</p>"
+        return "<p class='meta'>Not enough readings from this radio yet for a chart; it reports every few minutes.</p>"
     w, ht = 600, 120
     top = max(45.0, max(float(p.get("chutil") or 0) for p in pts) * 1.1)
     def x(i): return 30 + i * (w - 40) / max(1, len(pts) - 1)
@@ -2095,15 +2633,15 @@ def health_chart(h):
 
 def health_cards(h):
     if not h or "error" in h:
-        return f"<p class='bad'>{e(str((h or {}).get('error') or 'no answer'))}</p>"
+        return f"<p class='bad'>{e(str((h or {}).get('error') or 'The bridge did not answer, so there are no health figures. The Mesh page says whether it is running.'))}</p>"
     v = h.get("verdict") or "unknown"
     cls = {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(v, "")
     ch = h.get("chutil"); air = h.get("airutil"); bud = h.get("budget_pct")
     air_txt = ("no reading" if air is None else f"{float(air):.1f}%") + (f"<div class='meta'>of a {bud:g}% budget on {e(h.get('region') or '')}: {h.get('air_share') if h.get('air_share') is not None else '?'}% used</div>" if bud else f"<div class='meta'>no duty-cycle limit on {e(h.get('region') or 'this region')}</div>")
     cards = (card("Channel utilisation", (f"{float(ch):.1f}%" if ch is not None else "no reading") + f" <span class='pill'>{e(v)}</span>", cls)
-             + card("Gateway air time (transmit)", air_txt, "bad" if (h.get("air_share") or 0) >= 80 else ("warn" if (h.get("air_share") or 0) >= 50 else ""))
+             + card("This radio's transmit time", air_txt, "bad" if (h.get("air_share") or 0) >= 80 else ("warn" if (h.get("air_share") or 0) >= 50 else ""))
              + card("Packets per hour", f"{h.get('packets_per_hour', 0)}<div class='meta'>{h.get('packets', 0)} in {h.get('hours')} h</div>")
-             + card("Nodes heard", f"{h.get('nodes_heard', 0)}<div class='meta'>in the window</div>"))
+             + card("Nodes heard", f"{h.get('nodes_heard', 0)}<div class='meta'>last {h.get('hours')} h, from the history</div>"))
     rows = ""
     for d in h.get("nodes") or []:
         rows += (f"<tr><td><b>{e(d.get('name') or d.get('id'))}</b>{' <span class=pill>this radio</span>' if d.get('own') else ''}<div class='sub'>{e(d.get('id') or '')}</div></td>"
@@ -2113,7 +2651,7 @@ def health_cards(h):
                  f"<td>{(str(int(d['battery'])) + '%') if d.get('battery') is not None and 0 <= int(d['battery']) <= 100 else ('on charge' if d.get('battery') is not None and int(d['battery']) > 100 else '<span class=sub>none</span>')}</td>"
                  f"<td class='meta'>{('<time datetime=' + chr(39) + e(d['last_telemetry']) + chr(39) + ' data-age>' + e(age(d['last_telemetry'])) + '</time>') if d.get('last_telemetry') else 'none'}</td></tr>")
     return (f"<div class='cards'>{cards}</div><h2>Channel utilisation by the hour</h2>{health_chart(h)}"
-            "<h2>Per node</h2><p class='meta'>Packets the gateway heard from each node in the window, and the last device metrics each reported. Utilisation is the share of air time the node's radio hears busy; air time is the share it spends transmitting.</p>"
+            "<h2>Per node</h2><p class='meta'>Packets this radio heard from each node in the window, and the last device metrics each reported. Utilisation is the share of air time the node's radio hears busy; air time is the share it spends transmitting.</p>"
             "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Packets</th><th>Per hour</th><th>Utilisation</th><th>Air time</th><th>Battery</th><th>Reported</th></tr></thead>"
             f"<tbody>{rows or '<tr><td colspan=7 class=meta>Nothing in the window yet.</td></tr>'}</tbody></table></div>")
 
@@ -2135,37 +2673,40 @@ def rotation_section(rs):
     wait = "".join(f"<tr><td><b>{e(w.get('name'))}</b><div class='sub'>{e(w.get('id'))}</div></td><td class='warn'>waiting</td><td class='meta'>not heard since the rotation</td></tr>" for w in rs.get("waiting") or [])
     return (f"<h2 id='rotation'>Since the key rotation</h2><p class='meta'>Slot {int(rot.get('index') or 0)}{(' (' + e(rot.get('name')) + ')') if rot.get('name') else ''}, {e(rot.get('source') or '')} <time datetime='{e(rot.get('ts'))}' data-age>{e(age(rot.get('ts')))}</time>{(': ' + e(rot.get('note'))) if rot.get('note') else ''}. "
             f"<b>{int(c.get('back') or 0)} of {int(c.get('expected') or 0)} back</b>, {int(c.get('waiting') or 0)} waiting. A device is back when this radio hears any packet from it, because a packet it can decode carries the new key.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>State</th><th>First heard after</th></tr></thead><tbody>{wait}{back or ''}{'' if (wait or back) else '<tr><td colspan=3 class=meta>Nobody was expected.</td></tr>'}</tbody></table></div>{form}")
+            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>State</th><th>First heard after</th></tr></thead><tbody>{wait}{back or ''}{'' if (wait or back) else '<tr><td colspan=3 class=meta>No device was expected back.</td></tr>'}</tbody></table></div>{form}")
 
 
 def alerts_section(al):
     """Spec 026: what is open, what was, the thresholds, and the test."""
     al = al or {}
     st = al.get("settings") or {}
-    kinds = {"silent": "warn", "battery": "warn", "unknown": "bad", "fence": "bad"}
+    kinds = {"silent": "warn", "battery": "warn", "unknown": "bad", "fence": "bad", "geofence": "warn", "key": "bad"}
     open_rows = "".join(f"<tr><td><span class='pill' style='background:var(--{kinds.get(o.get('kind'), 'warn')});color:#fff;border-color:transparent'>{e(o.get('kind'))}</span></td><td>{e(o.get('text'))}</td><td class='meta'><time datetime='{e(o.get('since'))}' data-age>{e(age(o.get('since')))}</time></td></tr>" for o in al.get("open") or [])
     recent = "".join(f"<tr><td class='meta'><time datetime='{e(r.get('ts'))}' data-age>{e(age(r.get('ts')))}</time></td><td>{e(r.get('kind'))}</td><td>{e(r.get('text'))}</td><td class='meta'>{'cleared ' + e(hhmm(r.get('cleared'))) if r.get('state') == 'cleared' else 'open'}</td></tr>" for r in list(reversed(al.get("recent") or []))[:20])
     a = _act("alert_set"); t = _act("alert_test")
     def opt(name, on):
         return f"<option value='on'{' selected' if on else ''}>on</option><option value='off'{'' if on else ' selected'}>off</option>"
-    form = (f"<form data-action='alert_set' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:720px'><h2 style='margin-top:0'>Thresholds</h2><p class='meta'>{e(a['description'])}</p>"
-            f"<div class='regform' style='grid-template-columns:1fr 1fr 1fr'><label>Silent after (min)<input type='number' name='silent_min' value='{int(st.get('silent_min', 30))}' min='1' max='1440'></label>"
+    onoff = (("on", "On"), ("off", "Off"))
+    form = (f"<form data-action='alert_set' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:720px'><p class='meta'>{e(a['description'])}</p>"
+            f"<div class='regform' style='grid-template-columns:1fr 1fr 1fr'><label>Silent after (minutes)<input type='number' name='silent_min' value='{int(st.get('silent_min', 30))}' min='1' max='1440'></label>"
             f"<label>Battery under (%)<input type='number' name='battery_pct' value='{int(st.get('battery_pct', 20))}' min='1' max='90'></label>"
-            f"<label>Fence (m, 0 off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
-            f"<label>Unknown nodes<select name='unknown'>{opt('unknown', st.get('unknown', True))}</select></label>"
-            f"<label>To TAK chat<select name='to_tak'>{opt('to_tak', st.get('to_tak', True))}</select></label>"
-            "<div></div></div><button class='line' style='margin-top:var(--s2)'>Save</button><div class='res meta' role='status'></div></form>")
-    test = (f"<form data-action='alert_test' style='display:inline-block;margin-top:var(--s2)'><button class='quiet' title='{e(t['description'])}'>{e(t['title'])}</button><div class='res meta' role='status'></div></form>")
-    return (f"<h2 id='alerts'>Alerts</h2><p class='meta'>A registered device gone quiet, a battery under the threshold, a node not in the register, a node outside the fence. Each is shown here and sent to All Chat Rooms on the TAK Server when To TAK chat is on.</p>"
+            f"<label data-tip='Fence around this box' data-tip-more='A radius from the box&#39;s own position; drawn fences live on the map'>Fence around this box (metres, 0 is off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
+            f"<div><span class='meta'>Unknown nodes</span><br>{seg('unknown', onoff, 'on' if st.get('unknown', True) else 'off')}</div>"
+            f"<div><span class='meta'>To TAK chat</span><br>{seg('to_tak', onoff, 'on' if st.get('to_tak', True) else 'off')}</div>"
+            "<div></div></div><button class='line' style='margin-top:var(--s2)'>Save the thresholds</button><div class='res meta' role='status'></div></form>")
+    test = (f"<form data-action='alert_test' style='display:inline-block;margin-top:var(--s2)'><button class='quiet' data-tip='Send a test alert to TAK' data-tip-more='{e(t['description'])}'>{e(t['title'])}</button><div class='res meta' role='status'></div></form>")
+    return (f"<h2 id='alerts' style='margin-top:0'>Alerts</h2><p class='meta'>A registered device gone quiet, a battery under the threshold, a node not in the register, a node outside a fence. Each is shown here and sent to All Chat Rooms on the TAK Server when To TAK chat is on.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Open</th><th>What</th><th>Since</th></tr></thead><tbody>{open_rows or '<tr><td colspan=3 class=meta>Nothing open.</td></tr>'}</tbody></table></div>"
             f"<h2>Recent</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>Kind</th><th>What</th><th>State</th></tr></thead><tbody>{recent or '<tr><td colspan=4 class=meta>None yet.</td></tr>'}</tbody></table></div>"
-            f"{form}{test}")
+            f"<details class='fold' data-keep='thresholds'><summary>Thresholds</summary>{form}{test}</details>")
 
 
 def health_body(h, al=None):
     js = "<script>window.onMesh=function(d){if(d.kind==='status'){window.mmFrag('health','health-body');}if(d.kind==='alert'){window.mmFrag('alerts','alerts-body');}};</script>"
-    _out = (("<p class='meta'>How busy the mesh is, from the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 the gateway's own transmit air time must stay under the 10% duty-cycle limit.</p>"
-            f"<div id='health-body'>{health_cards(h)}</div><div id='alerts-body'>{alerts_section(al)}</div>{js}{WRITE_JS}"))
+    js = js.replace("window.mmFrag('alerts','alerts-body');", "var o=document.querySelector('#alerts-body details'),was=!!(o&&o.open);window.mmFrag('alerts','alerts-body',function(){var n=document.querySelector('#alerts-body details');if(n&&was){n.open=true;}});")
+    _out = ((f"<div id='alerts-body'>{alerts_section(al)}</div>"
+            "<h2>How busy the mesh is</h2><p class='meta'>From the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 this radio's own transmit air time must stay under the 10% duty-cycle limit.</p>"
+            f"<div id='health-body'>{health_cards(h)}</div>{js}{WRITE_JS}"))
     return _out + export_section()
 
 def history_box(web):
@@ -2251,18 +2792,20 @@ def export_kml(rows, names=None):
 
 def export_section():
     """Spec 037: the Export control on the Health page. The URL is built in the browser from the selects."""
-    kinds = "".join(f"<option value='{k}'>{k}</option>" for k in EXPORT_KINDS)
-    return ("<h2 id='export'>Export</h2><p class='meta'>The history as a file, for a report or for Pinecone: positions as GPX, KML or CSV; messages, packets, telemetry and environment as CSV. "
+    words = {"positions": "positions", "messages": "messages", "packets": "packets", "telemetry": "battery and voltage", "environment": "temperature, humidity, pressure"}
+    kinds = "".join(f"<option value='{k}'>{e(words.get(k, k))}</option>" for k in EXPORT_KINDS)
+    return ("<h2 id='export'>Export</h2><p class='meta'>The history as a file, for a report or for Pinecone: positions as GPX, KML or CSV; messages, packets, battery and environment as CSV. "
             "Only what the box already holds: ids, your labels, times, positions and the text already on the channels.</p>"
-            f"<form class='controls' id='export-form'><label>Kind <select id='ex-kind'>{kinds}</select></label>"
+            f"<form class='controls' id='export-form'><label data-tip='What' data-tip-more='Comes from the box&#39;s history, as far back as the window'>What <select id='ex-kind'>{kinds}</select></label>"
             "<label>Window <select id='ex-hours'><option value='24'>24 h</option><option value='168'>7 d</option><option value='720'>30 d</option></select></label>"
-            "<label>Format <select id='ex-fmt'><option value='gpx'>GPX</option><option value='kml'>KML</option><option value='csv'>CSV</option></select></label>"
-            "<button type='submit' class='line'>Download</button></form>"
+            "<span><span class='meta'>Format</span> " + seg("fmt", (("gpx", "GPX"), ("kml", "KML"), ("csv", "CSV")), "gpx", attrs="id='ex-fmt'") + "</span>"
+            "<button type='submit' class='line'>Download</button><span class='res meta' id='ex-res' role='status'></span></form>"
             "<script>(function(){var f=document.getElementById('export-form');if(!f)return;var k=document.getElementById('ex-kind'),fm=document.getElementById('ex-fmt');"
             "var allowed=" + json.dumps({k: list(v) for k, v in EXPORT_KINDS.items()}) + ";"
-            "function fix(){var a=allowed[k.value]||['csv'];Array.prototype.forEach.call(fm.options,function(o){o.disabled=a.indexOf(o.value)<0;});if(a.indexOf(fm.value)<0){fm.value=a[0];}}"
+            "function chosen(){var c=fm.querySelector('input:checked');return c?c.value:'csv';}"
+            "function fix(){var a=allowed[k.value]||['csv'];fm.querySelectorAll('input').forEach(function(o){o.disabled=a.indexOf(o.value)<0;});if(a.indexOf(chosen())<0){var first=fm.querySelector(\"input[value='\"+a[0]+\"']\");if(first)first.checked=true;}}"
             "k.addEventListener('change',fix);fix();"
-            "f.addEventListener('submit',function(ev){ev.preventDefault();window.location.href='/export/'+k.value+'.'+fm.value+'?hours='+document.getElementById('ex-hours').value;});})();</script>")
+            "f.addEventListener('submit',function(ev){ev.preventDefault();var h=document.getElementById('ex-hours').value;var r=document.getElementById('ex-res');if(r){r.textContent='asked the box for '+k.options[k.selectedIndex].text+', '+h+' h';r.className='res meta ok';}window.location.href='/export/'+k.value+'.'+chosen()+'?hours='+h;});})();</script>")
 
 
 # ---- Spec 038: quick messages ----------------------------------------------------------------------
@@ -2317,13 +2860,17 @@ def packets_body(rows, hours, node, port, labels):
     nsel = "<option value=''>every node</option>" + "".join(f"<option value='{e(n)}'{' selected' if n == node else ''}>{e(labels.get(n, n))}</option>" for n in nodes)
     chips = " ".join(f"<a class='pill' href='/packets?hours={hours}&port={e(p)}' data-portcount='{counts[p]}'>{e(p)} <b>{counts[p]}</b></a>" for p in ports)
     js = r"""<script>(function(){var last=0;function refresh(){var now=Date.now();if(now-last<2000)return;last=now;
-  fetch(window.location.href).then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var nb=d.getElementById('pkt-rows'),ob=document.getElementById('pkt-rows');if(nb&&ob){ob.innerHTML=nb.innerHTML;}var nc=d.getElementById('pkt-counts'),oc=document.getElementById('pkt-counts');if(nc&&oc){oc.innerHTML=nc.innerHTML;}}).catch(function(){});}
+  fetch(window.location.href).then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');['pkt-rows','pkt-counts','pkt-cap'].forEach(function(id){var nb=d.getElementById(id),ob=document.getElementById(id);if(nb&&ob){ob.innerHTML=nb.innerHTML;}});}).catch(function(){});}
   window.onMesh=function(d){if(d.kind==='packet'){refresh();}};})();</script>"""
-    return (f"<p class='meta'>Every packet the radio heard in the window, newest first. The port is what the packet carried; hops is how many relays it came through; a direct packet is 0.</p>"
-            f"<form method='get' action='/packets' class='controls'><label>Window <select name='hours' onchange='this.form.submit()'>{hsel}</select></label>"
-            f"<label>Node <select name='node' onchange='this.form.submit()'>{nsel}</select></label><label>Port <select name='port' onchange='this.form.submit()'>{psel}</select></label></form>"
+    cap = (f"the newest 500 of {len(shown)} in the window" if len(shown) > 500 else f"{len(shown)} in the window")
+    js = js.replace("window.onMesh=function(d){if(d.kind==='packet'){refresh();}};",
+                    "window.onMesh=function(d){if(d.kind==='packet'){refresh();}};"
+                    "var fm=document.getElementById('pkt-filters');if(fm){fm.addEventListener('change',function(){var q=new URLSearchParams(new FormData(fm)).toString();history.replaceState(null,'',window.location.pathname+'?'+q);var n=document.getElementById('pkt-note');if(n){n.textContent='filtering…';}last=0;refresh();setTimeout(function(){if(n){n.textContent='';}},1500);});}")
+    return (f"<p class='meta'>Every packet this radio heard in the window, newest first: <span id='pkt-cap'>{e(cap)}</span>. The port is what the packet carried; hops is how many relays it came through; a direct packet is 0.</p>"
+            f"<form method='get' action='/packets' class='controls' id='pkt-filters'><label>Window <select name='hours'>{hsel}</select></label>"
+            f"<label>Node <select name='node'>{nsel}</select></label><label data-tip='Port' data-tip-more='What the packet carried, in Meshtastic&#39;s own names'>Port <select name='port'>{psel}</select></label><span class='meta' id='pkt-note'></span></form>"
             f"<p id='pkt-counts'>{chips or '<span class=meta>nothing in the window</span>'}</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th>Port</th><th>SNR</th><th>Hops</th><th>Size</th></tr></thead><tbody id='pkt-rows'>{body or '<tr><td colspan=6 class=meta>No packets match.</td></tr>'}</tbody></table></div>{js}")
+            f"<div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th data-tip='Port' data-tip-more='What the packet carried, in Meshtastic&#39;s own names'>Port</th><th>SNR</th><th>Hops</th><th>Size</th></tr></thead><tbody id='pkt-rows'>{body or '<tr><td colspan=6 class=meta>No packets match. Widen the window, or set the node and port back to every.</td></tr>'}</tbody></table></div>{js}")
 
 
 # ---- Spec 042: the mesh as a graph -------------------------------------------------------------------
@@ -2334,8 +2881,8 @@ def graph_body(nb, hours):
     form = f"<form method='get' action='/graph' class='controls'><label>Window <select name='hours' onchange='this.form.submit()'>{hsel}</select></label></form>"
     if not edges:
         return (form + "<p class='meta'><b>No neighbour reports in the window.</b> This graph is drawn from the neighbour-info module, which a node broadcasts only when it is switched on. "
-                "Turn it on over the air with <code>node_set</code> on a managed device (neighbour info, with an interval of a few minutes), or on the bench, and the edges appear as reports arrive. "
-                "The gateway's own links to each node are on the map meanwhile.</p>")
+                "Turn neighbour info on in the Meshtastic app or on the bench, with an interval of a few minutes; there is no control for it on this screen yet. The edges appear as the reports arrive. "
+                "This radio's own links to each node are on the map meanwhile.</p>")
     ids, names = [], {}
     for x in edges:
         for k, nk in (("from", "from_name"), ("to", "to_name")):
@@ -2391,7 +2938,7 @@ ROLLBACK_JS = r"""<script>
   function res(t,c){var r=document.getElementById('rollback-res');if(r){r.textContent=t;r.className='res meta '+(c||'');}}
   document.querySelectorAll('[data-rollback]').forEach(function(b){b.addEventListener('click',function(){
     var v=b.getAttribute('data-rollback');
-    if(!window.confirm('Roll back to '+v+'? The bridge and this screen restart, so the mesh is off TAK for about a minute. This returns the code, not the box\'s settings.'))return;
+    window.mmConfirm('Roll back to '+v+'? The bridge and this screen restart, so the mesh is off TAK for about a minute. This returns the code, not the box\'s settings.',b.closest('.card'),function(){
     b.disabled=true;res('rolling back to '+v);
     fetch('/api/update/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})})
       .then(function(r){return r.json();}).then(function(j){
@@ -2403,14 +2950,14 @@ ROLLBACK_JS = r"""<script>
             else if(Date.now()-t0<600000){poll();}
             else{res('the screen is back but on '+h.version+': read the last update log below','bad');}
           }).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: read journalctl -u mesh-manager-update on the box','bad');}});},3000);})();})
-      .catch(function(){b.disabled=false;res('could not ask the box','bad');});});});
+      .catch(function(){b.disabled=false;res(window.mmNoAnswer,'bad');});});});});
 })();
 </script>"""
 
 
 def about_body(st, web):
     return (f"{update_box(web)}{rollback_box(web)}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
-            f"{card('Licence', 'GPL-3.0-or-later')}{card('Health contract', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
+            f"{card('Licence', 'GPL-3.0-or-later')}{card('Heartbeat file', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
             f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}</div>"
             f"{history_box(web)}"
             "<h2>Third-party work</h2><p class='meta'>TAK-Meshtastic-Gateway (OpenTAKServer / brian7704) and the Meshtastic Python library and protobufs, GPL-3.0-or-later; "
@@ -2443,61 +2990,74 @@ def message_rows(web, labels=None):
         if ack == "delivered":
             state = " <span class='pill' style='background:var(--ok);color:#fff;border-color:var(--ok)'>delivered</span>"
         elif ack:
-            state = f" <span class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)' title='the radio gave up: {e(str(ack))}'>not delivered · {e(str(ack).replace('_', ' ').lower())}</span>"
+            state = f" <span class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)' data-tip='The radio gave up' data-tip-more='{e(str(ack))}'>not delivered · {e(str(ack).replace('_', ' ').lower())}</span>"
         elif m.get("sent") or m.get("mid") is not None:
             state = f" <span class='pill'>handed to the radio {e(hhmm(ts))}</span>"
         else:
             state = ""
-        rows += (f"<tr><td class='meta'>{when}</td><td>{e(who)}{state}</td>"
-                 f"<td>{e('everyone' if str(m.get('to') or '') == '^all' else str(m.get('to') or ''))}</td><td>{e(str(m.get('text') or ''))}</td></tr>")
-    return rows or "<tr><td colspan=4 class='meta'>Nothing heard on the channels since the bridge started.</td></tr>"
+        rows += (f"<tr><td class='meta'>{when}</td><td>{e(who)}</td>"
+                 f"<td>{e('everyone' if str(m.get('to') or '') == '^all' else str(m.get('to') or ''))}</td><td>{e(str(m.get('text') or ''))}</td><td>{state.strip() or ''}</td></tr>")
+    return rows or "<tr><td colspan=5 class='meta'>Nothing heard on the channels since the bridge started. Anything you send shows here too.</td></tr>"
 
 
-def messages_body(web, nodes, chans=None, st=None):
+def messages_body(web, nodes, chans=None, st=None, groups=None):
     send = _act("send_text")
+    gopts = "".join(f"<option value='group:{e(str(g.get('name')))}'>everyone in {e(str(g.get('name')))} ({int(g.get('count') or 0)} device{'s' if int(g.get('count') or 0) != 1 else ''}, one message each)</option>"
+                    for g in ((groups or {}).get("groups") or []) if g.get("count"))
     live = [c for c in (chans or []) if c.get("role") != "DISABLED"] or [{"index": 0, "name": (st or {}).get("primary_channel") or "primary", "role": "PRIMARY"}]
     heard = [n for n in nodes if n.get("heard_here", True)]
+    multi = len(live) > 1
     ch_opts = "".join(f"<option value='{int(c.get('index', 0))}'>{e(c.get('name') or 'slot ' + str(c.get('index')))}{' (primary)' if c.get('role') == 'PRIMARY' else ''}</option>" for c in live)
     node_opts = "".join(f"<option value='{e(n['id'])}'>{e(dname(n))} ({e(n['id'])}){'' if n.get('heard_here', True) else ' · database only'}</option>" for n in nodes if n.get("id"))
-    form = (f"<form id='send' class='card' data-action='send_text' data-clear='1' data-refresh='messages:msg-rows' data-heard='{len(heard)}' "
+    ch0 = live[0]
+    ch_field = (f"<label>Channel<select name='channel'>{ch_opts}</select></label>" if multi
+                else f"<input type='hidden' name='channel' value='{int(ch0.get('index', 0))}'>")
+    to_label = "To" if multi else f"To, on {e(ch0.get('name') or 'the primary channel')}"
+    quick = quick_load(web.etc_dir)
+    form = (f"<form id='send' class='card' data-action='send_text' data-clear='1' data-refresh='messages:msg-rows' data-heard='{len(heard)}' data-chname='{e(ch0.get('name') or 'the channel')}' "
             "data-confirm-channel='Send to everyone on {channel}, {count} devices heard here: “{text}”' "
-            "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.'>"
+            "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.' "
+            "data-confirm-group='Send to {group}: one direct message to each device, each with its own receipt: “{text}”'>"
             f"<h2 style='margin-top:0'>{e(send['title'])}</h2><p class='meta'>{e(send['description'])}</p>"
-            + ("<div class='row-actions' id='quick'>" + "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick_load(web.etc_dir)) + "</div>" if quick_load(web.etc_dir) else "")
+            + (("<div class='row-actions' id='quick' data-tip='Fills the box, does not send'>" + "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick) + "<span class='meta'>Fills the box, does not send</span></div>") if quick else "")
             + "<label>Message (200 bytes at most)<input type='text' name='text' maxlength='200' required></label>"
-            f"<label>Channel<select name='channel'>{ch_opts}</select></label>"
-            f"<label>To<select name='to'><option value='^all'>everyone on the channel</option>{node_opts}</select></label>"
-            "<button type='submit'>Send</button><div class='res meta' role='status'></div></form>")
+            + ch_field
+            + f"<label>{to_label}<select name='to'><option value='^all'>everyone on the channel</option>{gopts}{node_opts}</select></label>"
+            f"<button type='submit' id='send-btn'>Send to everyone on {e(ch0.get('name') or 'the channel')}</button>"
+            "<div class='meta' id='bcast-note' style='margin-top:var(--s1)'>A message to everyone is not acknowledged. It will stay at handed to the radio.</div><div class='res meta' role='status'></div></form>")
     js = r"""<script>
-(function(){var f=document.getElementById('send');
+(function(){var f=document.getElementById('send'),btn=document.getElementById('send-btn'),note=document.getElementById('bcast-note');
   document.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
+  function chName(){var c=f.elements.channel;return (c&&c.options)?c.options[c.selectedIndex].text:f.dataset.chname;}
+  function label(){var toSel=f.elements.to;var all=toSel.value==='^all',grp=toSel.value.indexOf('group:')===0;var word=toSel.options[toSel.selectedIndex].text.split(' (')[0];btn.textContent=all?('Send to everyone on '+chName()):(grp?('Send to '+word+', one message each'):('Send to '+word+' only'));if(note){note.hidden=!all;}}
+  f.elements.to.addEventListener('change',label);if(f.elements.channel&&f.elements.channel.options){f.elements.channel.addEventListener('change',label);}label();
   f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();
     var chSel=f.elements.channel,toSel=f.elements.to,text=f.elements.text.value;
-    var t=toSel.value==='^all'?f.dataset.confirmChannel.replace('{channel}',chSel.options[chSel.selectedIndex].text).replace('{count}',f.dataset.heard):f.dataset.confirmDirect.replace('{node}',toSel.options[toSel.selectedIndex].text);
-    if(!confirm(t.replace('{text}',text)))return;
+    var opt=toSel.options[toSel.selectedIndex].text;var t=toSel.value==='^all'?f.dataset.confirmChannel.replace('{channel}',chName()).replace('{count}',f.dataset.heard):(toSel.value.indexOf('group:')===0?f.dataset.confirmGroup.replace('{group}',opt):f.dataset.confirmDirect.replace('{node}',opt));
     var res=f.querySelector('.res');
+    window.mmConfirm(t.replace('{text}',text),f,function(){
     fetch('/api/send_text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:text,channel:parseInt(chSel.value,10),to:toSel.value})})
       .then(function(r){return r.json().then(function(j){return [r.status,j];});})
-      .then(function(x){if(x[0]>=400){res.textContent='not sent: '+(x[1].error||x[0]);res.className='res meta bad';}else{res.textContent='handed to the radio at '+window.mmNow();res.className='res meta ok';f.elements.text.value='';window.mmFrag('messages','msg-rows');}})
-      .catch(function(){res.textContent='could not ask the box';res.className='res meta bad';});},true);
-  window.onMesh=function(d){if(d.kind==='text'||d.kind==='ack'){window.mmFrag('messages','msg-rows');}};})();
+      .then(function(x){if(x[0]>=400){res.textContent='not sent: '+(x[1].error||x[0]);res.className='res meta bad';}else{var m=x[1].members;res.textContent=(m?('handed to the radio for '+m.length+' device'+(m.length===1?'':'s')+' at '):'handed to the radio at ')+window.mmNow()+(toSel.value==='^all'?' · a message to everyone is not acknowledged':(m?' · each receipt shows in the table':' · waiting for the receipt'));res.className='res meta ok';f.elements.text.value='';window.mmFrag('messages','msg-rows');}})
+      .catch(function(){res.textContent=window.mmNoAnswer;res.className='res meta bad';});});},true);
+  window.onMesh=function(d){if(d.kind==='text'||d.kind==='ack'){window.mmFrag('messages','msg-rows');}if(d.kind==='ack'){var res=f.querySelector('.res');if(res&&/waiting for the receipt/.test(res.textContent)){res.textContent=res.textContent.replace(' · waiting for the receipt',' · '+(d.ok?'acknowledged ':'not delivered ')+window.mmNow());}}};})();
 </script>"""
     labels = {str(n.get("id")): str(n.get("label") or "") for n in nodes if n.get("label")}
-    return (f"<div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th>To</th><th>Message</th></tr></thead><tbody id='msg-rows'>{message_rows(web, labels)}</tbody></table></div><br>{form}{js}")
+    return (f"{form}{js}<h2>Heard and sent</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>From</th><th>To</th><th>Message</th><th>State</th></tr></thead><tbody id='msg-rows'>{message_rows(web, labels)}</tbody></table></div>")
 
 
 def radio_body(cfg, own_id="?"):
     if not cfg or "long_name" not in cfg:
-        return "<p class='warn'>The radio's configuration is not readable yet.</p>"
+        return "<p class='warn'>The radio's settings are not readable yet. The bridge reads them when the radio connects; if the strip above says the radio is missing, check the USB cable.</p>"
     v = lambda k: e(str(cfg.get(k) if cfg.get(k) is not None else ""))
     rs, rr = _act("radio_set"), _act("radio_set_region")
     settings = (f"<form class='card' data-action='radio_set' data-risk='change' data-confirm=\"{e(rs['confirm'])}\">"
                 f"<h2 style='margin-top:0'>{e(rs['title'])}</h2><p class='meta'>Each is written to the radio and shown here only once the radio has answered with it.</p>"
-                f"<label>Long name<input type='text' name='long_name' value='{v('long_name')}' maxlength='39'></label>"
-                f"<label>Short name (4 bytes)<input type='text' name='short_name' value='{v('short_name')}' maxlength='4'></label>"
-                f"<label>TX power, dBm (0 = the region's maximum)<input type='number' name='tx_power' value='{v('tx_power')}' min='0' max='30'></label>"
-                f"<label>Position broadcast, seconds<input type='number' name='position_broadcast_secs' value='{v('position_broadcast_secs')}' min='32' max='86400'></label>"
-                "<button type='submit'>Write and read back</button><div class='res meta' role='status'></div></form>")
+                f"<label>Long name (39 bytes at most)<input type='text' name='long_name' value='{v('long_name')}' maxlength='39'></label>"
+                f"<label>Short name (4 bytes at most)<input type='text' name='short_name' value='{v('short_name')}' maxlength='4'></label>"
+                f"<label>Transmit power (dBm)<span class='meta'> 0 is the region's maximum</span><input type='number' name='tx_power' value='{v('tx_power')}' min='0' max='30'></label>"
+                f"<label>Position every (seconds)<input type='number' name='position_broadcast_secs' value='{v('position_broadcast_secs')}' min='32' max='86400'></label>"
+                "<button type='submit'>Write to the radio</button><div class='res meta' role='status'></div></form>")
     def sel(name, values, cur):
         return f"<select name='{name}'><option value=''>leave as is ({e(str(cur))})</option>" + "".join(f"<option value='{x}'>{x}</option>" for x in values) + "</select>"
     ins = {i["name"]: i for i in rr["inputs"]}
@@ -2507,8 +3067,8 @@ def radio_body(cfg, own_id="?"):
               f"<label>Modem preset{sel('modem_preset', ins['modem_preset']['values'], cfg.get('modem_preset'))}</label>"
               f"<label>Role{sel('role', ins['role']['values'], cfg.get('role'))}</label>"
               f"<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand: changing the region or preset moves this radio to another band; a fleet on the old setting will not hear it, and the radio reboots. This radio is {e(own_id)}.</span></label>"
-              "<button type='submit' class='danger'>Write and read back</button><div class='res meta' role='status'></div></form>")
-    return f"{read_line(cfg, '/radio')}<div class='cards'>{settings}{region}</div>{WRITE_JS}"
+              "<button type='submit' class='danger'>Write and reboot the radio</button><div class='res meta' role='status'></div></form>")
+    return f"{read_line(cfg, '/radio')}<div class='cards' id='radio-cards'>{settings}{region}</div>{WRITE_JS}"
 
 
 def proposal_form(pr):
@@ -2564,25 +3124,25 @@ def connections_body(web, minted=None, msg=""):
         used = c.get("last_used")
         rows += (f"<tr><td>{e(c['name'])}</td><td>{aut}</td><td class='meta'><time datetime='{e(created)}' data-age>{e(age(created))}</time></td>"
                  f"<td class='meta'>{('<time datetime=' + chr(39) + e(str(used)) + chr(39) + ' data-age>' + e(age(used)) + '</time>') if used else 'never'}</td><td>{ctl}</td></tr>")
-    rows = rows or "<tr><td colspan=5 class='meta'>No connections yet.</td></tr>"
+    rows = rows or "<tr><td colspan=5 class='meta'>No connections yet. Add one below to let an agent read this mesh.</td></tr>"
     shown = ""
     if minted:
         cmd = f"claude mcp add mesh-manager --transport http http://{web.bind[0]}:{web.bind[1]}/mcp --header \"Authorization: Bearer {minted['token']}\""
         shown = (f"<div class='card' style='border-color:var(--gold)'><div class='k'>Token for {e(minted['name'])} ({e(minted['autonomy'])}), shown once</div>"
                  f"<div class='v'><code>{e(minted['token'])}</code></div><div class='row-actions' style='margin:.5rem 0'><button type='button' class='line' data-copy='{e(minted['token'])}'>Copy the token</button>"
                  f"<button type='button' class='line' data-copy='{e(cmd)}'>Copy the claude mcp add command</button></div><p class='meta'>Connect with: <code>{e(cmd)}</code></p></div>")
-    form = ("<form method='post' action='/connections' class='card' id='mint'><h2 style='margin-top:0'>Mint a connection</h2>"
+    form = ("<form method='post' action='/connections' class='card' id='mint'><h2 style='margin-top:0'>Add a connection</h2>"
             "<label>Name<input type='text' name='name' required maxlength='40'></label><input type='hidden' name='confirm' value=''>"
             "<label>Autonomy<select name='autonomy'><option value='observe'>observe: reads only</option><option value='propose' selected>propose: reads, on-air requests, and proposals for the rest</option><option value='act'>act: everything the screen can do</option></select></label>"
-            "<button type='submit'>Mint</button></form>")
+            "<button type='submit'>Add</button></form>")
     js = r"""<script>
 (function(){
+  function gate(f,text,then){if(f.dataset.ok==='1'){f.dataset.ok='';return true;}window.mmConfirm(text,f,function(){if(then)then();f.dataset.ok='1';f.requestSubmit?f.requestSubmit():f.submit();});return false;}
   document.querySelectorAll('form[data-name]').forEach(function(f){f.addEventListener('submit',function(ev){var a=f.elements.autonomy.value;
-    if(!confirm('Change '+f.dataset.name+' to '+a+'? '+(a==='act'?'At act it does everything this screen can do, without asking each time.':a==='propose'?'At propose it reads, asks on air, and queues the rest for you.':'At observe it only reads.'))){ev.preventDefault();return;}
-    f.elements.confirm.value=f.dataset.name;});});
-  document.querySelectorAll('form[data-revoke]').forEach(function(f){f.addEventListener('submit',function(ev){if(!confirm('Revoke '+f.dataset.revoke+'? Its token stops working now.')){ev.preventDefault();}});});
+    if(!gate(f,'Change '+f.dataset.name+' to '+a+'? '+(a==='act'?'At act it does everything this screen can do, without asking each time.':a==='propose'?'At propose it reads, asks on air, and queues the rest for you.':'At observe it only reads.'),function(){f.elements.confirm.value=f.dataset.name;})){ev.preventDefault();}});});
+  document.querySelectorAll('form[data-revoke]').forEach(function(f){f.addEventListener('submit',function(ev){if(!gate(f,'Revoke '+f.dataset.revoke+'? Its token stops working now.')){ev.preventDefault();}});});
   var m=document.getElementById('mint');m.addEventListener('submit',function(ev){if(m.elements.autonomy.value==='act'){var n=m.elements.name.value;
-    if(!confirm('Mint '+n+' at act? It will do everything this screen can do, without asking each time.')){ev.preventDefault();return;}m.elements.confirm.value=n;}});
+    if(!gate(m,'Add '+n+' at act? It will do everything this screen can do, without asking each time.',function(){m.elements.confirm.value=n;})){ev.preventDefault();}}});
 })();
 </script>"""
     return (f"{('<p class=bad>' + e(msg) + '</p>') if msg else ''}{shown}<div class='tablewrap'><table><thead><tr><th>Name</th><th>Autonomy</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{rows}</tbody></table></div><br>{form}"
@@ -2590,17 +3150,35 @@ def connections_body(web, minted=None, msg=""):
             f"{js}{WRITE_JS}")
 
 
-def settings_body(web, saved=False):
+def settings_body(web, saved=""):
     try:
         ctx = open(os.path.join(web.etc_dir, "context.md")).read()
     except OSError:
         ctx = ""
-    return (f"{'<p class=ok>Saved.</p>' if saved else ''}<form method='post' action='/settings'><h2 style='margin-top:0'>Standing brief for connected agents</h2>"
+    saved = str(saved or "")
+    brief_ok = f"<p class='ok'>Saved the brief at {e(hhmm())}.</p>" if saved == "brief" else ""
+    return (f"<form method='post' action='/settings' class='card' style='max-width:none'><h2 style='margin-top:0'>Standing brief for connected agents</h2>"
             "<p class='meta'>What this mesh is for, who runs it, the region and channel policy, standing orders. Served verbatim to every connected agent as <code>mesh_context</code>; nothing in the product knows your fleet, this is where it learns it.</p>"
-            f"<textarea name='context' rows='16' style='font:14px var(--mono)'>{e(ctx)}</textarea>"
-            "<div style='margin-top:.6rem'><button type='submit'>Save</button></div></form>"
-            + quick_settings(web, saved)
-            + update_settings(web))
+            f"<textarea name='context' rows='12' style='font:14px var(--mono)'>{e(ctx)}</textarea>"
+            f"<div style='margin-top:.6rem'><button type='submit'>Save the brief</button>{brief_ok}</div></form>"
+            + position_settings(web)
+            + quick_settings(web, saved == "quick")
+            + update_settings(web, saved == "update"))
+
+
+def position_settings(web):
+    """Where this box is, set on the screen: the map's centre when there is no receiver (5 Sep 2026 reviews:
+    a box with no position lost the map, and the only remedy was a flag on an installer already run)."""
+    a = _act("box_position_set")
+    return (f"<form data-action='box_position_set' class='card' id='position' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='margin-top:1rem'><h2 style='margin-top:0'>Where this box is</h2>"
+            f"<p class='meta'>{e(a.get('description') or '')}</p>"
+            "<div class='regform' style='grid-template-columns:1fr 1fr'><label>Latitude<input type='text' name='lat' inputmode='decimal' placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' inputmode='decimal' placeholder='-0.1200'></label></div>"
+            "<div class='row-actions' style='margin:var(--s2) 0'><button type='button' class='line' id='pos-from-radio' data-tip='Take it from the radio&#39;s fix' data-tip-more='Fills the fields from where the box believes it is now'>Take it from the radio's fix</button><span class='meta' id='pos-note'></span></div>"
+            "<label class='check'><input type='checkbox' name='clear' value='on'><span>Clear the declared position instead, and let the receivers and the devices place the box.</span></label>"
+            "<button type='submit'>Save where this box is</button><div class='res meta' role='status'></div></form>"
+            "<script>(function(){var b=document.getElementById('pos-from-radio');if(!b)return;b.addEventListener('click',function(){var n=document.getElementById('pos-note');n.textContent='asking the box';"
+            "fetch('/api/links').then(function(r){return r.json();}).then(function(j){var o=j.own||{};if(o.lat===null||o.lat===undefined){n.textContent='the box has no position to take: no receiver fix, no declaration, nothing heard with a fix';return;}"
+            "var f=document.getElementById('position');f.elements.lat.value=Number(o.lat).toFixed(5);f.elements.lon.value=Number(o.lon).toFixed(5);n.textContent='from '+(o.position_source||'the box')+'; press Save to keep it';}).catch(function(){n.textContent=window.mmNoAnswer;});});})();</script>")
 
 
 def quick_settings(web, saved=False):
@@ -2611,10 +3189,10 @@ def quick_settings(web, saved=False):
             "<p class='meta'>Up to eight, one per line, each 200 bytes at most. The Messages page offers them as buttons; a press fills the field and nothing is sent without the usual confirm.</p>"
             f"{'<p class=bad>' + e(err) + '</p>' if err else ''}"
             f"<textarea name='quick' rows='6' style='font:14px var(--mono)'>{e(chr(10).join(msgs))}</textarea>"
-            "<div style='margin-top:.6rem'><button type='submit'>Save</button></div></form>")
+            f"<div style='margin-top:.6rem'><button type='submit'>Save the quick messages</button>{('<p class=ok>Saved the quick messages at ' + e(hhmm()) + '.</p>') if saved else ''}</div></form>")
 
 
-def update_settings(web):
+def update_settings(web, saved=False):
     tok = bool(web.github_token())
     mode = web.update_mode()
     return (f"<form method='post' action='/settings/update' class='card' style='margin-top:1rem'><h2 style='margin-top:0'>Updates from GitHub</h2>"
@@ -2622,7 +3200,7 @@ def update_settings(web):
             f"{'A token is on the box.' if tok else 'No token yet: updates cannot be checked until one is entered.'}</p>"
             "<label>GitHub token (write only)<input type='password' name='token' autocomplete='off' placeholder='github_pat_…'></label>"
             "<label>Mode<select name='mode'>" + "".join(f"<option value='{m}'{' selected' if m == mode else ''}>{m}: {d}</option>" for m, d in (("manual", "check daily, install on your press"), ("auto", "check daily and install on its own"), ("off", "never talk to GitHub"))) + "</select></label>"
-            "<button type='submit'>Save</button></form>")
+            f"<button type='submit'>Save the update settings</button>{('<p class=ok>Saved the update settings at ' + e(hhmm()) + '.</p>') if saved else ''}</form>")
 
 
 def login_body(err=""):
@@ -2688,6 +3266,22 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             except BridgeDown:
                 return {}
 
+        def _members(self, group):
+            """Spec 044: the ids in a group, from the nodes the bridge knows; None when no group is asked for."""
+            group = (group or "").strip()
+            if not group:
+                return None
+            return {n.get("id") for n in (self._ask("nodes").get("nodes") or []) if str(n.get("group") or "") == group}
+
+        def _static(self, path):
+            rel = os.path.normpath(urllib.parse.unquote(path[len("/static/"):]))
+            fp = os.path.normpath(os.path.join(STATIC_DIR, rel))
+            if rel.startswith("..") or os.path.isabs(rel) or not fp.startswith(STATIC_DIR + os.sep) or not os.path.isfile(fp):
+                return self._send(404, "no such file", "text/plain")
+            ctype = {".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml"}.get(os.path.splitext(fp)[1], "text/plain")
+            with open(fp, "rb") as fh:
+                return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""), {"Cache-Control": "public, max-age=86400"})
+
         def _links(self):
             L = self._ask("links")
             if "nodes" not in L:          # an older bridge: the plain node list, no links, no routes
@@ -2696,7 +3290,8 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
 
         # -- routes
         def _page(self, title, body, active="", own="", st=None, head=""):
-            return page(title, body, active, own=own, st=st if st is not None else self._ask("status"), pending=len(K.proposals(web.etc_dir)), head=head, update=web.update_available())
+            open_note = "" if (web.auth_on or web.bind[0] in ("127.0.0.1", "localhost", "::1")) else f"open on {web.bind[0]}:{web.bind[1]}, no sign-in"
+            return page(title, body, active, own=own, st=st if st is not None else self._ask("status"), pending=len(K.proposals(web.etc_dir)), head=head, update=web.update_available(), notice=open_note)
 
         def do_GET(self):
             path = self.path.split("?")[0]
@@ -2706,6 +3301,12 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 if not web.auth_on:
                     return self._redirect("/")
                 return self._send(200, page("Sign in", login_body()))
+            if path == "/manifest.webmanifest":
+                # Spec 046: what makes the screen installable; nothing in it is secret, so it answers before sign-in,
+                # as the icons do, because the phone fetches both while it installs
+                return self._send(200, json.dumps(APP_MANIFEST), "application/manifest+json", {"Cache-Control": "public, max-age=3600"})
+            if path.startswith("/static/icons/"):
+                return self._static(path)
             api = path.startswith("/api/") or path == "/events" or path.startswith("/fragment/")
             if not self._signed_in():
                 return self._json(401, {"error": "sign in first"}) if api else self._redirect("/login")
@@ -2733,13 +3334,16 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     return self._send(404, "no such tile", "text/plain")
                 return self._send(200, data, ctype, {"Cache-Control": "public, max-age=86400"})
             if path.startswith("/static/"):
-                rel = os.path.normpath(urllib.parse.unquote(path[len("/static/"):]))
-                fp = os.path.normpath(os.path.join(STATIC_DIR, rel))
-                if rel.startswith("..") or os.path.isabs(rel) or not fp.startswith(STATIC_DIR + os.sep) or not os.path.isfile(fp):
-                    return self._send(404, "no such file", "text/plain")
-                ctype = {".js": "text/javascript", ".css": "text/css", ".png": "image/png"}.get(os.path.splitext(fp)[1], "text/plain")
-                with open(fp, "rb") as fh:
-                    return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""), {"Cache-Control": "public, max-age=86400"})
+                return self._static(path)
+            if path == "/export/inventory.csv":
+                import csv as _csv, io as _io
+                cols = ["id", "name", "hw", "firmware", "fingerprint", "key_since", "key_changed", "key_ack", "managed", "behind", "behind_reason", "confirmed", "heard"]
+                out = _io.StringIO(); w = _csv.writer(out, lineterminator="\n"); w.writerow(cols)
+                for r in (self._ask("inventory").get("rows") or []):
+                    w.writerow(["" if r.get(c) is None else r.get(c) for c in cols])
+                data = out.getvalue().encode("utf-8")
+                self.send_response(200); self.send_header("Content-Type", "text/csv; charset=utf-8"); self.send_header("Content-Disposition", f"attachment; filename=\"mesh-inventory-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.csv\"")
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
             if path.startswith("/export/"):
                 m = re.fullmatch(r"/export/([a-z]+)\.([a-z]+)", path)
                 if not m or m.group(1) not in EXPORT_KINDS or m.group(2) not in EXPORT_KINDS[m.group(1)]:
@@ -2753,6 +3357,9 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 node = (q.get("node", [""])[0] or "").strip() or None
                 since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
                 rows = self._ask("history", kind=kind, node=node, since=since, limit=5000).get("rows") or []
+                members = self._members(q.get("group", [""])[0])
+                if members is not None:
+                    rows = [r for r in rows if r.get("node") in members]
                 names = {n.get("id"): (n.get("label") or n.get("name") or n.get("id")) for n in (self._links().get("nodes") or [])}
                 data = export_gpx(rows, names) if fmt == "gpx" else (export_kml(rows, names) if fmt == "kml" else export_csv(rows))
                 ctype = {"gpx": "application/gpx+xml", "kml": "application/vnd.google-earth.kml+xml", "csv": "text/csv; charset=utf-8"}[fmt]
@@ -2781,7 +3388,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 except ValueError:
                     hours = 24
                 hours = hours if hours in (1, 6, 24, 168) else 24
-                return self._send(200, self._page("Graph", graph_body(self._ask("neighbors", hours=hours), hours), "/graph"))
+                return self._send(200, self._page("Neighbours", graph_body(self._ask("neighbors", hours=hours), hours), "/graph"))
             if path == "/api/trails":
                 # Spec 040: the positions in the window, the rows playback and the trails consume
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
@@ -2791,15 +3398,28 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     hours = 3.0
                 since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
                 rows = self._ask("history", kind="positions", since=since, limit=5000).get("rows") or []
+                members = self._members(q.get("group", [""])[0])
+                if members is not None:
+                    rows = [r for r in rows if r.get("node") in members]
                 return self._json(200, {"hours": hours, "since": since, "rows": [{"ts": r.get("ts"), "node": r.get("node"), "lat": r.get("lat"), "lon": r.get("lon"), "snr": r.get("snr")} for r in rows]})
             if path == "/api/waypoints":
                 return self._json(200, self._ask("waypoints"))
+            if path == "/api/fences":
+                return self._json(200, self._ask("fences"))
             if path == "/api/neighbors":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
-                return self._json(200, self._ask("neighbors", hours=(q.get("hours", ["24"])[0])))
+                nb = self._ask("neighbors", hours=(q.get("hours", ["24"])[0]))
+                members = self._members(q.get("group", [""])[0])
+                if members is not None and isinstance(nb, dict):
+                    nb = dict(nb, edges=[x for x in (nb.get("edges") or []) if x.get("from") in members and x.get("to") in members])
+                return self._json(200, nb)
             if path == "/nodes":
                 L = self._links()
-                return self._send(200, self._page("Nodes", nodes_body(L.get("nodes") or [], routes=L.get("routes")) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                want_group = (q.get("group", [""])[0] or "").strip()
+                nodes_ = [n for n in (L.get("nodes") or []) if not want_group or str(n.get("group") or "") == want_group]
+                groups_ = sorted({str(g.get("name")) for g in (self._ask("groups").get("groups") or []) if g.get("name")} | {str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
+                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
             if path == "/log":
                 return self._send(200, self._page("Log", log_body(self._ask("log", n=300).get("lines", [])), "/log"))
             if path == "/channels":
@@ -2814,7 +3434,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 return self._send(200, self._page("Help", help_body(st, self._ask("config"), self._ask("register"), self._ask("firmware_shelf"), str(web.config.get("REGION") or "")), "/help", st=st))
             if path == "/messages":
                 st = self._ask("status")
-                return self._send(200, self._page("Messages", messages_body(web, self._ask("nodes").get("nodes", []), self._ask("channels").get("channels", []), st), "/messages", st=st))
+                return self._send(200, self._page("Messages", messages_body(web, self._ask("nodes").get("nodes", []), self._ask("channels").get("channels", []), st, groups=self._ask("groups")), "/messages", st=st))
             if path == "/radio":
                 st = self._ask("status")
                 own = (st.get("own") or {}).get("id") or "?"
@@ -2823,7 +3443,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 nid = (q.get("id", [""])[0] or "").strip()
                 if not re.fullmatch(r"![0-9a-f]{8}", nid):
-                    return self._send(404, self._page("Not found", "<p class='meta'>No such node.</p>"))
+                    return self._send(404, self._page("Not found", "<p class='meta'>No such node. It may have been forgotten, or the id is wrong. The <a href='/nodes'>Nodes</a> page lists what this radio hears.</p>"))
                 try:
                     hours = int(q.get("hours", ["24"])[0])
                 except ValueError:
@@ -2831,7 +3451,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 hours = hours if hours in (24, 168) else 24
                 node = next((n for n in (self._links().get("nodes") or []) if n.get("id") == nid), None)
                 if not node:
-                    return self._send(404, self._page("Not found", "<p class='meta'>No such node.</p>"))
+                    return self._send(404, self._page("Not found", "<p class='meta'>No such node. It may have been forgotten, or the id is wrong. The <a href='/nodes'>Nodes</a> page lists what this radio hears.</p>"))
                 since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
                 tel = self._ask("history", kind="telemetry", node=nid, since=since, limit=2000).get("rows") or []
                 msgs = self._ask("history", kind="messages", node=nid, since=since, limit=200).get("rows") or []
@@ -2840,7 +3460,12 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 av = next((r for r in (self._ask("availability", hours=hours).get("nodes") or []) if r.get("id") == nid), None)
                 return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av), "/nodes"))
             if path == "/health":
-                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), self._ask("alerts")), "/health"))
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                al = self._ask("alerts")
+                members = self._members(q.get("group", [""])[0])
+                if members is not None and isinstance(al, dict):
+                    al = dict(al, open=[o for o in (al.get("open") or []) if o.get("node") in members], recent=[r for r in (al.get("recent") or []) if r.get("node") in members])
+                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), al), "/health"))
             if path == "/fragment/health":
                 return self._send(200, health_cards(self._ask("health", hours=24)), "text/html; charset=utf-8")
             if path == "/fragment/drift":
@@ -2851,7 +3476,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 return self._send(200, alerts_section(self._ask("alerts")), "text/html; charset=utf-8")
             if path == "/register":
                 av = {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}
-                return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift"), availability=av), "/register"))
+                return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift"), availability=av, inv=self._ask("inventory"), groups=self._ask("groups")), "/register"))
             if path == "/bench":
                 return self._send(200, self._page("Bench", bench_body(self._ask("bench_devices"), self._ask("firmware_shelf")), "/bench"))
             if path == "/activity":
@@ -2859,7 +3484,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/connections":
                 return self._send(200, self._page("Connections", connections_body(web), "/connections"))
             if path == "/settings":
-                return self._send(200, self._page("Settings", settings_body(web), "/settings"))
+                return self._send(200, self._page("Settings", settings_body(web) + WRITE_JS, "/settings"))
             if path.startswith("/fragment/"):
                 name = path[len("/fragment/"):]
                 if name == "state":
@@ -2872,8 +3497,10 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     return self._send(200, channel_rows(self._ask("channels")))
                 if name == "map":
                     return self._send(200, map_svg(self._links()))
+                if name == "groups":
+                    return self._send(200, groups_section(self._ask("groups")), "text/html; charset=utf-8")
                 if name == "register":
-                    return self._send(200, register_rows(self._ask("register"), {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}))
+                    return self._send(200, register_rows(self._ask("register"), {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}, self._ask("inventory")))
                 if name == "bench":
                     return self._send(200, bench_cards(self._ask("bench_devices"), self._ask("firmware_shelf")))
                 if name.startswith("route/"):
@@ -2881,9 +3508,15 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     return self._send(200, route_bar(self._ask("route", id=nid).get("route")))
                 return self._send(404, "", "text/plain")
             if path == "/channels/qr.png":
-                url = self._ask("channels").get("url")
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+                idx = (q.get("index", [""])[0] or "").strip()
+                if idx and idx != "0":
+                    # one channel alone, for a device joining a secondary channel; the bridge builds it, the key never crosses the API
+                    url = self._ask("channel_url", index=int(idx)).get("url") if idx.isdigit() and int(idx) < 8 else None
+                else:
+                    url = self._ask("channels").get("url")
                 if not url:
-                    return self._send(404, "no primary channel url", "text/plain")
+                    return self._send(404, "no channel url", "text/plain")
                 try:
                     return self._send(200, qr_png(url), "image/png")
                 except Exception as ex:  # noqa: BLE001
@@ -2966,7 +3599,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                         web.set_github_token(tok)
                         K.audit(web.etc_dir, who="operator", event="github-token-set")
                     web.set_update_mode(str(body.get("mode") or "manual"))
-                    return self._redirect("/settings")
+                    return self._send(200, self._page("Settings", settings_body(web, saved="update"), "/settings"))
                 if path.startswith("/api/proposal/"):
                     pid = str(body.get("id", ""))
                     pr = K.proposal_take(web.etc_dir, pid)
@@ -3013,13 +3646,13 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     web._quick_err = err or ""
                     if not err:
                         K.audit(web.etc_dir, who="operator", event="quick-saved", count=len(out))
-                    return self._send(400 if err else 200, self._page("Settings", settings_body(web, saved=not err), "/settings"))
+                    return self._send(400 if err else 200, self._page("Settings", settings_body(web, saved="" if err else "quick"), "/settings"))
                 if path == "/settings":
                     ctx = str(body.get("context", ""))[:20000]
                     with open(os.path.join(web.etc_dir, "context.md"), "w") as fh:
                         fh.write(ctx)
                     K.audit(web.etc_dir, who="operator", event="context-saved", bytes=len(ctx.encode()))
-                    return self._send(200, self._page("Settings", settings_body(web, saved=True), "/settings"))
+                    return self._send(200, self._page("Settings", settings_body(web, saved="brief"), "/settings"))
                 return self._json(404, {"error": "no such route"})
             if not web.auth_on:
                 return self._redirect("/")

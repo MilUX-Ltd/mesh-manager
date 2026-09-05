@@ -42,9 +42,10 @@ def get(path):
 
 nodes = get("/nodes")
 row = nodes[nodes.index("data-id='!aa000001'"):nodes.index("data-id='!bb000002'")]
-check_true("AC2 the label in the name position, the radio's own name in the second line", "class='plain' title='This node over time'>Recce lead</a></b>" in row and "Tracker9" in row)
+# 5 Sep 2026 UX reviews: the node link carries the product's own tip, not a native title
+check_true("AC2 the label in the name position, the radio's own name in the second line", "data-tip='This node over time' data-tip-more='Battery, voltage, hours heard and messages'>Recce lead</a></b>" in row and "Tracker9" in row)
 row2 = nodes[nodes.index("data-id='!bb000002'"):nodes.index("data-id='!cc000003'")]
-check_true("AC2 a node without a label shows the radio's own name", "class='plain' title='This node over time'>Tracker2</a></b>" in row2)
+check_true("AC2 a node without a label shows the radio's own name", "data-tip-more='Battery, voltage, hours heard and messages'>Tracker2</a></b>" in row2)
 frag = get("/fragment/map")
 check_true("AC2 the plan view uses the label", ">Recce lead<" in frag)
 home = get("/")
