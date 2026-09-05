@@ -27,6 +27,9 @@
 set -euo pipefail
 
 ROOT="${MESH_MANAGER_ROOT:-}"
+# the interpreter for the venv: the release's compiled wheels are for Python 3.12 (Ubuntu 24.04's python3); on an
+# older Ubuntu install python3.12 and python3.12-venv (deadsnakes on 22.04). MESH_MANAGER_PYTHON names one outright.
+PY="${MESH_MANAGER_PYTHON:-$(command -v python3.12 || command -v python3 || echo python3)}"
 DRY=0; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""; PEER_BIND_ARG=""; PEER_PORT_ARG=""; SITE_NAME_ARG=""; SITE_ADDRESS_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -90,8 +93,13 @@ if (( ! DRY )); then
     [[ -f "$TARBALL.sha256" ]] || die "no $TARBALL.sha256 beside the tarball - the cut writes one; carry both"
     want=$(awk '{print $1}' "$TARBALL.sha256"); got=$(sha256sum "$TARBALL" | awk '{print $1}')
     [[ "$want" == "$got" ]] || die "tarball hash mismatch: got $got want $want"
-    command -v python3 >/dev/null || die "python3 is missing"
-    python3 -m venv --help >/dev/null 2>&1 || die "python3-venv is missing (apt-get install python3-venv)"
+    # the release's compiled wheels are for Python 3.12 (Ubuntu 24.04's python3). On an older Ubuntu, install
+    # python3.12 and python3.12-venv (the deadsnakes PPA on 22.04) and the installer finds it; MESH_MANAGER_PYTHON
+    # names an interpreter outright.
+    command -v "$PY" >/dev/null || die "python3 is missing"
+    PYV=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")
+    [[ "$PYV" == "3.12" ]] || die "Mesh Manager's release is built for Python 3.12 and $PY is $PYV: install python3.12 and python3.12-venv (Ubuntu 22.04: the deadsnakes PPA), or set MESH_MANAGER_PYTHON"
+    "$PY" -m venv --help >/dev/null 2>&1 || die "the venv module is missing for $PY (apt-get install python3.12-venv)"
 else
     echo "would: verify $TARBALL against $TARBALL.sha256"
 fi
@@ -214,7 +222,7 @@ fi
 # ---- 2. the venv, from the bundled wheels and nothing else ---------------------------------
 act "build $L_OPT/venv from the bundled wheels (--no-index; the box downloads nothing)"
 if (( ! DRY )); then
-    rm -rf "$OPT/venv"; python3 -m venv "$OPT/venv"
+    rm -rf "$OPT/venv"; "$PY" -m venv "$OPT/venv"
     "$OPT/venv/bin/pip" install --quiet --no-index --find-links "$OPT/release/wheels" TAK-Meshtastic-Gateway mesh-manager \
         || die "venv build failed - the release must carry every wheel for this architecture (re-cut)"
     [[ -x "$OPT/venv/bin/tak-meshtastic-gateway" && -x "$OPT/venv/bin/mesh-manager-bridge" && -x "$OPT/venv/bin/mesh-manager-web" ]] \
@@ -342,7 +350,7 @@ if [[ "$AUTH" == "off" ]]; then
     act "sign-in off (AUTH=off): anyone who can reach $BIND:$PORT is the operator; turn it on with --password"
 elif [[ -n "$PASSWORD" || ! -f "$ETC/passwd" ]]; then
     if [[ -z "$PASSWORD" ]]; then
-        PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')
+        PASSWORD=$("$PY" -c 'import secrets; print(secrets.token_urlsafe(12))')
         GENERATED=1
     else
         GENERATED=0

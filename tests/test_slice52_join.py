@@ -100,4 +100,5 @@ else:
     check_true("AC8 the peer bind, site name and address are written", r.returncode == 0 and "PEER_BIND=127.0.0.1" in r.stdout and "SITE_NAME=Dev hub" in r.stdout and "SITE_ADDRESS=dev.example" in r.stdout, (r.returncode, r.stdout[-400:]))
     r = dry("--mode", "server")
     check_true("AC8 a server without a radio is still refused", r.returncode != 0 and "--serial" in r.stderr, r.stderr[-200:])
+    check_true("AC8 the installer names Python 3.12 and the MESH_MANAGER_PYTHON override (Ubuntu 22.04 boxes)", "python3.12" in inst and "MESH_MANAGER_PYTHON" in inst and 'PYV" == "3.12"' in inst)
 finish()

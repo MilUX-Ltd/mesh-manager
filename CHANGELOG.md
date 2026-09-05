@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.11.1 (5 September 2026) Found installing the first hub on an Ubuntu 22.04 machine: the release's compiled wheels are for
+Python 3.12 and the installer took whatever `python3` was.
+
+- **The installer picks Python 3.12.** It uses `python3.12` when present, else `python3` if that is 3.12,
+  else stops in words naming `python3.12` and `python3.12-venv` (the deadsnakes PPA on 22.04);
+  `MESH_MANAGER_PYTHON` names an interpreter outright. The venv and the one-time password use that
+  interpreter. No product code changes.
+
 ## 0.11.0 (5 September 2026) Matt: "I want box-to-box in Mesh Manager itself. Build on both
 tak.milux.co.uk and dev.milux.co.uk at the same time so we have a live and dev broker."
 
