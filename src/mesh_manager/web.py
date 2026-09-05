@@ -1890,10 +1890,13 @@ def restore_flash_forms(path, shelf):
                "<button type='submit'>Restore and read back</button><div class='res meta' role='status'></div></form></details>")
     flash = (f"<details class='fold ctl'><summary>Flash</summary><form data-action='bench_flash' data-risk='unreachable' data-flash='1' data-confirm=\"{e(fl.get('confirm') or '')}\">"
              f"<input type='hidden' name='path' value='{e(path)}'>"
-             f"<label>Pinned image<select name='image' data-pins>{opts or '<option value=\'\'>no verified image on the shelf</option>'}</select></label>"
+             f"<label>Pinned image<select name='image' data-pins>{opts or NO_IMAGE_OPT}</select></label>"
              "<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand: the configuration is exported first, then the device is flashed and reboots; a factory image loses every setting; a flash that does not come back needs the recovery step. This device is the one named on Read.</span></label>"
              "<button type='submit' class='danger'>Export, flash and read the version back</button><div class='res meta' role='status'></div><div class='stages meta'></div></form></details>")
     return restore + flash
+
+
+NO_IMAGE_OPT = "<option value=''>no verified image on the shelf</option>"
 
 
 def bench_body(d, shelf=None):
@@ -2055,7 +2058,9 @@ def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
         bits = [f"{last['temperature']:.1f} °C" if last.get("temperature") is not None else None,
                 f"{last['humidity']:.0f}% RH" if last.get("humidity") is not None else None,
                 f"{last['pressure']:.0f} hPa" if last.get("pressure") is not None else None]
-        envblock = (f"<h2>Environment</h2><div class='cards'>{card('Latest reading', e(' · '.join(b for b in bits if b)) + f"<div class='sub'><time datetime='{e(str(last.get('ts') or ''))}' data-age>{e(age(str(last.get('ts') or '')))}</time></div>")}</div>"
+        last_ts = str(last.get("ts") or "")
+        when_html = f"<div class='sub'><time datetime='{e(last_ts)}' data-age>{e(age(last_ts))}</time></div>"
+        envblock = (f"<h2>Environment</h2><div class='cards'>{card('Latest reading', e(' · '.join(b for b in bits if b)) + when_html)}</div>"
                     f"<h3>Temperature</h3>{series_chart(env, 'temperature', ' °C', None, None, (), 'temperature')}")
     avblock = ""
     if availability and availability.get("series"):
@@ -2288,6 +2293,10 @@ def quick_save(etc_dir, msgs):
 
 
 # ---- Spec 039: the packet inspector ---------------------------------------------------------------
+def _snr_txt(v):
+    return "" if v is None else f"{float(v):.1f} dB"
+
+
 def packets_body(rows, hours, node, port, labels):
     counts = {}
     for r in rows:
@@ -2299,7 +2308,7 @@ def packets_body(rows, hours, node, port, labels):
         f"<tr><td class='meta'><time datetime='{e(str(r.get('ts') or ''))}' data-age>{e(age(str(r.get('ts') or '')))}</time></td>"
         f"<td>{e(labels.get(str(r.get('node') or ''), str(r.get('node') or '?')))}<div class='sub'>{e(str(r.get('node') or ''))}</div></td>"
         f"<td><code>{e(str(r.get('port') or '?'))}</code></td>"
-        f"<td style='font-variant-numeric:tabular-nums'>{'' if r.get('snr') is None else f'{float(r['snr']):.1f} dB'}</td>"
+        f"<td style='font-variant-numeric:tabular-nums'>{_snr_txt(r.get('snr'))}</td>"
         f"<td>{'' if r.get('hops') is None else r.get('hops')}</td><td>{'' if r.get('size') is None else str(r.get('size')) + ' B'}</td></tr>"
         for r in shown[:500])
     hsel = "".join(f"<option value='{h}'{' selected' if h == hours else ''}>{t}</option>" for h, t in ((1, "1 h"), (6, "6 h"), (24, "24 h"), (48, "48 h"), (168, "7 d")))

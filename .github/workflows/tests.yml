@@ -19,11 +19,16 @@ permissions:
 jobs:
   suites:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]   # the README promises 3.11 or later; the reference kit runs 3.12
+    name: suites (python ${{ matrix.python }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - name: Install what the suites import
         run: |
           python -m pip install --upgrade pip
