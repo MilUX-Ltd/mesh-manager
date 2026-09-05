@@ -99,3 +99,9 @@ check("the gateway patch keeps upstream's CRLF endings (edit it in binary, never
       (True, True))
 
 finish()
+
+# 5 Sep 2026, the first hub on an Ubuntu 22.04 machine: the installer wrote a polkit rule into rules.d, which
+# only 24.04's polkit has, and died half way. Every rule write creates its directory first.
+_txt = read("install/install.sh") or ""
+check("polkit rule directories are created before they are written", _txt.count('mkdir -p "$ROOT/etc/polkit-1/rules.d"'), 2)
+check_true("the 22.04 polkit gets the grant in its own form", "50-local.d/51-mesh-manager-update.pkla" in _txt)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.11.2 (5 September 2026) Found installing the first hub on dev.milux.co.uk (Ubuntu 22.04).
+
+- **The installer on Ubuntu 22.04.** It wrote its polkit rules into `rules.d`, which only 24.04's polkit
+  has, and stopped half way with the config unwritten. Every rule write now creates its directory first, and
+  22.04's polkit gets the update-service grant in its own `.pkla` form. The closing words name the peer
+  listener when there is one instead of saying the bridge binds no port. No product code changes.
+
 ## 0.11.1 (5 September 2026) Found installing the first hub on an Ubuntu 22.04 machine: the release's compiled wheels are for
 Python 3.12 and the installer took whatever `python3` was.
 

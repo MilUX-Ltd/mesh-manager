@@ -23,7 +23,7 @@ Where a package's own licence text travels inside its wheel, a copy is in `LICEN
 | idna | 3.18 | BSD-3-Clause | `LICENSES/idna-LICENSE.md` |
 | intelhex | 2.3.0 | BSD | `LICENSES/intelhex-LICENSE.txt` |
 | lxml | 5.2.2 | BSD-3-Clause | `LICENSES/lxml-LICENSE.txt`, `LICENSES/lxml-LICENSES.txt` |
-| mesh-manager | 0.11.1 | GPL-3.0-or-later | `LICENSES/mesh-manager-LICENSE`, `LICENSES/mesh-manager-NOTICE` |
+| mesh-manager | 0.11.2 | GPL-3.0-or-later | `LICENSES/mesh-manager-LICENSE`, `LICENSES/mesh-manager-NOTICE` |
 | meshtastic | 2.7.11 | GPL-3.0-only | `LICENSES/meshtastic-LICENSE.md` |
 | netifaces2 | 0.0.22 | MIT License | `LICENSES/netifaces2-LICENSE` |
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | `LICENSES/packaging-LICENSE`, `LICENSES/packaging-LICENSE.APACHE`, `LICENSES/packaging-LICENSE.BSD` |

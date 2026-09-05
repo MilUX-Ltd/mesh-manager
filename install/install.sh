@@ -206,7 +206,7 @@ old_unit_pending=0
 [[ -f "$UNITDIR/$OLDUNIT.service" && ! -f "$ADOPTED" ]] && old_unit_pending=1
 if (( same_conf )) && (( ! new_release )) && (( have_web )) && [[ -z "$PASSWORD" ]] && [[ -f "$UNITDIR/$UNIT.service" && -x "$OPT/venv/bin/tak-meshtastic-gateway" ]] && (( ! old_unit_pending )); then
     log "nothing to change: this box already carries Mesh Manager with this config"
-    log "the bridge binds no port of its own; the screen binds $BIND:$PORT$([[ "$AUTH" == "off" ]] && echo ' with sign-in off') and nothing here opened one. Closed."
+    log "${PEER_BIND:+the bridge listens for peers on $PEER_BIND:$PEER_PORT (TLS, paired sites only), which you open yourself; }${PEER_BIND:-the bridge binds no port of its own}; the screen binds $BIND:$PORT$([[ "$AUTH" == "off" ]] && echo ' with sign-in off') and nothing here opened one. Closed."
     exit 0
 fi
 
@@ -307,6 +307,18 @@ ExecStart=$L_OPT/update.sh
 UNITEOF
 fi
 act "install the polkit rule that lets $SVCUSER start mesh-manager-update.service, and nothing else"
+if [[ -d "$ROOT/etc/polkit-1/localauthority" ]]; then   # polkit 0.105 (Ubuntu 22.04): the same grant in its own form
+    do_ mkdir -p "$ROOT/etc/polkit-1/localauthority/50-local.d"
+    do_ bash -c "cat > '$ROOT/etc/polkit-1/localauthority/50-local.d/51-mesh-manager-update.pkla' <<'PKLA'
+[Mesh Manager may start its update service]
+Identity=unix-user:$SVCUSER
+Action=org.freedesktop.systemd1.manage-units
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+PKLA"
+fi
+do_ mkdir -p "$ROOT/etc/polkit-1/rules.d"   # Ubuntu 22.04 has no rules.d (polkit 0.105); create it, and write the .pkla form below
 do_ bash -c "cat > '$ROOT/etc/polkit-1/rules.d/51-mesh-manager-update.rules' <<'RULES'
 // written by mesh-manager install.sh: the screen may start the update unit, which installs
 // the release the screen staged and verified; no other unit, no other verb.
@@ -327,6 +339,7 @@ if [[ -n "$TOKEN_FILE" ]]; then
 fi
 act "install the polkit rule that lets $SVCUSER mount and unmount a removable device through udisks (a bootloader's UF2 volume), and nothing else"
 do_ mkdir -p "$ROOT/etc/polkit-1/rules.d"
+do_ mkdir -p "$ROOT/etc/polkit-1/rules.d"   # Ubuntu 22.04 has no rules.d (polkit 0.105); create it, and write the .pkla form below
 do_ bash -c "cat > '$ROOT/etc/polkit-1/rules.d/50-mesh-manager-udisks.rules' <<'RULES'
 // written by mesh-manager install.sh: the bridge flashes nRF52 devices by copying a UF2 onto the
 // bootloader's volume; mounting that volume needs udisks, and this rule grants the bridge's
