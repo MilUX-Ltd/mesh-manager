@@ -89,8 +89,29 @@ def parse_invite(text):
     return {"host": host.strip(), "port": port, "code": code.strip(), "fingerprint": fp}
 
 
+NEVER_KEYS = frozenset(("psk", "key", "keys", "private_key", "privatekey", "admin_key", "adminkey", "admin_keys", "url", "join_url",
+                        "channel_url", "qr", "token", "password", "passwd", "secret", "firmware", "config", "settings_export"))
+
+
+def carries_never(obj, depth=0):
+    """Spec 056: does this object carry, at any depth, a key from the never-list? Keys only; a value may say anything."""
+    if depth > 12:
+        return False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in NEVER_KEYS or carries_never(v, depth + 1):
+                return True
+        return False
+    if isinstance(obj, (list, tuple)):
+        return any(carries_never(v, depth + 1) for v in obj)
+    return False
+
+
 def accept_item(item, my_id):
-    """The loop guard: an item that has already passed through this site is dropped."""
+    """The loop guard: an item that has already passed through this site is dropped; so is one that carries a key from
+    the never-list (Spec 056), whoever sent it."""
+    if not isinstance(item, dict) or carries_never(item):
+        return False
     return my_id not in (item.get("path") or []) and item.get("origin") != my_id
 
 
@@ -100,13 +121,16 @@ class Link:
     def __init__(self, sock, peer_id, peer_name, direction, on_frame, on_close):
         self.sock, self.peer_id, self.peer_name, self.direction = sock, peer_id, peer_name, direction
         self.on_frame, self.on_close = on_frame, on_close
-        self.since = time.time(); self.last_seen = time.time(); self.sent = 0; self.received = 0
+        self.since = time.time(); self.last_seen = time.time(); self.sent = 0; self.received = 0; self.refused = 0
         self._wlock = threading.Lock(); self._closed = False
         self._rf = sock.makefile("rb")
         threading.Thread(target=self._read_loop, name=f"peer-{peer_name}", daemon=True).start()
         threading.Thread(target=self._ping_loop, name=f"peer-ping-{peer_name}", daemon=True).start()
 
     def send(self, frame):
+        if isinstance(frame, dict) and "item" in frame and carries_never(frame["item"]):   # Spec 056: no secret leaves on a link, whatever asked
+            self.refused += 1
+            return False
         try:
             with self._wlock:
                 self.sock.sendall((json.dumps(frame, separators=(",", ":")) + "\n").encode())

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.15.0 (5 September 2026) Matt: "keep going."
+
+- **Joining meshes, the chapter (Spec 056).** The guide has a chapter of its own: sites, invites and the hub;
+  what gets shared where; the air; after a gap; what never crosses; what it costs. Two screenshots from the hub
+  demo (`ONLY_HUB=1 release/guide-shots.sh` takes just those).
+- **The never-list in code.** `peers.NEVER_KEYS` names the keys no item may carry (channel keys and URLs, admin
+  keys, tokens, passwords, configuration, firmware); a link refuses to send an item carrying one at any depth and
+  counts the refusal, and refuses one that arrives, whoever sent it.
+- **Forgetting a peer** now drops the waypoints and open alerts held from that site with its picture; the history
+  keeps what it said.
+- **The data-handling review** of the link is in `docs/security/data-handling-review-joining-meshes.md`: what
+  crosses per class, what never does, at rest, in flight, retention, what the exports and the agent see, forgetting
+  a peer, six findings with their status.
+
 ## 0.14.0 (5 September 2026) Matt: "this is great … move onto slice 5."
 
 - **Catch-up after a reconnection (Spec 055).** What crossed a link is now history: a message from a peer is written

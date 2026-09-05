@@ -1128,7 +1128,7 @@ class Bridge(TAKMeshtasticGateway):
         site = str(site or "").strip().lower()
         with self._peers_lock:
             d = self._peers_load(); had = d["peers"].pop(site, None) is not None; self._peers_save(d)
-            self.remote_nodes.pop(site, None)
+            self.remote_nodes.pop(site, None); self.remote_waypoints.pop(site, None); self.remote_alerts.pop(site, None)   # Spec 056: the history keeps what it said
         if self.peering:
             self.peering.stop_dial(site)
         self._emit("peers", state="forgotten", site=site)

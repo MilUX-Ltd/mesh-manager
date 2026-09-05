@@ -190,37 +190,68 @@ for a report or for Pinecone.
 
 ![The Health page](../assets/guide/health.png)
 
-### Peers: joining another Mesh Manager
 
-Two meshes out of radio range can be one picture. On the site that listens (a hub, or a box installed with
-`--peer-bind`), press *Invite a peer* on Connections: it shows a code with the site's address and
-fingerprint, good for ten minutes and one use, with a QR. On the other site, paste that text into *Join a
-site*. From then on the two are joined: each sends its picture, the nodes it hears with their positions,
-battery and signal, and shows the other's on Nodes and the map marked *via <site>*. Nothing goes on the air
-and channel keys never cross; messages, waypoints and alerts across the link come later. *Forget* drops a
-peer at either end. A hub is a Mesh Manager with no radio, installed with `--mode hub`, that several sites
-join; it passes each site's picture on to the others.
+## Joining meshes
 
-**After a gap.** What crossed a link is kept in the history with the site it came from, so a remote chat is still there
-after a reload or a restart. When a link comes back, each side asks the other for what it missed since the last message
-it holds from that side (up to 24 hours, 200 messages), and the answer fills the gap in order; live waypoints and open
-alerts come with the picture, so a hub that restarted has them within seconds. Caught-up messages are history: they show
-on the screen and never go on the air.
+Two meshes out of radio range can be one picture, one chat and one set of waypoints. A site opens an
+authenticated link to another Mesh Manager over the internet; items cross with the name of the site they came
+from, and a sharing table per peer says what leaves, what shows and what goes on the air.
 
-**What gets shared where.** Each peer's row opens *Sharing*: four classes, the picture (nodes, positions,
-battery, signal), messages, waypoints and alerts, each with Out (this leaves your site for that peer) and In
-(this shows here from that peer). Messages also take the channel indexes whose broadcasts leave; empty means
-every channel. Out of the box the picture, waypoints and alerts flow both ways and messages stay home. A
-channel that arrives from a peer shows in Messages as its own chat, *MILUX-TAK via edge*.
+![Connections on a hub, with its peers](../assets/guide/peers.png)
 
-**The air.** At a site with a radio, each peer's messages row and waypoints row carry a third switch, Air,
-off by default. With it on, what arrives from that peer is transmitted on your mesh: a message goes out as a
-broadcast on the channel you name (or the arriving one), prefixed with the peer's name, and shows in your
-own chat marked with where it came from; a waypoint goes out named for its origin. Airtime is yours, so the
-fold counts what it has aired for each peer. Typing in a remote chat sends your message to that site over the
-link; the bubble's receipt then reads *on the air at edge* when that site allows it, or *not aired: that site
-keeps its air closed* when it does not. A hub has no radio and no Air switch. Direct messages, channel keys,
-join URLs, admin traffic and firmware are not on the table and never cross.
+### Sites, invites and the hub
+
+On the site that listens (a hub, or a box installed with `--peer-bind`), press *Invite a peer* on Connections:
+it shows a code with the site's address and fingerprint, good for ten minutes and one use, with a QR. On the
+other site, paste that text into *Join a site*. From then on the two are joined: each sends its picture, the
+nodes it hears with their positions, battery and signal, and shows the other's on Nodes and the map marked
+*via <site>*. The site that dials needs nothing opened on its network. A hub is a Mesh Manager with no radio,
+installed with `--mode hub`, that several sites join; it passes each site's picture, messages, waypoints and
+alerts on to the others. *Forget* drops a peer at either end: its picture, waypoints and open alerts leave
+the screen, and what it said stays in the history as your record.
+
+### What gets shared where
+
+Each peer's row opens *Sharing*: four classes, the picture (nodes, positions, battery, signal), messages,
+waypoints and alerts, each with Out (this leaves your site for that peer) and In (this shows here from that
+peer). Messages also take the channel indexes whose broadcasts leave; empty means every channel. Out of the
+box the picture, waypoints and alerts flow both ways and messages stay home. A channel that arrives from a
+peer shows in Messages as its own chat, *MILUX-TAK via edge*; typing there sends your words to that site
+over the link.
+
+![A remote chat on the hub's Messages page](../assets/guide/messages-remote.png)
+
+### The air
+
+At a site with a radio, each peer's messages row and waypoints row carry a third switch, Air, off by default.
+With it on, what arrives from that peer is transmitted on your mesh: a message goes out as a broadcast on the
+channel you name (or the arriving one), prefixed with the peer's name, and shows in your own chat marked
+with where it came from; a waypoint goes out named for its origin. Airtime is yours, so the fold counts what
+it has aired for each peer. The bubble's receipt then reads *on the air at edge* when that site allows it, or
+*not aired: that site keeps its air closed* when it does not. A hub has no radio and no Air switch.
+
+### After a gap
+
+What crossed a link is kept in the history with the site it came from, so a remote chat is still there after
+a reload or a restart. When a link comes back, each side asks the other for what it missed since the last
+message it holds from that side (up to 24 hours, 200 messages), and the answer fills the gap in order; live
+waypoints and open alerts come with the picture, so a hub that restarted has them within seconds. Caught-up
+messages are history: they show on the screen and never go on the air.
+
+### What never crosses
+
+Direct messages, channel keys and channel URLs, admin keys, tokens and passwords, device configuration and
+firmware are not on the table and never cross. This is not a convention: the link refuses to send an item
+carrying any of those, and refuses one that arrives carrying them, whoever sent it. Node names and labels
+are what the mesh already says of itself. The written review of the link's data handling is in the
+repository under `docs/security/`.
+
+### What it costs
+
+Nothing in software. One site of a pair has to be reachable: a box with its own address, or a tunnel such
+as Tailscale or WireGuard, from £0 to about £6 a month. The link is TLS 1.2 or better with each side's
+certificate pinned after the first code; the screens of a hub stay on loopback and are reached over a tunnel
+until a TLS route is added.
 
 ## Settings
 
