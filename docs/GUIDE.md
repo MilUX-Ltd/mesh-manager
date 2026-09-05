@@ -27,6 +27,12 @@ link:
 
 ![Help, opening with setting the kit up](../assets/guide/setup.png)
 
+### A box without TAK
+
+Not every mesh has a TAK Server beside it. A box installed with `--mode server` manages the mesh on
+its own: the state strip reads *Managing the mesh*, the home page shows the last packet heard, and
+nothing on the screen speaks of TAK or forwarding. Everything else in this guide applies as it is.
+
 ## The mesh and the map
 
 The Mesh page is the map, then three cards about the box, then the rest folded under *The box in

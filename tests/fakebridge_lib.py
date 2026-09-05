@@ -10,7 +10,7 @@ NODES = [{"id": "!aa000001", "name": "Tracker9", "battery": 77, "snr": 12.5, "ho
          {"id": "!bb000002", "name": "Tracker2", "battery": 9, "snr": 3.0, "hops": 1, "heard": "2026-09-03T01:50:00Z", "hw": "TRACKER_T1000_E", "heard_here": True},
          {"id": "!cc000003", "name": "OldTracker", "battery": None, "snr": None, "hops": None, "heard": None, "hw": "HELTEC_V3", "heard_here": False, "last_heard_db": "2026-08-30T10:00:00Z"}]
 STATUS = {"alerts_open": 1, "version": "0.1.0", "radio": "/dev/serial/by-id/usb-x-if00", "radio_present": True, "connected": True,
-          "observe": False, "last_activity": "2026-09-03T02:00:00Z", "last_forwarded": "2026-09-03T01:59:00Z",
+          "observe": False, "mode": "tak-server", "tak": "on", "last_activity": "2026-09-03T02:00:00Z", "last_forwarded": "2026-09-03T01:59:00Z",
           "nodes_seen": 2, "nodes_db": 3, "own": {"id": "!00000001", "name": "TAK Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
           "primary_channel": "MILUX-TAK", "uptime": 120, "watchdog": "pinging", "state_dir": "/tmp/x", "socket": "/tmp/x.sock"}
 CHANNELS = {"channels": [{"index": 0, "name": "MILUX-TAK", "role": "PRIMARY", "has_key": True}, {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],

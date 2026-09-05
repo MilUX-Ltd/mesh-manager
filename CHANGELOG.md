@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.9.0 (5 September 2026) Matt: "do the server shape first." The first of the three deployment shapes
+beyond the TAK gateway: a box or an Ubuntu server that manages a mesh with no TAK Server beside it.
+
+- **The server shape (Spec 050).** One setting, `MODE=server`, set at install with
+  `install.sh --mode server`; `tak-server` stays the default and changes nothing. In the server
+  shape the bridge opens no TAK socket and forwards nothing, TAK chat is never attempted, the test
+  alert answers that TAK is off, the To TAK chat setting cannot be turned on, and status carries
+  `mode` and `tak`. The screen follows the status: the strip reads *Managing the mesh*, the home
+  card is the last packet heard, the alerts form has no TAK switch and no test alert, the waypoint
+  confirm and Help speak only of the mesh. The installer needs no filter group and no TAK Server in
+  this shape, and creates no TAK input. The demo runs in either shape (`MODE=server` in its
+  environment).
+
 ## 0.8.0 (5 September 2026) Matt: "it would be great if it worked more like a normal chat app", and "I also want a
 user guide with screenshots created for the public repo." Fifty-three suites green.
 

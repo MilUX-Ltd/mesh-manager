@@ -28,6 +28,10 @@ STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Es
           "own": {"id": "!ee000001", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
           "gps": {"reachable": True, "fix": True, "seen": 11, "used": 8, "checked": "2026-09-03T01:24:00Z", "via": "gpsd://127.0.0.1:2947"},
           "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
+DEMO_MODE = "server" if os.environ.get("MODE", "").strip().lower() == "server" else "tak-server"   # Spec 050: MODE=server runs the demo as a box without TAK
+STATUS["mode"] = DEMO_MODE; STATUS["tak"] = "off" if DEMO_MODE == "server" else "on"
+if DEMO_MODE == "server":
+    STATUS["last_forwarded"] = None
 CHANNELS = {"channels": [{"index": 0, "name": "MESH-DEMO", "role": "PRIMARY", "has_key": True},
                          {"index": 1, "name": "", "role": "DISABLED", "has_key": False}],
             "url": "https://meshtastic.org/e/#CgcSAQEoATABEg8IATgBQANIAVAeaAHABgE"}

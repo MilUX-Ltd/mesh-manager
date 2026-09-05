@@ -215,6 +215,14 @@ class CountingSocket:
     def close(self): pass
 
 
+class NullSocket:
+    """The server shape (Spec 050): no TAK Server on this box; whatever the gateway would send goes nowhere, uncounted."""
+    def connect(self, addr): pass
+    def send(self, b): return len(b)
+    def sendto(self, b, addr): return len(b)
+    def close(self): pass
+
+
 class _OldCountingSocket:
     """Observe mode: what the gateway would have sent to TAK is counted, never sent."""
     def __init__(self):
@@ -256,12 +264,14 @@ def bootloader_mode(serial_path):
 
 
 class Bridge(TAKMeshtasticGateway):
+    box_mode = "tak-server"   # Spec 050: the class default, so a bridge built without __init__ (the suites do) still has a shape
     def __init__(self, conf, socket_path=DEFAULT_SOCKET, state_dir=DEFAULT_STATE, observe=False,
                  silence_limit=SILENCE_LIMIT, gps_reader=True):
         self.conf = conf
         self.socket_path = socket_path
         self.state_dir = state_dir
         self.observe = observe
+        self.box_mode = "server" if str(conf.get("MODE") or "").strip().lower() == "server" else "tak-server"  # Spec 050
         self.silence_limit = silence_limit
         self.started = time.time()
         self.last_activity = 0.0
@@ -304,7 +314,9 @@ class Bridge(TAKMeshtasticGateway):
         TAKMeshtasticGateway.__init__(self, ip=conf.get("ip"), serial_device=conf.get("SERIAL") or None,
                                       debug=bool(conf.get("debug")))
         self.logger.addHandler(RingHandler(self))
-        if observe and not isinstance(self.socket_client, CountingSocket):
+        if self.box_mode == "server":
+            self.socket_client = NullSocket()
+        elif observe and not isinstance(self.socket_client, CountingSocket):
             self.socket_client = CountingSocket()
         # Subscribe AFTER the gateway has: pypubsub fixes a topic's argument spec from its first
         # listener, and the gateway's on_connection takes the topic itself (AUTO_TOPIC). Found
@@ -324,7 +336,10 @@ class Bridge(TAKMeshtasticGateway):
         self._touch()
         if getattr(self, "meshtastic_connected", False):
             sd_notify("READY=1")      # the connection was established during the gateway's init
-        if observe:
+        if self.box_mode == "server":
+            self.socket_client = NullSocket()
+            self.logger.info("server shape (MODE=server): no TAK Server on this box; nothing is forwarded and no TAK socket is bound")
+        elif observe:
             self.socket_client = CountingSocket()
             self.logger.info("observe mode: listening only; nothing is forwarded to TAK and no TAK socket is bound")
         else:
@@ -356,7 +371,9 @@ class Bridge(TAKMeshtasticGateway):
                 self.logger.warning(f"no radio at {path}: waiting (plug it in, or check ls -l /dev/serial/by-id/)")
                 said = time.time()
             time.sleep(2)
-        if self.observe:
+        if self.box_mode == "server":
+            self.socket_client = NullSocket()
+        elif self.observe:
             # before the radio can deliver a single packet: nothing reaches TAK in observe mode
             self.socket_client = CountingSocket()
         TAKMeshtasticGateway.connect_to_meshtastic_node(self)
@@ -554,8 +571,9 @@ class Bridge(TAKMeshtasticGateway):
     # ---- the heartbeat, to wherever the state directory is ------------------------------------
     def heartbeat(self):
         now = time.time()
-        self.last_forwarded = now
-        self._emit("forwarded")
+        if self.box_mode != "server":  # Spec 050: a box without TAK forwards nothing
+            self.last_forwarded = now
+            self._emit("forwarded")
         if now - getattr(self, "_hb_last", 0.0) < 10:
             return
         self._hb_last = now
@@ -597,6 +615,7 @@ class Bridge(TAKMeshtasticGateway):
                 "last_activity": utc(self.last_activity) if self.last_activity else None,
                 "last_forwarded": utc(self.last_forwarded) if self.last_forwarded else None,
                 "nodes_seen": len(getattr(self, "meshtastic_devices", {})), "nodes_db": len(getattr(self.interface, "nodes", {}) or {}), "observe": self.observe,
+                "mode": self.box_mode, "tak": "off" if self.box_mode == "server" else "on",
                 "own": self._own(), "region": region_name(lora.region) if lora else None,
                 "chutil": self._own_chutil(), "verdict": self._verdict(self._own_chutil()),
                 "alerts_open": len(self._alerts_load()["open"]),
@@ -2854,9 +2873,14 @@ class Bridge(TAKMeshtasticGateway):
             self.logger.debug(f"alerts.json not written: {type(e).__name__}: {e}")
 
     def op_alert_settings(self, **_):
-        return dict(self._alerts_load()["settings"])
+        st = dict(self._alerts_load()["settings"])
+        if self.box_mode == "server":
+            st["to_tak"] = False  # Spec 050: no TAK on this box, whatever the file says
+        return st
 
     def op_alert_set(self, silent_min=None, battery_pct=None, unknown=None, fence_m=None, to_tak=None, **_):
+        if self.box_mode == "server" and to_tak is not None and to_tak != "" and str(to_tak).strip().lower() in ("1", "true", "on", "yes"):
+            return {"error": "TAK is off on this box (MODE=server): alerts stay on this screen"}
         a = self._alerts_load(); st = a["settings"]
         try:
             if silent_min is not None and silent_min != "":
@@ -2882,6 +2906,8 @@ class Bridge(TAKMeshtasticGateway):
 
     def _tak_chat(self, text, callsign="Mesh Manager"):
         """One GeoChat to All Chat Rooms on the TAK Server, on the socket the bridge forwards CoT on."""
+        if self.box_mode == "server":
+            return False  # Spec 050: no TAK Server to chat to
         import datetime as _dt, uuid as _uuid
         from xml.etree.ElementTree import Element, SubElement, tostring
         sock = getattr(self, "socket_client", None)
@@ -3015,6 +3041,9 @@ class Bridge(TAKMeshtasticGateway):
         return {"open": sorted(a["open"].values(), key=lambda x: x["since"], reverse=True), "recent": recent, "settings": a["settings"]}
 
     def op_alert_test(self, **_):
+        if self.box_mode == "server":
+            self._emit("alert", state="test", tak=False)
+            return {"sent": False, "observe": bool(self.observe), "mode": "server", "note": "TAK is off on this box (MODE=server)"}
         sent = self._tak_chat("[Mesh Manager] test alert: the box can reach TAK chat")
         self._emit("alert", state="test", tak=bool(sent))
         return {"sent": bool(sent), "observe": bool(self.observe), "note": "counted, not sent" if self.observe else ("a GeoChat to All Chat Rooms" if sent else "the TAK socket is not open")}

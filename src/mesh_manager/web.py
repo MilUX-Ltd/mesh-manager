@@ -588,6 +588,8 @@ def state_strip(st):
         lamp, word = "bad", "Radio missing"
     elif not st.get("connected"):
         lamp, word = "warn", "Radio not connected"
+    elif st.get("tak") == "off":
+        lamp, word = "ok", "Managing the mesh"      # Spec 050: a box without TAK
     elif st.get("observe"):
         lamp, word = "ok", "Observing"
     else:
@@ -737,8 +739,10 @@ def overview_cards(st):
         card("Channel utilisation", (f"<a href='/health'>{float(st['chutil']):.1f}% <span class='pill'>{e(st.get('verdict') or '')}</span></a>" if st.get("chutil") is not None else "<a href='/health'>no reading yet</a>")
              + "<div class='meta'>how busy the channel is · now, from this radio</div>",
              {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(st.get("verdict") or "", "")),
-        card("Last packet TAK would have had" if st.get("observe") else "Last packet sent to TAK",
-             (f"<time datetime='{e(fwd)}' data-age>{e(age(fwd))}</time>" if fwd else "none yet"), "ok" if fwd else "warn"),
+        (card("Last packet heard", (f"<time datetime='{e(st['last_activity'])}' data-age>{e(age(st['last_activity']))}</time>" if st.get("last_activity") else "none yet"), "ok" if st.get("last_activity") else "warn")
+         if st.get("tak") == "off" else
+         card("Last packet TAK would have had" if st.get("observe") else "Last packet sent to TAK",
+              (f"<time datetime='{e(fwd)}' data-age>{e(age(fwd))}</time>" if fwd else "none yet"), "ok" if fwd else "warn")),
     ])
     rest = "".join([
         card("Bridge", f"running · {e(mode)}", "ok"),
@@ -785,12 +789,12 @@ def _position_words(own):
     return "no position: nodes are placed by hops"
 
 
-def map_body(L, tiles=None, disk=None, added=None, folder=""):
+def map_body(L, tiles=None, disk=None, added=None, folder="", tak_on=True):
     js = """<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='route'||d.kind==='status'||d.kind==='forwarded'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}}if(d.kind==='survey'&&window.mmSurvey){window.mmSurvey(d);}if((d.kind==='position'||(d.kind==='survey'&&d.state==='asked'))&&window.mmCoverTick){setTimeout(window.mmCoverTick,1500);}};</script>"""
     own = L.get("own") or {}
     how = position_words(own)
     return (f"<p class='meta'>This box at the centre, every node heard since the bridge started about it; a solid link is coloured by the SNR of the last packet that came straight from that node, a dashed one has only ever come through a relay, a database-only node is not drawn. Box position: {e(how)}.</p>"
-            f"{mesh_views(L, tiles or tile_sources({}), 800)}{survey_form(L)}{map_sources_form(tiles, disk, added, folder)}{js}{WRITE_JS}")
+            f"{mesh_views(L, tiles or tile_sources({}), 800, tak_on=tak_on)}{survey_form(L)}{map_sources_form(tiles, disk, added, folder)}{js}{WRITE_JS}")
 
 
 def map_sources_form(t, disk=None, added=None, folder=""):
@@ -842,13 +846,14 @@ MAP_HEAD = "<link rel='stylesheet' href='/static/leaflet/leaflet.css'><script sr
 def overview_body(st, bind, auth_on=True, nodes=None, links=None, tiles=None):
     closed = (f"<h2>What is open</h2><p class='meta'>This screen answers on <b>{e(bind[0])}:{bind[1]}</b> and nothing else. "
               + ("" if auth_on else "<b>Sign-in is off</b>: anyone who can reach this address is the operator. ")
-              + "The bridge binds no port of its own; it owns the radio and speaks to TAK Server over the multicast input. "
-              "Everything else on this box is closed until the operator opens it.</p>")
+              + ("The bridge binds no port of its own; it owns the radio and speaks to nothing else. " if (st or {}).get("tak") == "off"
+                 else "The bridge binds no port of its own; it owns the radio and speaks to TAK Server over the multicast input. ")
+              + "Everything else on this box is closed until the operator opens it.</p>")
     js = """<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='forwarded'||d.kind==='connection'){var o=document.querySelector('#overview-cards details'),was=!!(o&&o.open);window.mmFrag('overview','overview-cards',function(){var n=document.querySelector('#overview-cards details');if(n&&was){n.open=true;}});}
 if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}var h=document.getElementById('home-heard');if(h&&d.kind==='status'&&d.nodes_seen!==undefined){h.textContent=d.nodes_seen;}}};</script>"""
     L = links or {"own": {}, "nodes": nodes or [], "routes": {}}
     heard = len([n for n in (L.get("nodes") or []) if n.get("heard_here", True)])
-    return (f"{mesh_views(L, tiles or tile_sources({}))}"
+    return (f"{mesh_views(L, tiles or tile_sources({}), tak_on=(st or {}).get('tak') != 'off')}"
             f"<p class='meta'><a href='/nodes'>Nodes</a>: <span id='home-heard'>{heard}</span> heard here since the bridge started. Who is where, who has gone quiet and who is low on battery is on the Nodes page, one press away.</p>"
             f"<h2>This box</h2><div id='overview-cards'>{overview_cards(st)}</div>{closed}{js}")
 
@@ -1414,7 +1419,7 @@ def ring_step(half_metres):
     return cands[-1] if cands else mag
 
 
-def mesh_views(L, tiles, size=640, bare=False):
+def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
     """The two views: the map over tiles (Leaflet, when the box has a position) and the plan.
     bare: the map on a page of its own (no Pop out control)."""
     own = L.get("own") or {}
@@ -1431,7 +1436,7 @@ def mesh_views(L, tiles, size=640, bare=False):
               "<label class='meta' for='cover-hours' data-tip='Coverage' data-tip-more='Every position heard, coloured by signal; hollow came through a relay'>Coverage <select id='cover-hours'><option value='0' selected>off</option><option value='3'>3 h</option><option value='24'>24 h</option><option value='168'>7 d</option></select></label>"
               "<label class='meta check' for='grid-on' data-tip='Grid' data-tip-more='MGRS: 1 km lines from zoom 13, 10 km below'><input type='checkbox' id='grid-on'> Grid</label>"
               "</div></details>")
-    wp = ("<details class='fold ctl' style='margin-top:var(--s3)'><summary>Drop a waypoint on the mesh</summary><form class='card' data-action='waypoint_send' data-risk='air' data-confirm='This reaches every device on the primary channel and is forwarded to TAK as a marker.'>"
+    wp = ("<details class='fold ctl' style='margin-top:var(--s3)'><summary>Drop a waypoint on the mesh</summary><form class='card' data-action='waypoint_send' data-risk='air' data-confirm='This reaches every device on the primary channel" + (" and is forwarded to TAK as a marker.'>" if tak_on else ".'>") +
           "<label>Name (30 bytes at most)<input type='text' name='name' maxlength='30' required></label><label>Description (100 bytes at most)<input type='text' name='description' maxlength='100'></label>"
           "<div class='row-actions' style='margin-bottom:var(--s2)'>" + icon_button("place", "Place it on the map", "Place it on the map", "Then press the map where the waypoint goes; the fields fill in", attrs="id='wp-place'") + "<span class='meta' id='wp-place-note'></span></div>"
           "<label>Grid (MGRS), or the degrees below<input type='text' id='wp-mgrs' placeholder='30U XC 9988 0936' autocomplete='off' aria-describedby='wp-mgrs-note'><span class='meta' id='wp-mgrs-note'></span></label>"
@@ -2492,7 +2497,7 @@ def help_body(st, cfg, reg, shelf, declared_region):
               "<tr><td>unconfirmed: sent hh:mm, the radio reports …</td><td>The device answered with something else. What it reports is what it holds, whatever was sent.</td></tr>"
               "<tr><td>asked, no answer yet (sent hh:mm)</td><td>No answer in the window. Over LoRa that is slow and lossy, not failed: read the device again later.</td></tr>"
               "<tr><td>not written: …</td><td>Refused before anything was sent, and the reason.</td></tr></tbody></table>")
-    where = (f"<p class='meta'>Units <code>mesh-manager-bridge</code> (owns the radio, forwards to TAK) and <code>mesh-manager-web</code> (this screen). The bridge answers on <code>{e(str(st.get('socket') or ''))}</code>; "
+    where = (f"<p class='meta'>Units <code>mesh-manager-bridge</code> (owns the radio{', forwards to TAK' if st.get('tak') != 'off' else ''}) and <code>mesh-manager-web</code> (this screen). The bridge answers on <code>{e(str(st.get('socket') or ''))}</code>; "
              f"its state, the register, the exports and the firmware shelf live under <code>{e(str(st.get('state_dir') or ''))}</code>. When something is wrong: <code>journalctl -u mesh-manager-bridge -n 200</code>. "
              "A radio in bootloader mode presents a serial port and answers nothing; the bridge waits rather than restarting, and the Bench page names the recovery step.</p>")
     setup = ("<h2 style='margin-top:0'>Setting the kit up</h2><ol class='steps'>"
@@ -2501,7 +2506,8 @@ def help_body(st, cfg, reg, shelf, declared_region):
              "<li><a href='/channels'>Show the join QR</a> to a phone, or <a href='/bench'>onboard a device on the bench</a> by USB: names, a role, this radio's channel and admin key, each read back.</li>"
              "<li><a href='/settings#position'>Say where this box is</a> if it has no GPS receiver, so the map has a centre.</li>"
              "<li><a href='/'>Watch the picture</a>: nodes, signal, battery and who has gone quiet. <a href='/health'>Health</a> holds the alerts and their thresholds.</li>"
-             "<li>Point it at TAK: the bridge speaks to the TAK Server the installer was given; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li></ol>")
+             + ("<li>Point it at TAK: the bridge speaks to the TAK Server the installer was given; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li>" if st.get("tak") != "off"
+                else "<li>This box runs without TAK: the mesh is managed from this screen alone; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li>") + "</ol>")
     return (f"{setup}<h2>The kit</h2><div class='cards'>{card('This radio', e(str(own.get('name') or '?')) + ' <span class=pill>' + e(str(own.get('id') or '')) + '</span>')}"
             f"{card('Rides', e(str(st.get('region') or '?')) + ' · ' + e(str(st.get('modem_preset') or '?')) + '<div class=meta>primary ' + e(str(st.get('primary_channel') or '?')) + '</div>')}"
             f"{card('The fleet', str(len(rows)) + ' device' + ('s' if len(rows) != 1 else '') + '<div class=meta>' + str(len(managed)) + ' managed by this radio</div>')}"
@@ -2678,8 +2684,8 @@ def rotation_section(rs):
             f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>State</th><th>First heard after</th></tr></thead><tbody>{wait}{back or ''}{'' if (wait or back) else '<tr><td colspan=3 class=meta>No device was expected back.</td></tr>'}</tbody></table></div>{form}")
 
 
-def alerts_section(al):
-    """Spec 026: what is open, what was, the thresholds, and the test."""
+def alerts_section(al, tak_on=True):
+    """Spec 026: what is open, what was, the thresholds, and the test. Spec 050: without TAK, no TAK chat and no test."""
     al = al or {}
     st = al.get("settings") or {}
     kinds = {"silent": "warn", "battery": "warn", "unknown": "bad", "fence": "bad", "geofence": "warn", "key": "bad"}
@@ -2694,19 +2700,19 @@ def alerts_section(al):
             f"<label>Battery under (%)<input type='number' name='battery_pct' value='{int(st.get('battery_pct', 20))}' min='1' max='90'></label>"
             f"<label data-tip='Fence around this box' data-tip-more='A radius from the box&#39;s own position; drawn fences live on the map'>Fence around this box (metres, 0 is off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
             f"<div><span class='meta'>Unknown nodes</span><br>{seg('unknown', onoff, 'on' if st.get('unknown', True) else 'off')}</div>"
-            f"<div><span class='meta'>To TAK chat</span><br>{seg('to_tak', onoff, 'on' if st.get('to_tak', True) else 'off')}</div>"
+            + (f"<div><span class='meta'>To TAK chat</span><br>{seg('to_tak', onoff, 'on' if st.get('to_tak', True) else 'off')}</div>" if tak_on else "<div></div>") +
             "<div></div></div><button class='line' style='margin-top:var(--s2)'>Save the thresholds</button><div class='res meta' role='status'></div></form>")
-    test = (f"<form data-action='alert_test' style='display:inline-block;margin-top:var(--s2)'><button class='quiet' data-tip='Send a test alert to TAK' data-tip-more='{e(t['description'])}'>{e(t['title'])}</button><div class='res meta' role='status'></div></form>")
-    return (f"<h2 id='alerts' style='margin-top:0'>Alerts</h2><p class='meta'>A registered device gone quiet, a battery under the threshold, a node not in the register, a node outside a fence. Each is shown here and sent to All Chat Rooms on the TAK Server when To TAK chat is on.</p>"
+    test = "" if not tak_on else (f"<form data-action='alert_test' style='display:inline-block;margin-top:var(--s2)'><button class='quiet' data-tip='Send a test alert to TAK' data-tip-more='{e(t['description'])}'>{e(t['title'])}</button><div class='res meta' role='status'></div></form>")
+    return (f"<h2 id='alerts' style='margin-top:0'>Alerts</h2><p class='meta'>A registered device gone quiet, a battery under the threshold, a node not in the register, a node outside a fence. Each is shown here" + (" and sent to All Chat Rooms on the TAK Server when To TAK chat is on." if tak_on else ".") + "</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Open</th><th>What</th><th>Since</th></tr></thead><tbody>{open_rows or '<tr><td colspan=3 class=meta>Nothing open.</td></tr>'}</tbody></table></div>"
             f"<h2>Recent</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>Kind</th><th>What</th><th>State</th></tr></thead><tbody>{recent or '<tr><td colspan=4 class=meta>None yet.</td></tr>'}</tbody></table></div>"
             f"<details class='fold' data-keep='thresholds'><summary>Thresholds</summary>{form}{test}</details>")
 
 
-def health_body(h, al=None):
+def health_body(h, al=None, tak_on=True):
     js = "<script>window.onMesh=function(d){if(d.kind==='status'){window.mmFrag('health','health-body');}if(d.kind==='alert'){window.mmFrag('alerts','alerts-body');}};</script>"
     js = js.replace("window.mmFrag('alerts','alerts-body');", "var o=document.querySelector('#alerts-body details'),was=!!(o&&o.open);window.mmFrag('alerts','alerts-body',function(){var n=document.querySelector('#alerts-body details');if(n&&was){n.open=true;}});")
-    _out = ((f"<div id='alerts-body'>{alerts_section(al)}</div>"
+    _out = ((f"<div id='alerts-body'>{alerts_section(al, tak_on)}</div>"
             "<h2>How busy the mesh is</h2><p class='meta'>From the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 this radio's own transmit air time must stay under the 10% duty-cycle limit.</p>"
             f"<div id='health-body'>{health_cards(h)}</div>{js}{WRITE_JS}"))
     return _out + export_section()
@@ -3380,10 +3386,10 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/map":
                 return self._send(200, self._page("Map", map_body(self._links(), tile_sources(web.config, web.etc_dir),
                                                                    disk_map_sources(tilesets_dir(web.config)), saved_map_sources(web.etc_dir),
-                                                                   tilesets_dir(web.config)), "/map", head=MAP_HEAD))
+                                                                   tilesets_dir(web.config), tak_on=(self._ask("status") or {}).get("tak") != "off"), "/map", head=MAP_HEAD))
             if path == "/map/full":
                 js = "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='route'||d.kind==='status'||d.kind==='forwarded'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}}};</script>"
-                return self._send(200, bare_page("Map", mesh_views(self._links(), tile_sources(web.config, web.etc_dir), 800, bare=True) + js, head=MAP_HEAD))
+                return self._send(200, bare_page("Map", mesh_views(self._links(), tile_sources(web.config, web.etc_dir), 800, bare=True, tak_on=(self._ask("status") or {}).get("tak") != "off") + js, head=MAP_HEAD))
             if path == "/api/update/status":
                 return self._json(200, {"running": __version__, "mode": web.update_mode(), "token": bool(web.github_token()), "last": U.last_check(web.state_dir), "log": U.last_log(web.state_dir)})
             if path == "/api/tilesets":
@@ -3529,7 +3535,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 members = self._members(q.get("group", [""])[0])
                 if members is not None and isinstance(al, dict):
                     al = dict(al, open=[o for o in (al.get("open") or []) if o.get("node") in members], recent=[r for r in (al.get("recent") or []) if r.get("node") in members])
-                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), al), "/health"))
+                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), al, tak_on=(self._ask("status") or {}).get("tak") != "off"), "/health"))
             if path == "/fragment/health":
                 return self._send(200, health_cards(self._ask("health", hours=24)), "text/html; charset=utf-8")
             if path == "/fragment/drift":
@@ -3537,7 +3543,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/fragment/rotation":
                 return self._send(200, rotation_section(self._ask("rotation_status")), "text/html; charset=utf-8")
             if path == "/fragment/alerts":
-                return self._send(200, alerts_section(self._ask("alerts")), "text/html; charset=utf-8")
+                return self._send(200, alerts_section(self._ask("alerts"), tak_on=(self._ask("status") or {}).get("tak") != "off"), "text/html; charset=utf-8")
             if path == "/register":
                 av = {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}
                 return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift"), availability=av, inv=self._ask("inventory"), groups=self._ask("groups")), "/register"))

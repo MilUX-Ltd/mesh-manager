@@ -4,6 +4,7 @@
 #   sudo ./install.sh <mesh-manager-<ver>-<arch>.tgz> [--serial <by-id path>]
 #        [--filter-group <group>] [--region EU_868|US] [--channel <name>]
 #        [--password <operator password>] [--no-auth] [--bind <addr>] [--port <n>] [--dry-run]
+#        [--mode tak-server|server]   (server: a box with no TAK Server beside it, Spec 050)
 #
 # What it does, in order: verify the tarball against its .sha256; unpack to /opt/mesh-manager;
 # build the venv from the bundled wheels with no network; offline is only proven offline;
@@ -25,7 +26,7 @@
 set -euo pipefail
 
 ROOT="${MESH_MANAGER_ROOT:-}"
-DRY=0; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""
+DRY=0; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial)        SERIAL="${2:-}"; shift 2 ;;
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
         --no-map-position) CLEAR_POS=1; shift ;;
         --github-token-file) TOKEN_FILE="${2:-}"; shift 2 ;;
         --update-mode)   UPDATE_MODE_ARG="${2:-}"; shift 2 ;;
+        --mode)          MODE_ARG="${2:-}"; shift 2 ;;
         --dry-run)       DRY=1; shift ;;
         -h|--help)       sed -n '2,22p' "$0"; exit 0 ;;
         -*)              echo "ERR unknown option: $1" >&2; exit 2 ;;
@@ -59,7 +61,7 @@ do_()  { (( DRY )) && return 0; "$@"; }                               # run it u
 read_conf() {  # KEY=value lines of a config into <prefix>KEY, portably (no eval, no GNU sed)
     local file="$1" prefix="$2" k v
     while IFS='=' read -r k v; do
-        case "$k" in SERIAL|REGION|CHANNEL|FILTER_GROUP|EXTRA_ARGS|BIND|PORT|AUTH|MAP_LAT|MAP_LON|MAP_TILES|MAP_MBTILES_DIR|MAP_GPS|UPDATE_REPO|UPDATE_MODE|UPDATE_CHANNEL) printf -v "${prefix}${k}" '%s' "$v" ;; esac
+        case "$k" in SERIAL|REGION|CHANNEL|FILTER_GROUP|EXTRA_ARGS|BIND|PORT|AUTH|MAP_LAT|MAP_LON|MAP_TILES|MAP_MBTILES_DIR|MAP_GPS|UPDATE_REPO|UPDATE_MODE|UPDATE_CHANNEL|MODE) printf -v "${prefix}${k}" '%s' "$v" ;; esac
     done < "$file"
 }
 
@@ -88,10 +90,10 @@ if (( ! DRY )); then
 else
     echo "would: verify $TARBALL against $TARBALL.sha256"
 fi
-[[ -d "$ROOT/opt/tak" ]] || die "TAK Server is not installed on this box (/opt/tak missing)"
+# the TAK Server check moved below the mode: a box installed with --mode server has none (Spec 050)
 
 # ---- what this box already carries ---------------------------------------------------------
-EXTRA_ARGS=""; CUR_SERIAL=""; CUR_REGION=""; CUR_CHANNEL=""; CUR_FILTER_GROUP=""; CUR_EXTRA_ARGS=""; CUR_BIND=""; CUR_PORT=""; CUR_AUTH=""; CUR_MAP_LAT=""; CUR_MAP_LON=""; CUR_MAP_TILES=""; CUR_MAP_MBTILES_DIR=""; CUR_MAP_GPS=""; CUR_UPDATE_REPO=""; CUR_UPDATE_MODE=""; CUR_UPDATE_CHANNEL=""; AUTH="on"; MAP_LAT=""; MAP_LON=""; MAP_TILES=""; MAP_MBTILES_DIR=""; MAP_GPS=""; UPDATE_REPO=""; UPDATE_MODE=""; UPDATE_CHANNEL=""
+EXTRA_ARGS=""; CUR_SERIAL=""; CUR_REGION=""; CUR_CHANNEL=""; CUR_FILTER_GROUP=""; CUR_EXTRA_ARGS=""; CUR_BIND=""; CUR_PORT=""; CUR_AUTH=""; CUR_MAP_LAT=""; CUR_MAP_LON=""; CUR_MAP_TILES=""; CUR_MAP_MBTILES_DIR=""; CUR_MAP_GPS=""; CUR_UPDATE_REPO=""; CUR_UPDATE_MODE=""; CUR_UPDATE_CHANNEL=""; AUTH="on"; MAP_LAT=""; MAP_LON=""; MAP_TILES=""; MAP_MBTILES_DIR=""; MAP_GPS=""; UPDATE_REPO=""; UPDATE_MODE=""; UPDATE_CHANNEL=""; CUR_MODE=""; MODE=""
 OLD_SERIAL=""; OLD_REGION=""; OLD_CHANNEL=""; OLD_FILTER_GROUP=""; OLD_EXTRA_ARGS=""; OLD_BIND=""; OLD_PORT=""; OLD_AUTH=""
 if [[ -f "$CONF" ]]; then
     # a previous Mesh Manager install is the first source of truth; flags override
@@ -106,11 +108,14 @@ if [[ -f "$CONF" ]]; then
     AUTH="${CUR_AUTH:-on}"
     MAP_LAT="${CUR_MAP_LAT:-}"; MAP_LON="${CUR_MAP_LON:-}"
     MAP_TILES="${CUR_MAP_TILES:-}"; MAP_MBTILES_DIR="${CUR_MAP_MBTILES_DIR:-}"; MAP_GPS="${CUR_MAP_GPS:-}"
-    UPDATE_REPO="${CUR_UPDATE_REPO:-}"; UPDATE_MODE="${CUR_UPDATE_MODE:-}"; UPDATE_CHANNEL="${CUR_UPDATE_CHANNEL:-}"
+    UPDATE_REPO="${CUR_UPDATE_REPO:-}"; UPDATE_MODE="${CUR_UPDATE_MODE:-}"; UPDATE_CHANNEL="${CUR_UPDATE_CHANNEL:-}"; MODE="${CUR_MODE:-}"
 fi
 [[ -z "$UPDATE_MODE_ARG" ]] || UPDATE_MODE="$UPDATE_MODE_ARG"
 UPDATE_REPO="${UPDATE_REPO:-MilUX-Ltd/mesh-manager}"; UPDATE_MODE="${UPDATE_MODE:-manual}"; UPDATE_CHANNEL="${UPDATE_CHANNEL:-prerelease}"
 [[ "$UPDATE_MODE" =~ ^(manual|auto|off)$ ]] || die "--update-mode is manual, auto or off"
+[[ -z "$MODE_ARG" ]] || MODE="$MODE_ARG"; MODE="${MODE:-tak-server}"
+[[ "$MODE" =~ ^(tak-server|server)$ ]] || die "--mode must be tak-server or server"
+[[ "$MODE" == server || -d "$ROOT/opt/tak" ]] || die "TAK Server is not installed on this box (/opt/tak missing); a box with no TAK Server installs with --mode server"
 [[ -z "$TOKEN_FILE" || -f "$TOKEN_FILE" ]] || die "no such token file: $TOKEN_FILE"
 [[ -z "$GPS_ARG" ]] || MAP_GPS="$GPS_ARG"
 [[ -z "$MAP_GPS" || "$MAP_GPS" =~ ^/dev/serial/by-id/[A-Za-z0-9._:+=-]{4,180}$ ]] || die "--gps must be a /dev/serial/by-id/ path (the receiver, not the radio)"
@@ -137,10 +142,14 @@ if [[ ( -z "$SERIAL" || -z "$FILTER_GROUP" ) && -f "$OLDCONF" ]]; then
     [[ -n "$EXTRA_ARGS" ]]   || EXTRA_ARGS="${OLD_EXTRA_ARGS:-}"
     for k in SERIAL REGION CHANNEL FILTER_GROUP EXTRA_ARGS; do printf '  %s=%s\n' "$k" "${!k}"; done
 fi
-[[ -n "$SERIAL" && -n "$FILTER_GROUP" ]] \
-    || die "this box carries no mesh config to adopt: give --serial </dev/serial/by-id/...> and --filter-group <group>"
+if [[ "$MODE" == server ]]; then
+    [[ -n "$SERIAL" ]] || die "give --serial </dev/serial/by-id/...> (a box without TAK Server needs no filter group)"
+else
+    [[ -n "$SERIAL" && -n "$FILTER_GROUP" ]] \
+        || die "this box carries no mesh config to adopt: give --serial </dev/serial/by-id/...> and --filter-group <group>"
+fi
 [[ "$SERIAL" =~ ^/dev/serial/by-id/[A-Za-z0-9._:+=-]{4,180}$ ]] || die "serial must be a /dev/serial/by-id/ path (ports shuffle; by-id does not)"
-[[ "$FILTER_GROUP" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || die "bad filter group"
+[[ "$MODE" == server && -z "$FILTER_GROUP" ]] || [[ "$FILTER_GROUP" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || die "bad filter group"
 [[ -z "$REGION" || "$REGION" =~ ^(EU_868|US)$ ]] || die "bad region"
 [[ -z "$CHANNEL" || "$CHANNEL" =~ ^[A-Za-z0-9_-]{1,11}$ ]] || die "bad channel name"
 REGION="${REGION:-EU_868}"; CHANNEL="${CHANNEL:-unknown}"
@@ -155,6 +164,7 @@ want_conf() {
     [[ -z "$MAP_MBTILES_DIR" ]] || printf 'MAP_MBTILES_DIR=%s\n' "$MAP_MBTILES_DIR"
     [[ -z "$MAP_GPS" ]] || printf 'MAP_GPS=%s\n' "$MAP_GPS"
     printf 'UPDATE_REPO=%s\nUPDATE_MODE=%s\nUPDATE_CHANNEL=%s\n' "$UPDATE_REPO" "$UPDATE_MODE" "$UPDATE_CHANNEL"
+    [[ "$MODE" == tak-server ]] || printf 'MODE=%s\n' "$MODE"   # the default stays implicit, so a box already installed reports nothing to change
 }
 same_conf=0
 if [[ -f "$CONF" ]] && diff -q <(grep -v '^#' "$CONF") <(want_conf | grep -v '^#') >/dev/null 2>&1; then same_conf=1; fi
@@ -207,7 +217,9 @@ fi
 
 # ---- 3. the TAK input, with its filter group at creation (LESSONS 16) ----------------------
 INPUT_NEW=0
-if [[ -f "$CC" ]]; then
+if [[ "$MODE" == server ]]; then
+    log "MODE=server: no TAK Server on this box; no TAK input to create and nothing is forwarded"
+elif [[ -f "$CC" ]]; then
     if python3 - "$CC" <<'PYCHK'
 import re, sys
 s = re.sub(r"<!--.*?-->", "", open(sys.argv[1]).read(), flags=re.S)
@@ -413,7 +425,7 @@ if (( ! DRY )); then
     sleep 3
     systemctl is-active --quiet "$UNIT" || die "$UNIT is not active - read journalctl -u $UNIT"
     systemctl is-active --quiet "$WEBUNIT" || die "$WEBUNIT is not active - read journalctl -u $WEBUNIT"
-    log "bridge running on $SERIAL, channel $CHANNEL, region $REGION, filter group $FILTER_GROUP"
+    log "bridge running on $SERIAL, channel $CHANNEL, region $REGION${FILTER_GROUP:+, filter group $FILTER_GROUP}, mode $MODE"
     log "the proof is a marker on a client that signed in normally, and the heartbeat updating in $L_STATE"
 fi
 (( INPUT_NEW )) && (( DRY )) && echo "would: restart takserver once, because the input is new"

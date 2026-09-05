@@ -100,8 +100,9 @@ alert currently open.
 
 ## What it needs
 
-A Linux box with a Meshtastic radio on USB, Python 3.11 or later, and a TAK Server to forward
-to if you want the bridge. Everything else travels in the release. The reference deployment is
+A Linux box with a Meshtastic radio on USB and Python 3.11 or later. A TAK Server beside it is
+optional: with one, the bridge forwards the mesh to it as CoT; without one, install with
+`--mode server` and the box manages the mesh on its own. Everything else travels in the release. The reference deployment is
 a mini PC with a Heltec V4 gateway radio and Seeed T1000-E trackers, but nothing about the
 hardware is hard-coded.
 
@@ -114,6 +115,14 @@ Take the release tarball and its `install.sh` from the
 ./install.sh mesh-manager-<version>-amd64.tgz \
   --serial /dev/serial/by-id/<your radio> \
   --filter-group <your TAK group>
+```
+
+On a box with no TAK Server, the server shape instead:
+
+```bash
+./install.sh mesh-manager-<version>-amd64.tgz \
+  --serial /dev/serial/by-id/<your radio> \
+  --mode server
 ```
 
 `--help` lists the rest: where to bind, whether to ask for a password, where the map tiles
