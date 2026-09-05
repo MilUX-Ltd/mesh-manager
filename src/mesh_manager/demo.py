@@ -141,7 +141,10 @@ def serve_one(c):
         c.sendall(b'{"error": "bad request"}\n'); c.close(); return
     op = req.get("op")
     if op == "events":
-        c.sendall(b'{"kind": "hello"}\n'); clients.append(c); return
+        c.sendall(b'{"kind": "hello"}\n'); clients.append(c)
+        # Spec 053: one message that arrived over the link, so the Messages page shows a remote chat
+        c.sendall((json.dumps({"kind": "text", "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "from": "!ee000007", "name": "Edge tracker", "to": "^all", "channel": 0,
+                               "channel_name": "MILUX-TAK", "text": "at the edge RV, all well", "origin": "ed" * 32, "origin_name": "Edge laptop"}) + "\n").encode()); return
     if op == "traceroute":
         threading.Thread(target=answer_traceroute, args=(req.get("dest"),), daemon=True).start()
         c.sendall((json.dumps({"requested": "traceroute", "dest": req.get("dest"), "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n").encode()); c.close(); return
@@ -177,7 +180,7 @@ def serve_one(c):
                "rotation_mark": {"marked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "index": int(req.get("index") or 0), "name": "MESH-DEMO", "expected": 4, "confirmed": True}}[op]
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op in ("alerts", "alert_settings", "alert_set", "alert_test"):
-        rep = {"alerts": {"open": [], "recent": [{"ts": DEMO_HISTORY["telemetry"][-1]["ts"], "node": "!ee000004", "kind": "battery", "text": "Tracker 4 battery 5%", "state": "open", "cleared": None}], "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
+        rep = {"alerts": {"open": [{"node": "!ee000007", "kind": "silent", "text": "Edge tracker silent for 35 min", "since": "2026-09-05T09:40:00Z", "origin": "ed" * 32, "origin_name": "Edge laptop"}], "recent": [{"ts": DEMO_HISTORY["telemetry"][-1]["ts"], "node": "!ee000004", "kind": "battery", "text": "Tracker 4 battery 5%", "state": "open", "cleared": None}], "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
                "alert_settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True},
                "alert_set": {"written": {k: req.get(k) for k in ("silent_min", "battery_pct", "unknown", "fence_m", "to_tak") if req.get(k) is not None}, "confirmed": True},
                "alert_test": {"sent": True, "observe": False, "note": "a GeoChat to All Chat Rooms"}}[op]
@@ -197,7 +200,8 @@ def serve_one(c):
                                                           {"from": "!ee000002", "from_name": "Tracker 2", "to": "!ee000001", "to_name": "Gateway", "snr": 1.5, "ts": "2026-09-03T01:19:00Z"}]}
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op == "waypoints":
-        rep = {"waypoints": [{"wid": 4242, "node": "!ee000003", "name": "RV Alpha", "description": "meet here", "lat": 51.5012, "lon": -0.1188, "expire": 4102444800, "ts": "2026-09-03T01:15:00Z"}], "count": 1}
+        rep = {"waypoints": [{"wid": 4242, "node": "!ee000003", "name": "RV Alpha", "description": "meet here", "lat": 51.5012, "lon": -0.1188, "expire": 4102444800, "ts": "2026-09-03T01:15:00Z"},
+                             {"wid": 7777, "node": "!ee000007", "name": "Edge RV", "description": "from the edge", "lat": 51.4535, "lon": -0.9760, "expire": 4102444800, "ts": "2026-09-05T09:25:00Z", "origin": "ed" * 32, "origin_name": "Edge laptop"}], "count": 2}
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     if op == "send_text":  # Spec 051: the demo sends too, so the composer, the picker and Send again can be tried with no radio
         text = str(req.get("text") or ""); to = str(req.get("to") or "^all"); ch = int(req.get("channel") or 0)
@@ -310,10 +314,11 @@ def serve_one(c):
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
     rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),
            "peers": {"site": {"id": "ee" * 32, "short": "eeeeeeeeeeee", "name": "Demo box", "address": "demo.example", "listening": True, "port": 8094},
-                     "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}}, "note": None}],
+                     "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}, "messages": {"out": True, "in": True, "channels": [0]}, "waypoints": {"out": True, "in": True}, "alerts": {"out": True, "in": True}}, "note": None}],
                      "invites": [], "pictures": [{"origin": "ed" * 32, "name": "Edge laptop", "nodes": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}]},
            "peer_invite": {"invite": "demo.example:8094/" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)) + "/" + "ee" * 32, "code": "DEMO", "expires": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 600)), "fingerprint": "ee" * 32, "qr_svg": None, "note": "read once, good for 10 minutes, one use"},
            "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
+           "peer_sharing_set": {"written": {"out": True, "in": True}, "site": req.get("site"), "cls": req.get("cls"), "confirmed": True},
            "bench_devices": {"gateway": STATUS["radio"], "devices": [
                {"path": "/dev/serial/by-id/usb-Seeed_T1000-E_9F3A-if00", "tty": "ttyACM3", "bootloader": False},
                {"path": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_BOOT-if00", "tty": "ttyACM4", "bootloader": True,

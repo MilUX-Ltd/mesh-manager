@@ -1400,7 +1400,7 @@ OVERLAY_JS = r"""<script>
   // Spec 041: waypoints heard on the mesh, as pins; Spec 042: neighbour edges between positioned nodes
   var wps_=L.layerGroup().addTo(map),graph_=L.layerGroup().addTo(map),wpsOn=document.getElementById('wps-on'),graphOn=document.getElementById('graph-on');
   function fetchWaypoints(){if(wpsOn&&!wpsOn.checked){wps_.clearLayers();return;}fetch('/api/waypoints').then(function(r){return r.json();}).then(function(j){wps_.clearLayers();(j.waypoints||[]).forEach(function(w){if(w.lat===null||w.lat===undefined)return;
-    L.circleMarker([w.lat,w.lon],{radius:7,color:tok('--gold'),weight:3,fillColor:tok('--surface-raised'),fillOpacity:1}).bindTooltip(w.name+(w.description?' · '+w.description:''),{permanent:true,direction:'top',className:'mm-node'}).addTo(wps_);});}).catch(function(){});}
+    L.circleMarker([w.lat,w.lon],{radius:7,color:tok('--gold'),weight:3,fillColor:tok('--surface-raised'),fillOpacity:1}).bindTooltip(w.name+(w.description?' · '+w.description:'')+(w.origin_name?' · via '+w.origin_name:''),{permanent:true,direction:'top',className:'mm-node'}).addTo(wps_);});}).catch(function(){});}
   function fetchGraph(){if(!graphOn||!graphOn.checked||!lastJ){graph_.clearLayers();return;}fetch('/api/neighbors?hours='+(trailHours()||24)).then(function(r){return r.json();}).then(function(j){graph_.clearLayers();var by={};(lastJ.nodes||[]).forEach(function(n){by[n.id]=n;});if(lastJ.own&&lastJ.own.id)by[lastJ.own.id]=lastJ.own;
     (j.edges||[]).forEach(function(x){var a=by[x.from],b=by[x.to];if(!a||!b||a.lat===null||a.lat===undefined||b.lat===null||b.lat===undefined)return;
       L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:tok(bandTok(band(x.snr))),weight:2,dashArray:'2 6',opacity:.9}).bindTooltip((x.from_name||x.from)+' hears '+(x.to_name||x.to)+' at '+x.snr+' dB',{sticky:true,className:'mm-link'}).addTo(graph_);});}).catch(function(){});}
@@ -2702,7 +2702,7 @@ def alerts_section(al, tak_on=True):
     al = al or {}
     st = al.get("settings") or {}
     kinds = {"silent": "warn", "battery": "warn", "unknown": "bad", "fence": "bad", "geofence": "warn", "key": "bad"}
-    open_rows = "".join(f"<tr><td><span class='pill' style='background:var(--{kinds.get(o.get('kind'), 'warn')});color:#fff;border-color:transparent'>{e(o.get('kind'))}</span></td><td>{e(o.get('text'))}</td><td class='meta'><time datetime='{e(o.get('since'))}' data-age>{e(age(o.get('since')))}</time></td></tr>" for o in al.get("open") or [])
+    open_rows = "".join(f"<tr><td><span class='pill' style='background:var(--{kinds.get(o.get('kind'), 'warn')});color:#fff;border-color:transparent'>{e(o.get('kind'))}</span></td><td>{e(o.get('text'))}{(' <span class=pill>via ' + e(str(o.get('origin_name'))) + '</span>') if o.get('origin_name') else ''}</td><td class='meta'><time datetime='{e(o.get('since'))}' data-age>{e(age(o.get('since')))}</time></td></tr>" for o in al.get("open") or [])
     recent = "".join(f"<tr><td class='meta'><time datetime='{e(r.get('ts'))}' data-age>{e(age(r.get('ts')))}</time></td><td>{e(r.get('kind'))}</td><td>{e(r.get('text'))}</td><td class='meta'>{'cleared ' + e(hhmm(r.get('cleared'))) if r.get('state') == 'cleared' else 'open'}</td></tr>" for r in list(reversed(al.get("recent") or []))[:20])
     a = _act("alert_set"); t = _act("alert_test")
     def opt(name, on):
@@ -3060,12 +3060,12 @@ CHAT_JS = r"""<script>
 (function(){
   var root=document.getElementById('chat');if(!root)return;var D=JSON.parse(root.dataset.chat||'{}'),own=D.own||'';
   /* chat:pure:start */
-  function chatKey(m,own){var to=String(m.to||'^all'),from=String(m.from||'');if(to==='^all'||to==='!ffffffff'||to==='')return 'ch:'+((m.channel===undefined||m.channel===null)?0:m.channel);if(from===own)return 'dm:'+to;if(to===own)return 'dm:'+from;return 'dm:'+from;}
+  function chatKey(m,own){var to=String(m.to||'^all'),from=String(m.from||'');if(to==='^all'||to==='!ffffffff'||to==='')return 'ch:'+((m.channel===undefined||m.channel===null)?0:m.channel)+(m.origin?'@'+String(m.origin).slice(0,12):'');if(from===own)return 'dm:'+to;if(to===own)return 'dm:'+from;return 'dm:'+from;}
   function chatsFrom(msgs,own,channels,groups,seen){seen=seen||{};var by={};
     function ent(key,name,sub){if(!by[key])by[key]={key:key,name:name,sub:sub||'',last:'',ts:null,unread:0,count:0};return by[key];}
     (channels||[]).forEach(function(c){if(c.role==='DISABLED')return;ent('ch:'+c.index,c.name||('slot '+c.index),'everyone on the channel');});
     (groups||[]).forEach(function(g){ent('group:'+g.name,g.name,(g.count||0)+' device'+(g.count===1?'':'s')+', one message each');});
-    (msgs||[]).forEach(function(m){var k=chatKey(m,own);var e=ent(k,k.indexOf('dm:')===0?(m.from===own?String(m.to):(m.name||m.from)):k,k.indexOf('dm:')===0?'direct':'');
+    (msgs||[]).forEach(function(m){var k=chatKey(m,own);var e=ent(k,k.indexOf('dm:')===0?(m.from===own?String(m.to):(m.name||m.from)):(isRemoteChat(k)?((m.channel_name||('channel '+m.channel))+' via '+(m.origin_name||String(m.origin).slice(0,12))):k),k.indexOf('dm:')===0?'direct':(isRemoteChat(k)?'from another site, read here':''));if(isRemoteChat(k)){e.remote=true;e.origin=m.origin;e.origin_name=m.origin_name;}
       var ts=Date.parse(m.ts||'')||0;if(!e.ts||ts>=e.ts){e.ts=ts;e.last=m.text||'';}e.count++;if(m.from!==own&&ts>(seen[k]||0))e.unread++;});
     (groups||[]).forEach(function(g){var e=by['group:'+g.name];(g.members||[]).forEach(function(id){var d=by['dm:'+id];if(d&&d.ts&&(!e.ts||d.ts>e.ts)){e.ts=d.ts;e.last=d.last;}});});
     function rank(k){return k.indexOf('ch:')===0?0:(k.indexOf('group:')===0?1:2);}
@@ -3073,6 +3073,7 @@ CHAT_JS = r"""<script>
   function openPane(open,key,max){var o=(open||[]).filter(function(k){return k!==key;});o.push(key);while(o.length>max)o.shift();return o;}
   function unreadCount(msgs,key,own,seenTs){return (msgs||[]).filter(function(m){return chatKey(m,own)===key&&m.from!==own&&(Date.parse(m.ts||'')||0)>(seenTs||0);}).length;}
   function needsConfirm(key){return key.indexOf('ch:')===0||key.indexOf('group:')===0;}
+  function isRemoteChat(key){return String(key||'').indexOf('@')>0;}   /* Spec 053: a channel that arrives from a peer */
   function recipients(nodes,channels,groups,own,q){q=String(q||'').trim().toLowerCase();var out=[];
     (channels||[]).forEach(function(c){if(c.role==='DISABLED')return;out.push({key:'ch:'+c.index,name:c.name||('slot '+c.index),sub:'everyone on the channel',kind:'channel'});});
     (groups||[]).forEach(function(g){out.push({key:'group:'+g.name,name:g.name,sub:(g.count||0)+' device'+(g.count===1?'':'s')+', one message each',kind:'group'});});
@@ -3143,13 +3144,14 @@ CHAT_JS = r"""<script>
     if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;win.dataset.seenAt=String(seen[key]||0);
       win.innerHTML="<div class='chat-head'><button type='button' class='line icon back' aria-label='Back to the chats' data-tip='Back to the chats'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 3 5 8l5 5'/></svg></button><span class='nodeicon'>"+chatIcon(c)+"</span><span class='nm'><span class='name'></span><br><span class='sub'></span></span><details class='chat-menu'><summary class='line icon' aria-label='More for this chat' data-tip='More for this chat' data-tip-more='Mark read or unread, pin, mute, hide'>"+(D.dots||'&#8943;')+"</summary><div class='menu-list' role='menu'></div></details><button type='button' class='line icon close' aria-label='Close this chat' data-tip='Close this chat'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' aria-hidden='true'><path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/></svg></button></div><div class='chat-msgs'></div>";
       win.appendChild(document.getElementById('chat-composer').content.cloneNode(true));
+      if(isRemoteChat(key)){var cf=win.querySelector('.chat-compose');if(cf){cf.innerHTML="<p class='meta'>These messages arrive from "+esc(c.origin_name||'another site')+". Replying onto that mesh needs the air switch, which comes in a later release.</p>";}}
       win.querySelector('.close').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.toggle('open',open.length>0);renderList();});
       win.querySelector('.back').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.remove('open');renderList();});
       win.querySelector('.menu-list').addEventListener('click',function(ev){var b=ev.target.closest('[data-act]');if(!b)return;win.querySelector('details.chat-menu').open=false;act(key,b.dataset.act);});
       var f=win.querySelector('form'),note=win.querySelector('.note');
-      note.textContent=key.indexOf('ch:')===0?'Everyone on the channel sees this; it is never acknowledged.':(key.indexOf('group:')===0?'One direct message per device, each with its own receipt.':'Only this radio sees it; the receipt shows on the bubble.');
+      if(note)note.textContent=key.indexOf('ch:')===0?'Everyone on the channel sees this; it is never acknowledged.':(key.indexOf('group:')===0?'One direct message per device, each with its own receipt.':'Only this radio sees it; the receipt shows on the bubble.');
       win.querySelectorAll('[data-quick]').forEach(function(b){b.addEventListener('click',function(){f.elements.text.value=b.getAttribute('data-quick');f.elements.text.focus();});});
-      f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();var text=f.elements.text.value;if(!text.trim())return;
+      if(f)f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopImmediatePropagation();var text=f.elements.text.value;if(!text.trim())return;
         var body={text:text,channel:0,to:'^all'},confirmText='';
         if(key.indexOf('ch:')===0){body.channel=parseInt(key.slice(3),10);body.to='^all';confirmText=root.dataset.confirmChannel.replace('{channel}',c.name).replace('{count}',String(D.heard||0)).replace('{text}',text);}
         else if(key.indexOf('group:')===0){body.to=key;confirmText=root.dataset.confirmGroup.replace('{group}',c.name).replace('{text}',text);}
@@ -3253,6 +3255,24 @@ def activity_body(web):
 
 
 
+def sharing_fold(q):
+    """Spec 053: one peer's sharing table. One small form per class; Air is shown and held for slice 4."""
+    sid = e(str(q.get("id") or "")); sh = q.get("sharing") or {}
+    words = {"nodes": ("The picture", "nodes, positions, battery, signal"), "messages": ("Messages", "broadcasts on the channels picked; direct messages never cross"),
+             "waypoints": ("Waypoints", "pins heard on the mesh"), "alerts": ("Alerts", "quiet, battery, unknown, fence")}
+    onoff = (("on", "On"), ("off", "Off")); rows = ""
+    for cls in ("nodes", "messages", "waypoints", "alerts"):
+        row = sh.get(cls) or {}; title, what = words[cls]
+        chans = ("<input type='text' name='channels' value='" + e(",".join(str(c) for c in (row.get("channels") or []))) + "' placeholder='all' size='6' aria-label='channels that leave' data-tip='Channel indexes' data-tip-more='Comma-separated local channel indexes whose broadcasts leave; empty is every channel'>") if cls == "messages" else ""
+        rows += (f"<tr><td><b>{title}</b><div class='meta'>{what}</div></td>"
+                 f"<td><form data-action='peer_sharing_set' class='share-form'><input type='hidden' name='site' value='{sid}'><input type='hidden' name='cls' value='{cls}'>"
+                 f"<div class='row-actions'><span class='meta'>Out</span>{seg('out', onoff, 'on' if row.get('out') else 'off')}<span class='meta'>In</span>{seg('in', onoff, 'on' if row.get('in', True) else 'off')}{chans}"
+                 f"<span class='meta' data-tip='Air is held' data-tip-more='Rebroadcasting what arrives onto this mesh comes in a later release (slice 4)'>Air <span class='pill'>off · slice 4</span></span>"
+                 f"<button class='line'>Save</button></div><div class='res meta' role='status'></div></form></td></tr>")
+    return (f"<details class='fold'><summary>Sharing with {e(str(q.get('name') or ''))}</summary><p class='meta'>What leaves this site for that peer (Out) and what this site shows from it (In). Channel keys, join URLs, admin traffic and direct messages are not on this table: they never cross.</p>"
+            f"<div class='tablewrap'><table><thead><tr><th>Class</th><th>Switches</th></tr></thead><tbody>{rows}</tbody></table></div></details>")
+
+
 def peers_section(p):
     """Spec 052: this site, its peers, an invite and a join, on the Connections page."""
     p = p or {}
@@ -3268,7 +3288,8 @@ def peers_section(p):
         note = f" <span class='meta'>{e(str(q.get('note')))}</span>" if q.get("note") else ""
         rows += (f"<tr><td><i class='lamp lamp--{lamp}'></i> {e(str(q.get('name')))}<div class='meta'>{e(str(q.get('id') or '')[:12])} · {e(str(q.get('direction') or ''))}</div></td>"
                  f"<td>{e(str(q.get('state')))}{note}</td><td class='meta'>{('<time datetime=' + chr(39) + e(str(q.get('last_seen'))) + chr(39) + ' data-age>' + e(age(q.get('last_seen'))) + '</time>') if q.get('last_seen') else 'never'}</td>"
-                 f"<td>{int(q.get('nodes') or 0)}</td><td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: its pin, its link and its picture leave this site.' style='display:inline'><input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>")
+                 f"<td>{int(q.get('nodes') or 0)}</td><td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: its pin, its link and its picture leave this site.' style='display:inline'><input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>"
+                 f"<tr class='share-row'><td colspan='5'>{sharing_fold(q)}</td></tr>")
     table = (f"<div class='tablewrap'><table><thead><tr><th>Peer</th><th>State</th><th>Last seen</th><th>Nodes</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=5 class=meta>No peers yet. Invite one from here, or join another site with its invite.</td></tr>'}</tbody></table></div>")
     a_inv, a_join = _act("peer_invite"), _act("peer_join")
     invite = (f"<form data-action='peer_invite' class='card' data-risk='change' data-confirm=\"{e(a_inv.get('confirm') or '')}\" id='peer-invite'><h3 style='margin-top:0'>{e(a_inv['title'])}</h3><p class='meta'>{e(a_inv['description'])}</p>"
@@ -3278,7 +3299,7 @@ def peers_section(p):
     js = ("<script>document.addEventListener('mm-written',function(ev){var d=ev.detail||{},a=d.action,r=d.result||{};"
           "if(a==='peer_invite'){var o=document.querySelector('#peer-invite .invite-out');if(!o)return;o.innerHTML='';var pre=document.createElement('pre');pre.className='fleet-out';pre.style.userSelect='all';pre.textContent=r.invite||'';o.appendChild(pre);"
           "var m=document.createElement('p');m.className='meta';m.textContent=(r.note||'')+(r.expires?' · expires '+r.expires:'');o.appendChild(m);if(r.qr_svg){var q=document.createElement('div');q.style.maxWidth='240px';q.innerHTML=r.qr_svg;o.appendChild(q);}}"
-          "if(a==='peer_join'||a==='peer_forget'){setTimeout(function(){fetch('/connections').then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var n=d.getElementById('peers-section'),o=document.getElementById('peers-section');if(n&&o){o.replaceWith(n);}});},1200);}});</script>")
+          "if(a==='peer_join'||a==='peer_forget'||a==='peer_sharing_set'){setTimeout(function(){fetch('/connections').then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var n=d.getElementById('peers-section'),o=document.getElementById('peers-section');if(n&&o){o.replaceWith(n);}});},1200);}});</script>")
     return f"<section id='peers-section'>{head}{table}<div class='cards'>{invite}{join}</div>{js}</section>"
 
 

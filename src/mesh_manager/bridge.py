@@ -272,6 +272,8 @@ class Bridge(TAKMeshtasticGateway):
     box_mode = "tak-server"   # Spec 050: the class default, so a bridge built without __init__ (the suites do) still has a shape
     peering = None            # Spec 052: the site's identity, pins and links; None on a bridge built without __init__
     remote_nodes = {}         # Spec 052: origin site id -> {"name", "ts", "nodes": [...]}
+    remote_waypoints = {}     # Spec 053: origin site id -> {wid: record}
+    remote_alerts = {}        # Spec 053: origin site id -> {"node:kind": record}
     def __init__(self, conf, socket_path=DEFAULT_SOCKET, state_dir=DEFAULT_STATE, observe=False,
                  silence_limit=SILENCE_LIMIT, gps_reader=True):
         self.conf = conf
@@ -280,7 +282,7 @@ class Bridge(TAKMeshtasticGateway):
         self.observe = observe
         _m = str(conf.get("MODE") or "").strip().lower()
         self.box_mode = _m if _m in ("server", "hub") else "tak-server"  # Spec 050 and 052
-        self.remote_nodes = {}
+        self.remote_nodes = {}; self.remote_waypoints = {}; self.remote_alerts = {}
         self._peers_lock = threading.RLock()
         self.silence_limit = silence_limit
         self.started = time.time()
@@ -417,8 +419,9 @@ class Bridge(TAKMeshtasticGateway):
         if isinstance(packet, dict) and d.get("portnum") == "TEXT_MESSAGE_APP":
             fr = packet.get("fromId")
             dev = getattr(self, "meshtastic_devices", {}).get(fr, {}) if fr else {}
-            self._emit("text", **{"from": fr, "name": dev.get("long_name") or fr, "to": packet.get("toId"),
-                                  "channel": packet.get("channel", 0), "text": d.get("text") or ""})
+            _msg = {"from": fr, "name": dev.get("long_name") or fr, "to": packet.get("toId"), "channel": packet.get("channel", 0), "text": d.get("text") or ""}
+            self._emit("text", **_msg)
+            self._share_text(_msg)   # Spec 053
         fr = packet.get("fromId") if isinstance(packet, dict) else None
         if fr and d.get("portnum") == "TELEMETRY_APP":
             dm = (d.get("telemetry") or {}).get("deviceMetrics") or {}
@@ -637,7 +640,15 @@ class Bridge(TAKMeshtasticGateway):
 
 
     # ---- Spec 052: sites, pairing, the link, the picture -------------------------------------------
-    SHARING_DEFAULT = {"nodes": {"out": True, "in": True}}   # ADR 003's defaults, fixed in code until slice 3
+    # ADR 003's sharing table, per peer and per class (Spec 053). `air` is held off until slice 4. Direct messages,
+    # keys, admin traffic and firmware are not classes: they never cross.
+    SHARING_DEFAULT = {"nodes": {"out": True, "in": True}, "messages": {"out": False, "in": True, "channels": []},
+                       "waypoints": {"out": True, "in": True}, "alerts": {"out": True, "in": True}}
+    SHARING_CLASSES = ("nodes", "messages", "waypoints", "alerts")
+
+    @classmethod
+    def _sharing_defaults(cls):
+        return {k: dict(v, channels=list(v.get("channels", []))) if "channels" in v else dict(v) for k, v in cls.SHARING_DEFAULT.items()}
 
     def _peers_path(self):
         return os.path.join(self.state_dir, "peers.json")
@@ -683,7 +694,7 @@ class Bridge(TAKMeshtasticGateway):
 
     def peer_pin(self, peer_id, name, cert_pem, direction):
         with self._peers_lock:
-            d = self._peers_load(); rec = d["peers"].setdefault(str(peer_id), {"added": utc(time.time()), "sharing": dict(self.SHARING_DEFAULT)})
+            d = self._peers_load(); rec = d["peers"].setdefault(str(peer_id), {"added": utc(time.time()), "sharing": self._sharing_defaults()})
             if name: rec["name"] = name
             if cert_pem: rec["cert"] = cert_pem
             rec["direction"] = direction; rec["last_seen"] = utc(time.time())
@@ -722,30 +733,128 @@ class Bridge(TAKMeshtasticGateway):
                     it = dict(it); it["path"] = list(it.get("path", [])) + [self.peering.id]; link.send({"item": it})
 
     def _sharing(self, peer_id):
+        """The peer's table with the defaults under it, class by class."""
         rec = self.peer_pinned(peer_id) if peer_id else None
-        sh = dict(self.SHARING_DEFAULT)
-        if rec and isinstance(rec.get("sharing"), dict):
-            sh.update(rec["sharing"])
+        sh = self._sharing_defaults()
+        stored = rec.get("sharing") if rec and isinstance(rec.get("sharing"), dict) else {}
+        for k, v in stored.items():
+            if k in sh and isinstance(v, dict):
+                sh[k].update(v)
         return sh
+
+    def op_peer_sharing_set(self, site="", cls="", out=None, channels=None, **kw):
+        """One class of one peer's table; `in` arrives in kw because it is a Python keyword."""
+        site = str(site or "").strip().lower(); cls = str(cls or "").strip().lower(); inn = kw.get("in")
+        if cls not in self.SHARING_CLASSES:
+            return {"error": f"no such class: {cls or '(none)'}; the table has {', '.join(self.SHARING_CLASSES)}"}
+        def onoff(v):
+            if v is None or v == "": return None
+            t = str(v).strip().lower()
+            if t in ("1", "true", "on", "yes"): return True
+            if t in ("0", "false", "off", "no"): return False
+            raise ValueError(t)
+        try:
+            o, i = onoff(out), onoff(inn)
+        except ValueError as ex:
+            return {"error": f"out and in are on or off, not {ex}"}
+        with self._peers_lock:
+            d = self._peers_load(); rec = d["peers"].get(site)
+            if not rec:
+                return {"error": "no such peer here: pair it first"}
+            sh = rec.setdefault("sharing", self._sharing_defaults()); row = sh.setdefault(cls, dict(self._sharing_defaults()[cls]))
+            if o is not None: row["out"] = o
+            if i is not None: row["in"] = i
+            if cls == "messages" and channels is not None:
+                try:
+                    row["channels"] = sorted({int(x) for x in re.split(r"[,\s]+", str(channels)) if x.strip() != ""})
+                except ValueError:
+                    return {"error": "channels are channel indexes, 0 to 7, separated by commas"}
+                if any(not 0 <= c <= 7 for c in row["channels"]):
+                    return {"error": "channels are channel indexes, 0 to 7"}
+            self._peers_save(d)
+        self._emit("peers", state="sharing", site=site, cls=cls)
+        return {"written": dict(row), "site": site, "cls": cls, "confirmed": True}
+
+    def _channel_name(self, index):
+        try:
+            for c in self.op_channels().get("channels", []):
+                if int(c.get("index", -1)) == int(index):
+                    return c.get("name") or f"slot {index}"
+        except Exception:  # noqa: BLE001
+            pass
+        return f"channel {index}"
+
+    def _peer_share(self, cls, data):
+        """Send one item of a class to every connected peer whose table lets it out."""
+        if not self.peering:
+            return
+        item = {"class": cls, "origin": self.peering.id, "origin_name": self.peering.name, "path": [self.peering.id], "ts": utc(time.time()), "data": data}
+        for pid, link in self.peering.connected().items():
+            row = self._sharing(pid).get(cls) or {}
+            if not row.get("out"):
+                continue
+            if cls == "messages" and row.get("channels") and int(data.get("channel") or 0) not in row["channels"]:
+                continue
+            link.send({"item": item})
+
+    def _share_text(self, msg):
+        """A broadcast heard or sent here goes to the peers; a direct message never does (the never-list)."""
+        to = str(msg.get("to") or "^all")
+        if to not in ("^all", "!ffffffff", ""):
+            return
+        d = {k: msg.get(k) for k in ("from", "name", "to", "channel", "text", "mid", "sent") if k in msg}
+        d["channel"] = int(msg.get("channel") or 0); d["channel_name"] = self._channel_name(d["channel"]); d["ts"] = utc(time.time())
+        self._peer_share("messages", d)
 
     def peer_item(self, link, item):
         if not self.peering or not P.accept_item(item, self.peering.id):
             return
-        if item.get("class") != "nodes" or not self._sharing(link.peer_id).get("nodes", {}).get("in", True):
+        cls = str(item.get("class") or ""); origin = str(item.get("origin") or ""); oname = str(item.get("origin_name") or origin[:12])
+        if cls not in self.SHARING_CLASSES or not origin:
             return
-        origin = str(item.get("origin") or "")
-        if not origin:
+        if not self._sharing(link.peer_id).get(cls, {}).get("in", True):
             return
-        with self._peers_lock:
-            self.remote_nodes[origin] = {"name": str(item.get("origin_name") or origin[:12]), "ts": time.time(), "via": link.peer_id, "item": item,
-                                        "nodes": [dict(n) for n in (item.get("data") or []) if isinstance(n, dict) and n.get("id")]}
-        self._emit("peers", state="picture", site=origin, count=len(item.get("data") or []))
+        data = item.get("data")
+        if cls == "nodes":
+            with self._peers_lock:
+                self.remote_nodes[origin] = {"name": oname, "ts": time.time(), "via": link.peer_id, "item": item,
+                                             "nodes": [dict(n) for n in (data or []) if isinstance(n, dict) and n.get("id")]}
+            self._emit("peers", state="picture", site=origin, count=len(data or []))
+        elif cls == "messages" and isinstance(data, dict):
+            to = str(data.get("to") or "^all")
+            if to not in ("^all", "!ffffffff", ""):
+                return  # a direct message is never accepted either
+            ev = {k: v for k, v in data.items() if k not in ("kind", "origin", "origin_name")}
+            self._emit("text", origin=origin, origin_name=oname, **ev)
+        elif cls == "waypoints" and isinstance(data, dict) and data.get("wid") is not None:
+            with self._peers_lock:
+                bag = self.remote_waypoints.setdefault(origin, {})
+                if data.get("gone"):
+                    bag.pop(int(data["wid"]), None)
+                else:
+                    rec = {k: v for k, v in data.items() if k != "gone"}; rec["origin"] = origin; rec["origin_name"] = oname; bag[int(data["wid"])] = rec
+            self._emit("waypoint", gone=bool(data.get("gone")), origin=origin, origin_name=oname, **{k: v for k, v in data.items() if k != "gone"})
+        elif cls == "alerts" and isinstance(data, dict):
+            key = f"{data.get('node')}:{data.get('kind')}"
+            with self._peers_lock:
+                bag = self.remote_alerts.setdefault(origin, {})
+                if data.get("state") == "cleared":
+                    bag.pop(key, None)
+                else:
+                    bag[key] = {"node": data.get("node"), "kind": data.get("kind"), "text": data.get("text"), "since": data.get("since") or utc(time.time()), "origin": origin, "origin_name": oname}
+            self._emit("alert", state=data.get("state") or "open", node=data.get("node"), what=data.get("kind"), text=data.get("text"), origin=origin, origin_name=oname, tak=False)
+        else:
+            return
         fwd = dict(item); fwd["path"] = list(item.get("path") or []) + [self.peering.id]
         for pid, l in self.peering.connected().items():
             if pid == link.peer_id or pid in fwd["path"] or pid == origin:
                 continue
-            if self._sharing(pid).get("nodes", {}).get("out", True):
-                l.send({"item": fwd})
+            row = self._sharing(pid).get(cls, {})
+            if not row.get("out", True):
+                continue
+            if cls == "messages" and row.get("channels") and int((data or {}).get("channel") or 0) not in row["channels"]:
+                continue
+            l.send({"item": fwd})
 
     def _remote_rows(self, own_ids):
         rows = []
@@ -822,7 +931,7 @@ class Bridge(TAKMeshtasticGateway):
         if inv["fingerprint"] == self.peering.id:
             return {"error": "that is this site's own invite"}
         with self._peers_lock:
-            d = self._peers_load(); rec = d["peers"].setdefault(inv["fingerprint"], {"added": utc(time.time()), "sharing": dict(self.SHARING_DEFAULT)})
+            d = self._peers_load(); rec = d["peers"].setdefault(inv["fingerprint"], {"added": utc(time.time()), "sharing": self._sharing_defaults()})
             rec["address"] = f"{inv['host']}:{inv['port']}"; rec["direction"] = "out"; self._peers_save(d)
         result = []
         self.peering.dial(inv["fingerprint"], inv["host"], inv["port"], inv["code"], first_result=result)
@@ -1070,8 +1179,9 @@ class Bridge(TAKMeshtasticGateway):
         if pid is not None:
             self.outbox[int(pid)] = {"ts": utc(time.time()), "text": text, "to": dest, "channel": int(channel or 0), "ack": None}
         own0 = self._own() or {}
-        self._emit("text", **{"from": own0.get("id"), "name": own0.get("name") or "this box", "to": dest, "channel": int(channel or 0),
-                              "text": text, "mid": pid, "sent": True})
+        _msg = {"from": own0.get("id"), "name": own0.get("name") or "this box", "to": dest, "channel": int(channel or 0), "text": text, "mid": pid, "sent": True}
+        self._emit("text", **_msg)
+        self._share_text(_msg)   # Spec 053
         try:
             own = (self._own() or {})
             if getattr(self, "history", None) and self.history.ok:
@@ -2488,6 +2598,7 @@ class Bridge(TAKMeshtasticGateway):
             if h and h.ok:
                 h.waypoint(fr, wid, name=rec["name"], description=rec["description"], lat=rec["lat"], lon=rec["lon"], expire=rec["expire"], gone=1 if gone else 0)
             self._emit("waypoint", gone=bool(gone), **rec)
+            self._peer_share("waypoints", dict(rec, gone=bool(gone)))   # Spec 053
             if not gone:
                 self._tak_waypoint(rec)
         except Exception as e:  # noqa: BLE001
@@ -2519,6 +2630,9 @@ class Bridge(TAKMeshtasticGateway):
     def op_waypoints(self, **_):
         now = int(time.time())
         live = [w for w in self.waypoints.values() if not (w.get("expire") and w["expire"] < now)]
+        with self._peers_lock:  # Spec 053: the peers' waypoints, each with its origin
+            for bag in self.remote_waypoints.values():
+                live.extend(dict(w) for w in bag.values() if not (w.get("expire") and w["expire"] < now))
         return {"waypoints": sorted(live, key=lambda w: w.get("ts") or "", reverse=True), "count": len(live)}
 
     def op_waypoint_send(self, name="", description="", lat=None, lon=None, expire_min=60, **_):
@@ -3208,6 +3322,7 @@ class Bridge(TAKMeshtasticGateway):
             h.alert(node, kind, text)
         sent = self._tak_chat(f"[Mesh Manager] {text}") if a["settings"].get("to_tak") else False
         self._emit("alert", state="open", node=node, what=kind, text=text, tak=bool(sent))
+        self._peer_share("alerts", {"state": "open", "node": node, "kind": kind, "text": text, "since": a["open"][key]["since"]})   # Spec 053
         self.logger.warning(f"alert: {text}" + (" (told TAK)" if sent else ""))
         return True
 
@@ -3220,6 +3335,7 @@ class Bridge(TAKMeshtasticGateway):
         if h and h.ok:
             h.alert_clear(node, kind)
         self._emit("alert", state="cleared", node=node, what=kind)
+        self._peer_share("alerts", {"state": "cleared", "node": node, "kind": kind})   # Spec 053
         return True
 
     def _judge_alerts(self):
@@ -3303,7 +3419,11 @@ class Bridge(TAKMeshtasticGateway):
         a = self._alerts_load()
         h = getattr(self, "history", None)
         recent = h.query("alerts", limit=int(limit or 50)) if h and h.ok else []
-        return {"open": sorted(a["open"].values(), key=lambda x: x["since"], reverse=True), "recent": recent, "settings": a["settings"]}
+        open_ = list(a["open"].values())
+        with self._peers_lock:  # Spec 053: the peers' open alerts, each with its origin
+            for bag in self.remote_alerts.values():
+                open_.extend(dict(o) for o in bag.values())
+        return {"open": sorted(open_, key=lambda x: x.get("since") or "", reverse=True), "recent": recent, "settings": a["settings"]}
 
     def op_alert_test(self, **_):
         if self.box_mode in ("server", "hub"):

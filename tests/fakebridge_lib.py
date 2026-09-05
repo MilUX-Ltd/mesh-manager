@@ -96,7 +96,7 @@ class FakeBridge:
             self.calls.append((op, dict(req)))
             c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
         if op in ("alerts", "alert_settings", "alert_set", "alert_test"):
-            rep = {"alerts": {"open": [{"node": "!aa000001", "kind": "battery", "text": "Tracker9 battery 9%", "since": "2026-09-03T22:00:00Z"}],
+            rep = {"alerts": {"open": [{"node": "!ee000099", "kind": "silent", "text": "Tracker1 silent for 40 min", "since": "2026-09-03T21:50:00Z", "origin": "cd" * 32, "origin_name": "Edge laptop"}, {"node": "!aa000001", "kind": "battery", "text": "Tracker9 battery 9%", "since": "2026-09-03T22:00:00Z"}],
                               "recent": [{"ts": "2026-09-03T21:00:00Z", "node": "!bb000002", "kind": "silent", "text": "Tracker2 silent for 45 min", "state": "cleared", "cleared": "2026-09-03T21:30:00Z"}],
                               "settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}},
                    "alert_settings": {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True},
@@ -117,12 +117,13 @@ class FakeBridge:
                    "group_delete": {"removed": req.get("name"), "cleared": [], "confirmed": True}}[op]
             self.calls.append((op, dict(req)))
             c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
-        if op in ("inventory", "key_accept", "peers", "peer_invite", "peer_join", "peer_forget"):
+        if op in ("inventory", "key_accept", "peers", "peer_invite", "peer_join", "peer_forget", "peer_sharing_set"):
             rep = {"peers": {"site": {"id": "ab" * 32, "short": "abababababab", "name": "Dev hub", "address": "dev.example", "listening": True, "port": 8094},
-                             "peers": [{"id": "cd" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-03T01:00:00Z", "last_seen": "2026-09-03T02:00:00Z", "added": "2026-09-01T00:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}}, "note": None}],
+                             "peers": [{"id": "cd" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-03T01:00:00Z", "last_seen": "2026-09-03T02:00:00Z", "added": "2026-09-01T00:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}, "messages": {"out": False, "in": True, "channels": []}, "waypoints": {"out": True, "in": True}, "alerts": {"out": True, "in": True}}, "note": None}],
                              "invites": [], "pictures": [{"origin": "cd" * 32, "name": "Edge laptop", "nodes": 1, "ts": "2026-09-03T02:00:00Z"}]},
                    "peer_invite": {"invite": "dev.example:8094/ABCD2345/" + "ab" * 32, "code": "ABCD2345", "expires": "2026-09-03T02:10:00Z", "fingerprint": "ab" * 32, "qr_svg": None, "note": "read once, good for 10 minutes, one use"},
                    "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
+                   "peer_sharing_set": {"written": {"out": True, "in": True}, "site": req.get("site"), "cls": req.get("cls"), "confirmed": True},
                    "inventory": {"rows": [
                         {"id": "!aa000001", "name": "Tracker9", "hw": "TRACKER_T1000_E", "firmware": "2.6.11", "role": "TRACKER", "fingerprint": "3f9a1c0d7e2b", "key_since": "2026-09-02T10:00:00Z", "key_changed": None, "key_ack": None, "key_alarm": False, "managed": True, "behind": False, "behind_reason": "on the shelf's version", "confirmed": "2026-09-03T03:00:00Z", "heard": "2026-09-03T02:00:00Z"},
                         {"id": "!bb000002", "name": "Tracker2", "hw": "TRACKER_T1000_E", "firmware": "2.5.20", "role": None, "fingerprint": "aa11bb22cc33", "key_since": "2026-09-01T08:00:00Z", "key_changed": "2026-09-03T01:00:00Z", "key_ack": None, "key_alarm": True, "managed": False, "behind": True, "behind_reason": "behind the shelf's 2.6.11", "confirmed": "2026-09-03T01:00:00Z", "heard": "2026-09-03T01:50:00Z"},
@@ -200,7 +201,7 @@ NEIGHBORS = {"hours": 24, "edges": [{"from": "!aa000001", "from_name": "Tracker9
 AVAILABILITY = {"hours": 24, "bucket_secs": 3600, "buckets": 24, "nodes": [
     {"id": "!aa000001", "name": "Tracker 9 (recce)", "buckets": 24, "heard": 21, "pct": 88, "bucket_secs": 3600, "series": [1] * 21 + [0] * 3},
     {"id": "!bb000002", "name": "Tracker2", "buckets": 24, "heard": 2, "pct": 8, "bucket_secs": 3600, "series": [0] * 22 + [1, 1]}]}
-WAYPOINTS = {"waypoints": [{"wid": 4242, "node": "!aa000001", "name": "RV Alpha", "description": "meet here", "lat": 51.2015, "lon": -1.4985, "expire": 4102444800, "ts": "2026-09-03T21:40:00Z"}]}
+WAYPOINTS = {"waypoints": [{"wid": 7777, "node": "!ee000099", "name": "Far RV", "description": "from the edge", "lat": 51.45, "lon": -0.97, "expire": 4102444800, "ts": "2026-09-03T02:00:00Z", "origin": "cd" * 32, "origin_name": "Edge laptop"}, {"wid": 4242, "node": "!aa000001", "name": "RV Alpha", "description": "meet here", "lat": 51.2015, "lon": -1.4985, "expire": 4102444800, "ts": "2026-09-03T21:40:00Z"}]}
 
 
 def start_fake_bridge():

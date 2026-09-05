@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.12.0 (5 September 2026) Matt: "let's keep moving forward with this then", with the sharing table accepted
+as a start.
+
+- **The sharing table, per peer (Spec 053).** Each peer's row on Connections opens *Sharing*: four classes,
+  the picture, messages, waypoints and alerts, each with Out (leaves this site for that peer) and In (shown here
+  from that peer), the channel picks for messages, and Air shown but held for a later release. Defaults as
+  the ADR: the picture, waypoints and alerts out and in; messages out off. Direct messages, channel keys,
+  join URLs, admin traffic and firmware are not on the table and never cross.
+- **Messages, waypoints and alerts across the link.** A broadcast heard or sent on a channel that is let out
+  reaches the peers and shows in their Messages as its own read-only chat, *<channel> via <site>*; a
+  waypoint heard shows on the peers' maps marked *via <site>*; an alert raised shows on the peers' Health with
+  the site, and leaves when cleared. A hub passes each class on by its peers' switches. Nothing remote goes to
+  TAK chat or onto the air.
+- The demo shows a remote chat, waypoint and alert from "Edge laptop".
+
 ## 0.11.4 (5 September 2026) The 0.11.3 Python 3.14 tarball did not install: three compiled packages had no 3.14 wheels at
 the estate's pinned versions, the cut built them on the cutting machine and shipped Mac wheels, and the
 installer's venv check passed on a box whose venv module lacked ensurepip.

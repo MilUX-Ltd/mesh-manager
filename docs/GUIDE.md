@@ -201,6 +201,14 @@ and channel keys never cross; messages, waypoints and alerts across the link com
 peer at either end. A hub is a Mesh Manager with no radio, installed with `--mode hub`, that several sites
 join; it passes each site's picture on to the others.
 
+**What gets shared where.** Each peer's row opens *Sharing*: four classes, the picture (nodes, positions,
+battery, signal), messages, waypoints and alerts, each with Out (this leaves your site for that peer) and In
+(this shows here from that peer). Messages also take the channel indexes whose broadcasts leave; empty means
+every channel. Out of the box the picture, waypoints and alerts flow both ways and messages stay home. A
+channel that arrives from a peer shows in Messages as its own chat, *MILUX-TAK via edge*, read-only for now:
+replying onto the far mesh needs the Air switch, which is shown but held for a later release. Direct messages,
+channel keys, join URLs, admin traffic and firmware are not on the table and never cross.
+
 ## Settings
 
 The standing brief for connected agents (what this mesh is for, its rules; served to every agent

@@ -104,6 +104,8 @@ if (( ! DRY )); then
     PYV=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")
     [[ "$PYV" == "$PYT" ]] || die "this release is built for Python $PYT and $PY is $PYV: install python$PYT and python$PYT-venv, take the release cut for this box's Python (Ubuntu 26.04: the -py314 tarball), or set MESH_MANAGER_PYTHON"
     "$PY" -c 'import venv, ensurepip' >/dev/null 2>&1 || die "the venv module or ensurepip is missing for $PY (apt-get install python$PYT-venv)"
+    command -v patch >/dev/null || die "patch is missing (apt-get install patch): the installer patches the gateway's site-packages with it"
+    command -v sha256sum >/dev/null || die "sha256sum is missing (coreutils)"
 else
     echo "would: verify $TARBALL against $TARBALL.sha256"
 fi
