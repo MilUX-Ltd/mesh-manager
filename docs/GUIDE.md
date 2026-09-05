@@ -33,6 +33,14 @@ Not every mesh has a TAK Server beside it. A box installed with `--mode server` 
 its own: the state strip reads *Managing the mesh*, the home page shows the last packet heard, and
 nothing on the screen speaks of TAK or forwarding. Everything else in this guide applies as it is.
 
+### On a laptop
+
+With Python 3.12 or later and the release installed in a virtual environment, `mesh-manager-desktop` runs Mesh
+Manager on this computer: it finds the radio on USB (or runs the demo mesh when there is none), starts the bridge
+and the screen together, opens your browser on the screen, and keeps its files under the platform's application
+directory (on a Mac, `Library/Application Support/Mesh Manager` in your home). There is no sign-in on the laptop's
+own loopback and no TAK. Ctrl-C stops it. A signed app you can double-click follows.
+
 ### A name and a certificate for the screen
 
 The screen listens on loopback. A hub, or any box you want to reach from a browser without a tunnel, takes

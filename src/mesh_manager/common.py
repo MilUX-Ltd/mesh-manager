@@ -31,7 +31,7 @@ def read_config(path):
             k, v = ln.split("=", 1)
             conf[k.strip()] = v.strip()
     mode = str(conf.get("MODE") or "").strip().lower()
-    conf["MODE"] = mode if mode in ("server", "hub") else "tak-server"  # Spec 050 and 052: the box's shape
+    conf["MODE"] = mode if mode in ("server", "hub", "desktop") else "tak-server"  # Spec 050, 052 and 058: the box's shape
     try:
         conf["PEER_PORT"] = int(conf.get("PEER_PORT") or 8094)
     except (TypeError, ValueError):

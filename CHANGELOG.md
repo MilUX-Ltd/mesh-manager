@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.17.0 (5 September 2026) Matt: "apple desktop app next."
+
+- **The desktop mode (Spec 058).** `MODE=desktop` is the server shape with no systemd. One command,
+  `mesh-manager-desktop`, keeps everything under the platform's application directory (macOS
+  `~/Library/Application Support/Mesh Manager`, Linux `~/.local/share/mesh-manager`, Windows `%LOCALAPPDATA%\Mesh Manager`),
+  writes a first config, finds the radio (`/dev/cu.usbmodem*` on a Mac) or runs the demo mesh when there is none,
+  starts the bridge and the screen in one process tree, opens the browser on the screen, watches the bridge's
+  heartbeat itself, and stops both on Ctrl-C. Unsigned and from a terminal for now; the app bundle, signing and the
+  DMG follow.
+
 ## 0.16.1 (5 September 2026)
 
 - **The Update button on About did nothing.** Matt, on the kit: "press it, no feedback, no update." The button asked

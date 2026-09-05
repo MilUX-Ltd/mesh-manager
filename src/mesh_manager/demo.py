@@ -30,10 +30,10 @@ STATUS = {"version": "0.1.0", "uptime": 5400, "radio": "/dev/serial/by-id/usb-Es
           "own": {"id": "!ee000001", "name": "Gateway", "short": "TAKG"}, "region": "EU_868", "modem_preset": "SHORT_FAST",
           "gps": {"reachable": True, "fix": True, "seen": 11, "used": 8, "checked": "2026-09-03T01:24:00Z", "via": "gpsd://127.0.0.1:2947"},
           "primary_channel": "MESH-DEMO", "watchdog": "pinging", "state_dir": "/var/lib/vantage-mesh", "socket": PATH}
-DEMO_MODE = os.environ.get("MODE", "").strip().lower() if os.environ.get("MODE", "").strip().lower() in ("server", "hub") else "tak-server"   # Spec 050 and 052: MODE=server or MODE=hub shapes the demo
-STATUS["mode"] = DEMO_MODE; STATUS["tak"] = "off" if DEMO_MODE in ("server", "hub") else "on"
+DEMO_MODE = os.environ.get("MODE", "").strip().lower() if os.environ.get("MODE", "").strip().lower() in ("server", "hub", "desktop") else "tak-server"   # Spec 050 and 052: MODE=server or MODE=hub shapes the demo
+STATUS["mode"] = DEMO_MODE; STATUS["tak"] = "off" if DEMO_MODE in ("server", "hub", "desktop") else "on"
 STATUS["site"] = {"id": "ee" * 32, "name": "Demo box"}; STATUS["peers"] = 1; STATUS["peer_port"] = 8094; STATUS["peer_bind"] = "0.0.0.0"   # Spec 052
-if DEMO_MODE in ("server", "hub"):
+if DEMO_MODE in ("server", "hub", "desktop"):
     STATUS["last_forwarded"] = None
 if DEMO_MODE == "hub":
     STATUS["radio"] = None; STATUS["radio_present"] = False; STATUS["connected"] = False; STATUS["site"] = {"id": "ee" * 32, "name": "Demo hub"}

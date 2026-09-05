@@ -19,6 +19,7 @@ dependencies = ["PyQRCode==1.2.1", "cryptography>=41"]   # cryptography: the sit
 [project.scripts]
 mesh-manager-bridge = "mesh_manager.bridge:main"
 mesh-manager-web = "mesh_manager.web:main"
+mesh-manager-desktop = "mesh_manager.desktop:main"   # Spec 058: a laptop, no systemd
 
 [tool.setuptools]
 include-package-data = true
