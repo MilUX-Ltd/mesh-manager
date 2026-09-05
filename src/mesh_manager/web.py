@@ -614,7 +614,7 @@ def state_strip(st):
         lamp, word = "ok", "Observing"
     else:
         lamp, word = "ok", "Bridging to TAK"
-    heard = int(st.get("nodes_seen") or 0)
+    heard = int((st.get("nodes_heard") if st.get("nodes_heard") is not None else st.get("nodes_seen")) or 0)   # 0.17.2: heard here, not the radio's database
     db = st.get("nodes_db")
     counts = f"{heard} heard here" + (f", {int(db)} in the radio's database" if db is not None else "")
     parts = [f"<span class='word'><i class='lamp lamp--{lamp}'></i>{e(word)}</span>", f"<span>{e(counts)}</span>"]

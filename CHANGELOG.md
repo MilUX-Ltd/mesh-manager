@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.17.2 (5 September 2026)
+
+- **The strip counted the radio's database as nodes heard here.** It read "12 heard here, 12 in the radio's
+  database" while the Nodes page under it read "1 heard here since the bridge started, 10 more in the radio's
+  database". The first number came from the size of the gateway's device map, which is filled from the radio's
+  database when it connects. The bridge now reports `nodes_heard`, counted the way the Nodes page counts it, and
+  the strip and the overview card use it. A bridge too old to report it is read as before.
+
 ## 0.17.1 (5 September 2026)
 
 - **The desktop command under a deep directory.** A Unix socket path is at most about 104 bytes on macOS; an application

@@ -1160,6 +1160,7 @@ class Bridge(TAKMeshtasticGateway):
                 "last_activity": utc(self.last_activity) if self.last_activity else None,
                 "last_forwarded": utc(self.last_forwarded) if self.last_forwarded else None,
                 "nodes_seen": len(getattr(self, "meshtastic_devices", {})), "nodes_db": len(getattr(self.interface, "nodes", {}) or {}), "observe": self.observe,
+                "nodes_heard": self._heard_count(),   # 0.17.2: what this box has heard, not what the radio's database holds
                 "mode": self.box_mode, "tak": "off" if self.box_mode in ("server", "hub", "desktop") else "on",
                 "site": ({"id": self.peering.id, "name": self.peering.name} if self.peering else None),
                 "peers": len(self.peering.connected()) if self.peering else 0,
@@ -1172,6 +1173,17 @@ class Bridge(TAKMeshtasticGateway):
                 "forwarded_counter": getattr(self.socket_client, "packets", None) if self.observe else None,
                 "gps": self.gps_state,
                 "state_dir": self.state_dir, "socket": self.socket_path}
+
+    def _heard_count(self):
+        """0.17.2: how many nodes this box has actually heard since it started, counted the way the Nodes page
+        counts them. The gateway's device map is filled from the radio's database at connect, so its size is what
+        the radio knows, not what was heard here; the strip said "12 heard here" of a mesh that had sent one packet."""
+        if self.interface is None:
+            return 0
+        try:
+            return len([n for n in self.mesh_nodes() if n.get("heard_here")])
+        except Exception:  # noqa: BLE001
+            return 0
 
     def op_nodes(self, **_):
         db = getattr(self.interface, "nodes", {}) or {}

@@ -146,4 +146,13 @@ for _sel, _label in (("details.more nav{", "the More menu"), (".tip{", "the tool
     _z = _re.search(r"z-index:(\d+)", _blk)
     check_true(f"{_label} floats above every Leaflet layer (z > 1000)", _z is not None and int(_z.group(1)) > 1000)
 
+# 0.17.2: the strip counts what this box has heard, not what the radio's database holds.
+# Found on a real radio on a Mac: the strip read "12 heard here" while the Nodes page under it read
+# "1 heard here since the bridge started, 10 more in the radio's database".
+_st = {"version": "x", "connected": True, "radio_present": True, "nodes_seen": 12, "nodes_db": 12, "nodes_heard": 1, "tak": "off", "mode": "desktop"}
+_strip = W.state_strip(_st)
+check_true("0.17.2 the strip counts nodes heard here, not the radio's database", "1 heard here" in _strip and "12 in the radio" in _strip and "12 heard here" not in _strip, _strip[:220])
+_old = {k: v for k, v in _st.items() if k != "nodes_heard"}
+check_true("0.17.2 a bridge too old to report it still says something true of itself", "12 heard here" in W.state_strip(_old), W.state_strip(_old)[:160])
+
 finish()
