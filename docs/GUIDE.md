@@ -67,9 +67,9 @@ hide that node. Play, to the start, reverse, a speed, and fit the map to the tra
 arrows, `[` `]`, `r` and `f` do the same from the keyboard. Nothing is interpolated: a node sits
 where it last reported, hollow with its age when that report is older than its usual gap.
 
-![The mesh page with the map and its layers](../assets/guide/mesh.png)
+![The mesh page with the map and its layers](../assets/guide/mesh.jpg)
 
-![The mesh page on a phone](../assets/guide/mesh-phone.png)
+![The mesh page on a phone](../assets/guide/mesh-phone.jpg)
 
 ## Nodes
 

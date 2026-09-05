@@ -17,7 +17,7 @@ administered over the air, firmware from a verified shelf, channels minted and r
 an agent that can do everything the screen can under rules you set.
 
 <p align="center">
-  <img src="assets/screenshots/mesh-map.png"
+  <img src="assets/screenshots/mesh-map.jpg"
        alt="The Mesh page: nodes on an OpenStreetMap layer with range rings, an MGRS readout, and the node table below"
        width="900">
 </p>
