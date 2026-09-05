@@ -106,6 +106,21 @@ so. A group message is one direct message per member, each with its own receipt.
 The quick messages above the field are set on Settings; a press fills the field and nothing is sent
 until you send it.
 
+**Starting a chat.** *New message* above the list opens a picker: type a label or a radio id and choose a
+radio, a channel or a group, spoken to or not. A full radio id the box has not heard yet is offered too, marked
+*not in the register*, so you can call a radio before it has said anything.
+
+**Keeping the list in order.** Each open chat has a menu (the three dots), and each row answers a right-click,
+with the same choices: *Mark as read*, *Mark as unread* (the chat closes and shows one unread until you open
+it again), *Pin to the top*, *Mute* (no unread count, a marker instead) and *Hide this chat* (it leaves the
+list; *Show hidden* below the tools brings it back, and opening it unhides it). *Mark all read* is on the
+toolbar. The unread total, muted and hidden chats excluded, sits beside the tools and in the browser tab's
+title. The field above the list finds a chat by name or id, or a line by its text, and says how many lines
+matched. When you open a chat, a red *New messages* line marks the first line you have not seen.
+
+**On a bubble.** Hover or focus a bubble for *Copy*. A message of yours the radio gave up on offers *Send
+again*: the same text to the same radio.
+
 ![Messages as a chat, two open side by side](../assets/guide/messages.png)
 
 ![Messages on a phone](../assets/guide/messages-phone.png)

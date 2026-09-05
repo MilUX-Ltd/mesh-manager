@@ -104,6 +104,7 @@ def _demo_history():
         t_ask = msg[1]["ts"]
         msg.insert(2, {"ts": t_ask, "node": "!ee000003", "name": "Handset", "dest": "!ee000001", "channel": 0, "text": "at the RV early, hold here?", "snr": 9.5})
         msg.insert(3, {"ts": t_ask, "node": "!ee000001", "name": "Gateway", "dest": "!ee000003", "channel": 0, "text": "hold at the RV, we are ten minutes out", "snr": None, "mid": 4242, "ack": "delivered"})
+        msg.insert(4, {"ts": t_ask, "node": "!ee000001", "name": "Gateway", "dest": "!ee000002", "channel": 0, "text": "Tracker 2, check in when you can", "snr": None, "mid": 4243, "ack": "MAX_RETRANSMIT"})  # Spec 051: a line the radio gave up on
     return {"positions": pos, "telemetry": tel, "messages": msg, "packets": pk}
 DEMO_HISTORY = _demo_history()
 
@@ -193,6 +194,20 @@ def serve_one(c):
     if op == "waypoints":
         rep = {"waypoints": [{"wid": 4242, "node": "!ee000003", "name": "RV Alpha", "description": "meet here", "lat": 51.5012, "lon": -0.1188, "expire": 4102444800, "ts": "2026-09-03T01:15:00Z"}], "count": 1}
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
+    if op == "send_text":  # Spec 051: the demo sends too, so the composer, the picker and Send again can be tried with no radio
+        text = str(req.get("text") or ""); to = str(req.get("to") or "^all"); ch = int(req.get("channel") or 0)
+        if not text.strip():
+            c.sendall(b'{"error": "empty message"}\n'); c.close(); return
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); mid = 5000 + len(DEMO_HISTORY["messages"])
+        everyone = to in ("^all", "!ffffffff")
+        DEMO_HISTORY["messages"].append({"ts": now, "node": "!ee000001", "name": "Gateway", "dest": to, "channel": ch, "text": text, "snr": None, "mid": mid, "ack": None if everyone else "delivered"})
+        ev = json.dumps({"kind": "text", "ts": now, "from": "!ee000001", "name": "Gateway", "to": to, "channel": ch, "text": text, "mid": mid, "sent": True, "ack": None if everyone else "delivered"}) + "\n"
+        for k in list(clients):
+            try:
+                k.sendall(ev.encode())
+            except OSError:
+                clients.remove(k)
+        c.sendall((json.dumps({"sent": True, "mid": mid, "to": to, "channel": ch, "asked": now}) + "\n").encode()); c.close(); return
     if op == "waypoint_send":
         c.sendall((json.dumps({"sent": True, "name": req.get("name"), "wid": 5151, "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n").encode()); c.close(); return
     if op == "history":

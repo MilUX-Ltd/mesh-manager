@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.10.0 (5 September 2026) Matt, on the 0.8.0 chat: "there's no way to create a new message. Mark messages as read. All of
+those core common messaging functions and features are not available on that page."
+
+- **Chat basics (Spec 051).** *New message* starts a chat with any radio, channel or group, spoken to or
+  not, from a picker that searches by label or radio id; a full id the box has not heard is offered too.
+  Each chat's menu (and a right-click on its row) marks it read or unread, pins it to the top, mutes it out
+  of the unread count, or hides it; *Show hidden* brings hidden chats back, and opening one unhides it.
+  *Mark all read* on the toolbar; the unread total in the list and the tab title. A field above the list
+  finds a chat or a line and says how many lines matched. A *New messages* divider marks the first unread
+  line when a chat is opened. Every bubble offers *Copy*; a message the radio gave up on offers *Send
+  again*. Pins, mutes and hidden chats live in the browser beside the seen times, as before.
+
 ## 0.9.0 (5 September 2026) Matt: "do the server shape first." The first of the three deployment shapes
 beyond the TAK gateway: a box or an Ubuntu server that manages a mesh with no TAK Server beside it.
 

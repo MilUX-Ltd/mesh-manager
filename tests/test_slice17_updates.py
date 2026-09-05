@@ -103,7 +103,8 @@ check_true("AC3 update.sh finds the staging, re-checks the hash and runs the sta
 # ---- AC4 the screen
 fb = start_fake_bridge()
 etc = tempfile.mkdtemp()
-FakeGitHub.releases = [rel("0.9.1")]
+_maj, _min = __version__.split(".")[:2]; NEXT = f"{_maj}.{int(_min) + 1}.0"   # a release above whatever is running (0.9.1 stopped being one at 0.10.0)
+FakeGitHub.releases = [rel(NEXT)]
 srv = W.make_server(bind="127.0.0.1", port=0, socket_path=fb.path, etc_dir=etc, config=dict(cfg, UPDATE_API=API, UPDATE_MODE="manual", AUTH="off"), state_dir=state)
 port = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
@@ -122,9 +123,9 @@ check_true("AC4 Settings stores the token at 0600", os.path.exists(tok) and stat
 st, page = req("GET", "/settings")
 check_true("AC4 ...and never renders it", "t0ken-from-the-page" not in page and "github" in page.lower())
 st, j = req("POST", "/api/update/check", body="{}", ctype="application/json")
-check("AC4 Check now finds the release", (st, json.loads(j).get("version"), json.loads(j).get("available")), (200, "0.9.1", True))
+check("AC4 Check now finds the release", (st, json.loads(j).get("version"), json.loads(j).get("available")), (200, NEXT, True))
 st, about = req("GET", "/about")
-check_true("AC4 About shows the running version, the update and the controls", __version__ in about and "0.9.1" in about and "Notes for 0.9.1" in about and "data-update-apply" in about and "data-update-check" in about)
+check_true("AC4 About shows the running version, the update and the controls", __version__ in about and NEXT in about and f"Notes for {NEXT}" in about and "data-update-apply" in about and "data-update-check" in about)
 check_true("AC4 the header carries the pill", "update available" in about)
 srv.shutdown()
 calls.clear()
