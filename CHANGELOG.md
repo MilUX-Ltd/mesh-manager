@@ -2,7 +2,37 @@
 
 ## Unreleased
 
-## 0.25.0 (6 September 2026) Matt, using the application: "there needs to be 1) a timeout that brings it back to live
+- The public cut's changelog filter now understands a list of card references and any capitalisation, keeps the
+  line break before the clause it removes, and tidies the punctuation left behind. A release note opening
+  "
+  gap had already shipped the public 0.24.0 notes with the heading and the quote joined into one line.
+  LESSONS 52.
+
+## 0.26.0 (6 September 2026)
+
+Three things Matt found by using it.
+
+- **The map always opens, and a box that does not know where it is still gets one.** The overlay script gave up
+  before building the map when the box had no position, so the Map button revealed an empty container: no
+  imagery, no nodes, nothing. That is what both hubs look like, and it is what Matt photographed. The map is now
+  always built and always the default view; only a deliberate press on Plan is remembered. With no position of
+  its own the map fits to whatever nodes do have one, else the bench, else a plain wide view, so the imagery
+  loads either way. When nothing has a position the map says so and says where to set the box's own.
+- **Nodes with positions are drawn even when the box has none.** The draw returned before plotting any of them.
+- **Local map sets have their own chooser.** The list on the map holds the imagery anyone has, Google and
+  OpenStreetMap, with one more entry, Load a local map, which opens a chooser listing the sets carried on the
+  box. There can be many of those and each covers only where it was made for, so mixing them into the same list
+  made the common choice harder. The chooser says where they go when there are none.
+- **One release to roll back to, not five.** Four buttons offering 0.17.1, 0.16.1 and 0.13.0 is a choice nobody
+  has a reason to make; the version worth returning to is the one you were on before. `prune_staged` now counts
+  what it keeps in releases you could go back to, and the box tidies when the screen starts as well as when it
+  takes an update, so a box that has just come up on this version is tidy at once.
+- Two suites carried assertions for the behaviour this changes: that the map opened on the plan without a
+  position, and that five releases were kept. Both now assert the new rule with the reason recorded above them.
+
+## 0.25.0 (6 September 2026)
+
+Matt, using the application: "there needs to be 1) a timeout that brings it back to live
 if not touched. and 2) a button to bring it back to live. Also, what happened to my slider for dimming the
 rings, nodes and tracks. i'd like that slider back."
 
@@ -31,7 +61,9 @@ rings, nodes and tracks. i'd like that slider back."
   the public repository's own verification caught that within the minute. `--private-only` skips the public half.
   release forgets.
 
-## 0.24.0 (6 September 2026) Matt: "then, in-app update for a laptop. It would be great if the app could update
+## 0.24.0 (6 September 2026)
+
+Matt: "then, in-app update for a laptop. It would be great if the app could update
 automatically, or let the user choose to do that."
 
 - **The application on a laptop updates itself.** It reads the public releases, takes the disk image on a Mac or
@@ -52,7 +84,9 @@ automatically, or let the user choose to do that."
 - The screen's About page on a laptop now says what the application has seen and lets the setting be changed,
   instead of asking for a GitHub token it does not need; the box's daily checker no longer starts on a laptop.
 
-## 0.23.0 (6 September 2026) Matt: "and flashing over USB on macOS."
+## 0.23.0 (6 September 2026)
+
+Matt: "and flashing over USB on macOS."
 
 - **Flashing works from a Mac.** A device held in its bootloader appears as a small removable volume. On Linux
   the bridge found it with `lsblk` and mounted it with `udisksctl`, neither of which a Mac has; it now watches
@@ -61,7 +95,9 @@ automatically, or let the user choose to do that."
 - Proved against a real mounted volume on a Mac: found by label, copied, flushed, let go. A true flash needs a
   device that presents a bootloader volume, so that gate waits for a RAK or a T1000-E.
 
-## 0.22.0 (6 September 2026) Matt: "finding a second radio plugged into it."
+## 0.22.0 (6 September 2026)
+
+Matt: "finding a second radio plugged into it."
 
 - **The bench works on a laptop.** Devices were found by listing `/dev/serial/by-id`, which only Linux has, so
   the Bench page was always empty on a Mac or on Windows. Discovery now asks the system for its ports and what
@@ -75,7 +111,9 @@ automatically, or let the user choose to do that."
 - Found while gating this: `mesh-manager-bridge` refused to start on a laptop with no radio, though the
   application's own path allowed it. A laptop with nothing plugged in starts, and says it is watching for one.
 
-## 0.21.0 (6 September 2026) Matt: "this would be epic, the desktop link."
+## 0.21.0 (6 September 2026)
+
+Matt: "this would be epic, the desktop link."
 
 - **A laptop is a site.** It joins a hub by invite like any box, dialling out, so nothing is opened on the
   network it sits on and nobody can dial in to it. The sharing table, the air switch, catch-up and the
@@ -110,7 +148,9 @@ application, having no terminal, died without a word.
 - **A port held by something else is no longer fatal**: the screen takes one the system gives it.
 - **The app writes a log.** `log/app.log` beside its other files, so a run that goes wrong can be read and sent.
 
-## 0.20.0 (6 September 2026) Matt: "I would prefer a real app window."
+## 0.20.0 (6 September 2026)
+
+Matt: "I would prefer a real app window."
 
 - **The app has a window of its own.** On macOS the screen is shown in a WebKit view in an application window,
   opened at start and brought back by the menu-bar item; on Windows the same through the Edge web view the
@@ -135,7 +175,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
   `.github/workflows/windows-app.yml` builds it on a Windows runner, by hand from the Actions tab and on a tag,
   where it is attached to the release. There is no code signing yet; SmartScreen will warn.
 
-## 0.18.0 (5 September 2026) Matt: "would love to review a mac app by the morning."
+## 0.18.0 (5 September 2026)
+
+Matt: "would love to review a mac app by the morning."
 
 - **Mesh Manager is an application you double-click.** `Mesh Manager.app` lives in the menu bar, finds the radio,
   opens the screen in your browser, and quits cleanly. The menu says what the radio is doing, and offers the
@@ -163,7 +205,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
   directory, named for the root; the wait for the screen ends early when a part has died or Ctrl-C is pressed, and the
   command says which.
 
-## 0.17.0 (5 September 2026) Matt: "apple desktop app next."
+## 0.17.0 (5 September 2026)
+
+Matt: "apple desktop app next."
 
 - **The desktop mode (Spec 058).** `MODE=desktop` is the server shape with no systemd. One command,
   `mesh-manager-desktop`, keeps everything under the platform's application directory (macOS
@@ -191,7 +235,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
   itself came from loopback, marks the session cookie Secure when the request arrived over TLS, and About says
   where the screen is reached.
 
-## 0.15.0 (5 September 2026) Matt: "keep going."
+## 0.15.0 (5 September 2026)
+
+Matt: "keep going."
 
 - **Joining meshes, the chapter (Spec 056).** The guide has a chapter of its own: sites, invites and the hub;
   what gets shared where; the air; after a gap; what never crosses; what it costs. Two screenshots from the hub
@@ -205,7 +251,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
   crosses per class, what never does, at rest, in flight, retention, what the exports and the agent see, forgetting
   a peer, six findings with their status.
 
-## 0.14.0 (5 September 2026) Matt: "this is great … move onto slice 5."
+## 0.14.0 (5 September 2026)
+
+Matt: "this is great … move onto slice 5."
 
 - **Catch-up after a reconnection (Spec 055).** What crossed a link is now history: a message from a peer is written
   to the store with its origin and channel name, so a remote chat is still there after a reload or a restart, and one
@@ -217,7 +265,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
 - The chat seeds remote rows from the history with their origin; a message that went on this air for a peer is
   marked in the store and never offered back to it.
 
-## 0.13.0 (5 September 2026) Matt: "ok, do slice 4."
+## 0.13.0 (5 September 2026)
+
+Matt: "ok, do slice 4."
 
 - **The air (Spec 054).** The third switch of the sharing table, at a radio site only: per peer, messages
   (with a local channel) and waypoints, off by default. A message from a peer with Air on goes onto this mesh
@@ -233,7 +283,9 @@ ADR 002, the Windows build. Matt: "if you complete that, build the windows app n
 - The installer's preflight names `patch` and `sha256sum` when a minimal image lacks them (found installing the
   live hub on tak.milux.co.uk, 5 September 2026), instead of falling over at the site-package patch.
 
-## 0.12.0 (5 September 2026) Matt: "let's keep moving forward with this then", with the sharing table accepted
+## 0.12.0 (5 September 2026)
+
+Matt: "let's keep moving forward with this then", with the sharing table accepted
 as a start.
 
 - **The sharing table, per peer (Spec 053).** Each peer's row on Connections opens *Sharing*: four classes,
@@ -248,7 +300,9 @@ as a start.
   TAK chat or onto the air.
 - The demo shows a remote chat, waypoint and alert from "Edge laptop".
 
-## 0.11.4 (5 September 2026) The 0.11.3 Python 3.14 tarball did not install: three compiled packages had no 3.14 wheels at
+## 0.11.4 (5 September 2026)
+
+The 0.11.3 Python 3.14 tarball did not install: three compiled packages had no 3.14 wheels at
 the estate's pinned versions, the cut built them on the cutting machine and shipped Mac wheels, and the
 installer's venv check passed on a box whose venv module lacked ensurepip.
 
@@ -257,7 +311,9 @@ installer's venv check passed on a box whose venv module lacked ensurepip.
   3.12 cut is unchanged. The cut refuses to ship any compiled wheel built on the cutting machine. The
   installer checks for ensurepip, not just the venv module, and names the package to install.
 
-## 0.11.3 (5 September 2026) The first radio site is an Ubuntu 26.04 machine, whose Python is 3.14; the release was built for
+## 0.11.3 (5 September 2026)
+
+The first radio site is an Ubuntu 26.04 machine, whose Python is 3.14; the release was built for
 3.12 only.
 
 - **A cut per Python.** `cut-release.sh --py 3.14` builds the release against Python 3.14's wheels and names
@@ -265,14 +321,18 @@ installer's venv check passed on a box whose venv module lacked ensurepip.
   tarball carries `release/PYTHON`, the installer reads it and picks that interpreter, and About > Update
   takes the cut for the box's own Python when the release carries one. Both cuts ship from here on.
 
-## 0.11.2 (5 September 2026) Found installing the first hub on dev.milux.co.uk (Ubuntu 22.04).
+## 0.11.2 (5 September 2026)
+
+Found installing the first hub on dev.milux.co.uk (Ubuntu 22.04).
 
 - **The installer on Ubuntu 22.04.** It wrote its polkit rules into `rules.d`, which only 24.04's polkit
   has, and stopped half way with the config unwritten. Every rule write now creates its directory first, and
   22.04's polkit gets the update-service grant in its own `.pkla` form. The closing words name the peer
   listener when there is one instead of saying the bridge binds no port. No product code changes.
 
-## 0.11.1 (5 September 2026) Found installing the first hub on an Ubuntu 22.04 machine: the release's compiled wheels are for
+## 0.11.1 (5 September 2026)
+
+Found installing the first hub on an Ubuntu 22.04 machine: the release's compiled wheels are for
 Python 3.12 and the installer took whatever `python3` was.
 
 - **The installer picks Python 3.12.** It uses `python3.12` when present, else `python3` if that is 3.12,
@@ -280,7 +340,9 @@ Python 3.12 and the installer took whatever `python3` was.
   `MESH_MANAGER_PYTHON` names an interpreter outright. The venv and the one-time password use that
   interpreter. No product code changes.
 
-## 0.11.0 (5 September 2026) Matt: "I want box-to-box in Mesh Manager itself. Build on both
+## 0.11.0 (5 September 2026)
+
+Matt: "I want box-to-box in Mesh Manager itself. Build on both
 tak.milux.co.uk and dev.milux.co.uk at the same time so we have a live and dev broker."
 
 - **Joining meshes (Spec 052).** Every bridge is now a site with an identity made at first start (an EC
@@ -302,7 +364,9 @@ tak.milux.co.uk and dev.milux.co.uk at the same time so we have a live and dev b
   nodes received, Invite a peer (the code, its QR, its expiry), Join a site, Forget.
 - The demo answers the peer actions and shows one peer's picture; `MODE=hub` runs it as a hub.
 
-## 0.10.0 (5 September 2026) Matt, on the 0.8.0 chat: "there's no way to create a new message. Mark messages as read. All of
+## 0.10.0 (5 September 2026)
+
+Matt, on the 0.8.0 chat: "there's no way to create a new message. Mark messages as read. All of
 those core common messaging functions and features are not available on that page."
 
 - **Chat basics (Spec 051).** *New message* starts a chat with any radio, channel or group, spoken to or
@@ -314,7 +378,9 @@ those core common messaging functions and features are not available on that pag
   line when a chat is opened. Every bubble offers *Copy*; a message the radio gave up on offers *Send
   again*. Pins, mutes and hidden chats live in the browser beside the seen times, as before.
 
-## 0.9.0 (5 September 2026) Matt: "do the server shape first." The first of the three deployment shapes
+## 0.9.0 (5 September 2026)
+
+Matt: "do the server shape first." The first of the three deployment shapes
 beyond the TAK gateway: a box or an Ubuntu server that manages a mesh with no TAK Server beside it.
 
 - **The server shape (Spec 050).** One setting, `MODE=server`, set at install with
@@ -327,7 +393,9 @@ beyond the TAK gateway: a box or an Ubuntu server that manages a mesh with no TA
   this shape, and creates no TAK input. The demo runs in either shape (`MODE=server` in its
   environment).
 
-## 0.8.0 (5 September 2026) Matt: "it would be great if it worked more like a normal chat app", and "I also want a
+## 0.8.0 (5 September 2026)
+
+Matt: "it would be great if it worked more like a normal chat app", and "I also want a
 user guide with screenshots created for the public repo." Fifty-three suites green.
 
 - **Messages is a chat (Spec 048).** A list of chats on the left, one per live channel, one per
@@ -470,7 +538,8 @@ Two things the kit showed the moment 0.5.0 was on it.
 
 ## 0.5.0 (4 September 2026)
 
-The four slices carried on. Thirty-seven suites green.
+The four slices carried on
+merged. Thirty-seven suites green.
 
 - **Roll back a release (Spec 030).** An update is one press and ten seconds, so a bad release
   arrives just as fast, and the way back was an SSH session and a hand-run installer. Nothing
@@ -600,14 +669,14 @@ sniffing would send every arm box looking for a release that does not exist.
   register, and the Register page compares each device against the profile: in line,
   drifted with each field's is and should, or never read; a press brings a managed device
   into line over the air, power and interval by default, region, preset and role with the
-  confirm naming the device.
+  confirm naming the device..
 
 ## 0.3.7 (4 September 2026)
 
 - The key rotation checklist (Spec 027): a rotation from the screen marks itself, one done
   elsewhere is marked by hand (`rotation_mark`), and the Channels page then counts every
   expected device (the register plus anyone heard in the last week) back on the new key as
-  the radio hears it (`rotation_status`), refreshed as packets arrive.
+  the radio hears it (`rotation_status`), refreshed as packets arrive..
 
 ## 0.3.6 (4 September 2026)
 
@@ -616,14 +685,14 @@ sniffing would send every arm box looking for a release that does not exist.
   register, a node outside a fence around the box; each is one row in the history, one event
   for the screen and one GeoChat to All Chat Rooms on the TAK Server (counted in observe
   mode); thresholds set on the Health page (`alert_set`), a test button (`alert_test`), the
-  open count on the state strip.
+  open count on the state strip..
 
 ## 0.3.5 (4 September 2026)
 
 - Telemetry over time (Spec 025): a node page (`/node?id=`), reached from the node's name on
   the Nodes table, with its facts, battery and voltage charts over 24 h or 7 d from the
   history store (the 20% line drawn, on-charge stretches noted), its last messages and its
-  positions in the window.
+  positions in the window..
 
 ## 0.3.4 (4 September 2026)
 
@@ -631,14 +700,14 @@ sniffing would send every arm box looking for a release that does not exist.
   its verdict (quiet, normal, busy, saturated), its transmit air time against the region's
   duty-cycle budget (10% on EU_868), packets per hour, nodes heard, a chart of utilisation
   by the hour and a per-node table; `health` in the catalogue; a Mesh health card on the
-  overview.
+  overview..
 
 ## 0.3.3 (4 September 2026)
 
 - MGRS and the grid (Spec 023): every position on the screen carries its MGRS beside the
   degrees (the node rows, the map legend, a readout on the map following the mouse); a grid
   control draws 1 km UTM lines from zoom 13 (10 km below) with the kilometre digits along
-  the edges. The arithmetic is in `mgrs.py` and mirrored in the overlay.
+  the edges. The arithmetic is in `mgrs.py` and mirrored in the overlay..
 
 ## 0.3.2 (4 September 2026)
 
@@ -651,7 +720,7 @@ sniffing would send every arm box looking for a release that does not exist.
 
 - Track trails (Spec 021): each node's positions over a window (1, 3, 12 or 24 hours, or
   off) drawn under the markers, fading with age, a colour per node, hover for the node and
-  the time; a jump over 2 km is not drawn.
+  the time; a jump over 2 km is not drawn..
 
 ## 0.3.0 (4 September 2026)
 

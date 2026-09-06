@@ -176,16 +176,24 @@ def is_available(rec, running=None):
     return bool(there and there > here)
 
 
-def prune_staged(state_dir, keep=5, running=None, arch="amd64"):
-    """Keep the newest few staged releases and remove the rest.
+def prune_staged(state_dir, keep=1, running=None, arch="amd64"):
+    """Keep the running release and one to go back to; remove the rest.
 
     Every release the box takes leaves its tarball behind, about 20 MB each, and nothing ever
-    removed them: the kit had twelve. They are what a roll back returns to, so a few are worth
-    keeping and an unbounded pile is not. The running version is never removed.
+    removed them: the kit had twelve. Spec 032 capped it at five. Matt, 6 Sep 2026, looking at four
+    buttons on his kit: "only need to have the last version. no need for all." He is right; the
+    version worth returning to is the one you were on before the update that went wrong, and
+    choosing between four older ones is a decision with nothing behind it.
+
+    `keep` counts releases you could go back to, not rows on disk, so the default leaves one button
+    on the screen and two directories under updates/. The running version is never removed, whatever
+    `keep` says: it is the code the box is running from.
     """
     rows = staged(state_dir, arch=arch, running=running)
+    back = [r for r in rows if not r.get("running")]
+    drop = back[max(0, int(keep)):]
     removed, freed = [], 0
-    for r in rows[max(0, int(keep)):]:
+    for r in drop:
         if r.get("running"):
             continue
         d = os.path.dirname(r["tarball"])
@@ -198,7 +206,7 @@ def prune_staged(state_dir, keep=5, running=None, arch="amd64"):
             removed.append(r["version"])
         except OSError:
             pass
-    return {"kept": [r["version"] for r in rows[:max(0, int(keep))]], "removed": removed, "freed": freed}
+    return {"kept": [r["version"] for r in rows if r["version"] not in removed], "removed": removed, "freed": freed}
 
 
 def staged(state_dir, arch="amd64", running=None):

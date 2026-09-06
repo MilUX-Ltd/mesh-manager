@@ -16,6 +16,10 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import __version__, catalogue as C, updates as U, web as W  # noqa: E402
 
+# Spec 067: a box tidies its staged releases when the screen starts. This suite stages several on purpose and
+# then rolls back to them, so the tidy is off here; what it does is checked in test_slice67_keep_one.py.
+W.PRUNE_ON_START = False
+
 ARCH = "amd64"
 
 
@@ -168,9 +172,10 @@ check_true("a check that errored is not available", U.is_available({"error": "no
 many = tempfile.mkdtemp()
 for v in ("0.2.5", "0.2.6", "0.2.7", "0.3.7", "0.3.8", "0.4.1", "0.4.2", "0.4.3", "0.4.4", "0.5.0"):
     stage(many, v)
+# Spec 067: keep counts releases to go back to, not rows on disk, so keep=4 leaves four below the running one
 kept = U.prune_staged(many, keep=4, running="0.5.0", arch=ARCH)
 left = sorted(r["version"] for r in U.staged(many, arch=ARCH, running="0.5.0"))
-check("the newest few are kept, the rest removed", left, ["0.4.2", "0.4.3", "0.4.4", "0.5.0"])
+check("the newest few to go back to are kept, the rest removed", left, ["0.4.1", "0.4.2", "0.4.3", "0.4.4", "0.5.0"])
 check_true("the running version is never removed", "0.5.0" in left and kept["removed"])
 check_true("pruning a directory it cannot read raises nothing",
            isinstance(U.prune_staged("/nonexistent-state", keep=4, running="0.5.0"), dict))

@@ -32,6 +32,8 @@ from . import channel as CH
 from . import connections as K
 from . import appupdate as AU
 from . import updates as U
+
+PRUNE_ON_START = True   # Spec 067: a box tidies its staged releases when the screen starts
 from .common import DEFAULT_STATE
 
 DEFAULT_ETC = "/etc/mesh-manager"
@@ -193,6 +195,11 @@ class Web:
         threading.Thread(target=self._pump, name="events-pump", daemon=True).start()
         threading.Thread(target=self._status_tick, name="status-tick", daemon=True).start()
         self.desktop = str((config or {}).get("MODE") or "") == "desktop"
+        if PRUNE_ON_START and not self.desktop:   # Spec 067: tidy at once, not one update later
+            try:
+                U.prune_staged(self.state_dir, running=__version__, arch=self.arch)
+            except OSError:
+                pass
         if self.update_mode() != "off" and not self.desktop:   # Spec 065: a laptop updates itself, in the application
             U.Checker(self, arch=self.arch).start()
 
@@ -1149,15 +1156,41 @@ OVERLAY_JS = r"""<script>
     if(v==='map'&&window.mmMap){setTimeout(function(){window.mmMap.invalidateSize();},60);}}
   wrap.querySelectorAll('button[data-view]').forEach(function(b){b.addEventListener('click',function(){show(b.dataset.view,true);});});
   try{localStorage.removeItem('mm-view');}catch(e){}
-  var chosen=wrap.dataset.defaultView;try{var s=localStorage.getItem('mm-view-choice');if(s==='plan'||(s==='map'&&has)){chosen=s;}}catch(e){}
-  if(!has||!window.L){show('plan');return;}
+  var chosen=wrap.dataset.defaultView;try{var s=localStorage.getItem('mm-view-choice');if(s==='plan'||s==='map'){chosen=s;}}catch(e){}
+  /* Spec 068: without Leaflet there is no map to show, so the plan is all there is. A box that does not know
+     where it is still gets a map: it is built, given a view from whatever has a position, and told to say so
+     when nothing does. A hub has no position of its own and its map used to be an empty box. */
+  if(!window.L){show('plan');return;}
   var map=L.map('map-geo',{zoomControl:true,attributionControl:true});window.mmMap=map;
   var layers={},current=null,byName={};
   (tiles.sources||[]).forEach(function(s){var o={maxZoom:20,attribution:s.attribution||''};if(s.subdomains){o.subdomains=s.subdomains;}if(s.maxzoom){o.maxNativeZoom=s.maxzoom;}if(s.minzoom){o.minNativeZoom=s.minzoom;}
-    var l=L.tileLayer(s.url,o);l._mm=s;layers[s.id]=l;byName[s.name||s.id]=l;});
+    var l=L.tileLayer(s.url,o);l._mm=s;layers[s.id]=l;if(s.internet){byName[s.name||s.id]=l;}});
   function label(id){var s=layers[id]._mm;var el=document.getElementById('tiles-now');if(el){el.textContent='tiles: '+(s.name||id)+(s.internet?' (from the internet to your browser; the box sends nothing)':' (the box\'s own)');}}
   function use(id){if(!layers[id])return;if(current&&layers[current]){map.removeLayer(layers[current]);}current=id;layers[id].addTo(map);label(id);}
-  L.control.layers(byName,null,{position:'topright'}).addTo(map);
+  /* Spec 068: the list on the map is the imagery anyone has, Google and OpenStreetMap. A box's own map sets are
+     not in that list: there can be many of them, they are particular to where the box has been, and mixing them
+     into the same list makes the common choice harder. They live behind one more entry, Load a local map, which
+     opens a chooser (Matt, 6 Sep 2026). */
+  var lc=L.control.layers(byName,null,{position:'topright'});lc.addTo(map);
+  var locals=(tiles.sources||[]).filter(function(s){return !s.internet;});
+  (function(){var box=lc.getContainer();if(!box)return;
+    var row=L.DomUtil.create('div','mm-locals',box.querySelector('.leaflet-control-layers-list')||box);
+    var b=L.DomUtil.create('button','',row);b.type='button';b.className='line';b.textContent='Load a local map';
+    b.setAttribute('data-tip','The map sets carried on this box');
+    L.DomEvent.disableClickPropagation(row);
+    L.DomEvent.on(b,'click',function(ev){L.DomEvent.stop(ev);openLocals();});})();
+  function openLocals(){var d=document.getElementById('local-maps');if(!d)return;
+    var list=d.querySelector('.local-list');list.innerHTML='';
+    if(!locals.length){var p=document.createElement('p');p.className='meta';
+      p.textContent='This box carries no map sets of its own yet. Add one under Map sources below the map, or drop an ATAK custom map source into the box\'s map folder.';
+      list.appendChild(p);}
+    locals.forEach(function(s){var b=document.createElement('button');b.type='button';b.className='line';
+      b.style.display='block';b.style.width='100%';b.style.textAlign='left';b.style.marginBottom='4px';
+      b.textContent=(s.name||s.id)+(s.where?' · '+s.where:'');
+      b.addEventListener('click',function(){use(s.id);close_();});list.appendChild(b);});
+    if(d.showModal){try{d.showModal();}catch(e){d.setAttribute('open','');}}else{d.setAttribute('open','');}}
+  function close_(){var d=document.getElementById('local-maps');if(!d)return;if(d.close){try{d.close();}catch(e){d.removeAttribute('open');}}else{d.removeAttribute('open');}}
+  (function(){var d=document.getElementById('local-maps');if(!d)return;var x=d.querySelector('[data-close]');if(x)x.addEventListener('click',close_);})();
   map.on('baselayerchange',function(ev){if(ev.layer&&ev.layer._mm){current=ev.layer._mm.id;label(current);}});
   // If the imagery will not load, fall back to one of the box's own sets, but only to one that
   // covers where we are looking, and only after several tiles fail rather than one. A single
@@ -1354,7 +1387,7 @@ OVERLAY_JS = r"""<script>
   function band(v){if(v===null||v===undefined)return 0;return v>=10?4:v>=5?3:v>=-7?2:v>=-12?1:0;}
   function bandTok(b){return b>=3?'--ok':b===2?'--warn':'--bad';}
   function dist(m){return m>=1000?(m/1000).toFixed(m>=10000?0:1)+' km':Math.round(m)+' m';}
-  function draw(J){lastJ=J;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
+  function draw(J){lastJ=J;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);drawWithoutOwn(J);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
     var g=groupChosen();var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(n.heard_here===false)return;if(g&&(n.group||'')!==g)return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
     centre=c;rings();
     pts.forEach(function(n){var ll=[n.lat,n.lon],ds=n.direct_snr;
@@ -1368,7 +1401,24 @@ OVERLAY_JS = r"""<script>
     var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>Heard, but no position, so not on the map:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
     if(!fitted&&sized()&&!benchAt){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}
     if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}
-    dimNodes();}
+    dimNodes();emptyNote(pts.length);}
+  /* Spec 068: the box does not know where it is. Draw what does have a position and fit to that; if nothing
+     does, still give the map a view so the imagery loads, and say why there is nothing on it. Before this the
+     draw returned here and the map was never given a view at all, so Leaflet rendered an empty container: that
+     is what a hub's map looked like. */
+  function drawWithoutOwn(J){var pts=(J.nodes||[]).filter(function(n){return n.lat!==null&&n.lat!==undefined&&n.lon!==null&&n.lon!==undefined;});
+    pts.forEach(function(n){L.marker([n.lat,n.lon],{icon:nodeIcon(n.icon,''),keyboard:false}).bindTooltip(n.label||n.name||n.id,{permanent:true,direction:'bottom',className:'mm-node'}).addTo(overlay);});
+    if(!fitted&&sized()){
+      if(pts.length){var b=L.latLngBounds(pts.map(function(n){return [n.lat,n.lon];}));map.fitBounds(b.pad(0.35),{maxZoom:17});}
+      else if(benchAt){map.setView(benchAt,16);}
+      else{map.setView([54.0,-2.5],5);}   /* a view is what makes the imagery load; without one the map is blank */
+      fitted=true;}
+    dimNodes();emptyNote(pts.length);}
+  function emptyNote(n){var el=document.getElementById('map-empty');if(!el)return;
+    if(n>0){el.hidden=true;el.textContent='';return;}
+    el.hidden=false;
+    el.innerHTML=(has?'Nothing heard has a position yet. Positions arrive as devices report them.'
+      :"This box does not know where it is, and nothing it can see has a position yet. Set one under <a class='plain' href='/settings'>Where this box is</a>, or wait for a device to report.");}
   // Spec 040 and Spec 047: playback. Every node where it last was at instant T (nothing interpolated), the run it had
   // walked since its last gap, hollow with the age when its last report is older than its gap; a timeline with a row per
   // node and a tick per report, seekable by press or drag; speeds, reverse, fit, keys. Built from the trails rows the map holds.
@@ -1508,11 +1558,19 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
           "<label>Grid (MGRS), or the degrees below<input type='text' id='wp-mgrs' placeholder='30U XC 9988 0936' autocomplete='off' aria-describedby='wp-mgrs-note'><span class='meta' id='wp-mgrs-note'></span></label>"
           "<label>Latitude<input type='text' name='lat' id='wp-lat' inputmode='decimal' required placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' id='wp-lon' inputmode='decimal' required placeholder='-0.1200'></label>"
           "<label>Expires in (minutes)<input type='number' name='expire_min' value='60' min='1' max='10080'></label><button type='submit'>Send the waypoint</button><div class='res meta' role='status'></div></form></details>")
-    return (f"<div id='mesh-views' data-default-view='{'map' if has else 'plan'}' data-has-position='{'1' if has else '0'}' data-tiles='{attr}'>"
+    # Spec 068: the map is the view this opens on, whether or not the box knows where it is. A hub has no radio
+    # and no position, and the map used never to be built at all: the Map button revealed an empty box.
+    return (f"<div id='mesh-views' data-default-view='map' data-has-position='{'1' if has else '0'}' data-tiles='{attr}'>"
             f"<div class='controls views'><button type='button' class='line' data-view='map' aria-label='Map view' data-tip='The map with imagery'>{ICONS['map']}Map</button><button type='button' class='line' data-view='plan' aria-label='Plan view' data-tip='Range rings from this box' data-tip-more='The mesh drawn round this box, without imagery'>{ICONS['plan']}Plan</button>"
             + ("" if bare else icon_button("popout", "Open the map in a window", "Open the map in a window", "The map on its own, in a window of its own", attrs="id='map-pop'"))
             + layers + "<span class='meta' id='tiles-now'></span><span class='meta warn' id='tiles-note'></span></div>"
-            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>{playback_bar()}{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div>{fence_forms(L)}{wp}</div>"
+            f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>"
+            "<dialog id='local-maps' style='border:1px solid var(--line);border-radius:var(--r);background:var(--surface-raised);color:var(--ink);max-width:520px;width:92vw;padding:var(--s4)'>"
+            "<h2 style='margin:0 0 var(--s2)'>Load a local map</h2>"
+            "<p class='meta' style='margin-top:0'>The map sets carried on this box. They work with no internet, and each covers only where it was made for.</p>"
+            "<div class='local-list'></div>"
+            "<div class='row-actions' style='margin-top:var(--s3)'><button type='button' class='line' data-close>Close</button></div></dialog>"
+            f"<p class='meta' id='map-empty' hidden style='margin:var(--s2) 0 0'></p>{playback_bar()}{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div>{fence_forms(L)}{wp}</div>"
             f"<div data-view='plan' id='map-box'>{map_svg(L, size)}</div></div><script>window.mmNodeIcons={json.dumps(NODE_ICON_SVG)};window.mmIcons={json.dumps({'play': ICONS['play'], 'pause': ICONS['pause']})};</script>{OVERLAY_JS}")
 
 
@@ -3048,8 +3106,8 @@ def rollback_box(web):
             f"{'s' if len(back) != 1 else ''} still on this box</div>"
             "<p class='meta'>Re-applies a release the box already has, checking its hash first. It returns the "
             "<b>code</b> and not the box's config, which the installer keeps either way. The bridge and this screen "
-            "restart, so the mesh is off TAK for about a minute. The five most recent are kept; older ones "
-            "are removed as new releases arrive.</p>"
+            "restart, so the mesh is off TAK for about a minute. Spec 067: one release is kept behind the "
+            "running one, so there is always a way back and nothing else takes up the disk.</p>"
             f"{warn}{items}<div class='res meta' id='rollback-res' role='status'></div></div>")
 
 
@@ -3893,7 +3951,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     if not d.get("ready"):
                         K.audit(web.etc_dir, who="operator", event="update-refused", version=rec.get("version"), error=d.get("error"))
                         return self._json(400, {"error": d.get("error"), "running": __version__})
-                    U.prune_staged(web.state_dir, keep=5, running=__version__, arch=web.arch)
+                    U.prune_staged(web.state_dir, running=__version__, arch=web.arch)
                     a = U.apply(web.state_dir, rec["version"])
                     K.audit(web.etc_dir, who="operator", event="update-apply", version=rec.get("version"), started=a.get("started"), error=a.get("error"))
                     return self._json(200 if a.get("started") else 500, dict(a, running=__version__))

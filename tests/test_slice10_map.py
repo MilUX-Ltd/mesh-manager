@@ -139,6 +139,9 @@ _page = read("src/mesh_manager/web.py") or ""
 check_true("0.20.2 only a deliberate click is remembered", "show(b.dataset.view,true)" in _page and "if(chose){try{localStorage.setItem('mm-view-choice'" in _page)
 check_true("0.20.2 the automatic fall back does not remember", "show('plan');return;" in _page and "localStorage.setItem('mm-view'," not in _page)
 check_true("0.20.2 the key written by the old behaviour is dropped on sight", "localStorage.removeItem('mm-view')" in _page)
-check_true("0.20.2 a box with a position opens on the map", "data-default-view='{'map' if has else 'plan'}'" in _page or "'map' if has else 'plan'" in _page)
+# 0.20.2 opened on the map only when the box knew where it was. Matt, 6 Sep 2026: "app does not default to map
+# view when loading. it should do, i asked for it some iterations ago." Spec 068: the map is always the default,
+# and a box with no position gets a real map with words on it rather than an empty box.
+check_true("Spec 068 the map is what this opens on, position or not", "data-default-view='map'" in _page)
 
 finish()

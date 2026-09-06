@@ -107,13 +107,15 @@ check_true("AC5 the overlay updates from /api/links on the events and falls back
 check_true("AC5 no reload", "location.reload(" not in js)
 srv.shutdown()
 
-# no position: the plan view is the default and the map view says why
+# no position: Spec 068, the map is still the default and it says why there is nothing on it. Before this the
+# map was never built at all when the box had no position, so a hub's Map button revealed an empty box.
 import fakebridge_lib as FB
 saved = dict(FB.LINKS["own"])
 FB.LINKS["own"].update({"lat": None, "lon": None, "position_source": None})
 srv, port = serve({"AUTH": "off"})
 st, _, page = get(port, "/")
-check_true("AC2 no position: Plan is the default and Map says why", "data-default-view='plan'" in page.decode() and "no position" in page.decode())
+_p = page.decode()
+check_true("AC2 no position: the map is still the default and says why", "data-default-view='map'" in _p and "no position" in _p and "id='map-empty'" in _p)
 srv.shutdown()
 FB.LINKS["own"].update(saved)
 
