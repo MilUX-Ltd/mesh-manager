@@ -1,0 +1,4 @@
+[console_scripts]
+mesh-manager-bridge = mesh_manager.bridge:main
+mesh-manager-desktop = mesh_manager.desktop:main
+mesh-manager-web = mesh_manager.web:main

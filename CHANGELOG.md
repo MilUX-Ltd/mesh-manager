@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.24.0 (6 September 2026) Matt: "then, in-app update for a laptop. It would be great if the app could update
+automatically, or let the user choose to do that."
+
+- **The application on a laptop updates itself.** It reads the public releases, takes the disk image on a Mac or
+  the zip on Windows, checks it against the hash published beside it, and swaps itself over. Nothing is
+  installed whose hash it cannot check or that does not match; the download goes to a temporary directory of its
+  own and never near the running copy; the version that was working is kept until the new one has started, and
+  every step that can fail puts the old one back.
+- **Three settings, plain.** `UPDATE_MODE` is `off` (never look), `manual` (look, and tell you: the menu offers
+  the version waiting) or `auto` (look, and take it). Telling you is the default, and so is any word nobody
+  recognises: a typo must not turn checking off quietly. It looks a minute or so after it starts, then every six
+  hours, and Settings changes the setting without a restart.
+- **A laptop set up before this version said never look**, because there was no laptop updater and the box's
+  checker would only have logged errors without a token. Nobody chose that, so the first run moves that one
+  setting to telling you and says so; choose `off` yourself and it stays off.
+- **The releases now carry a hash beside each desktop build**, `Mesh-Manager-<version>.dmg.sha256` and
+  `Mesh-Manager-<version>-windows-x64.zip.sha256`, written by the build scripts and attached by the publisher
+  and by the Windows workflow. A release without one offers a laptop nothing.
+- The screen's About page on a laptop now says what the application has seen and lets the setting be changed,
+  instead of asking for a GitHub token it does not need; the box's daily checker no longer starts on a laptop.
+
 ## 0.23.0 (6 September 2026) Matt: "and flashing over USB on macOS."
 
 - **Flashing works from a Mac.** A device held in its bootloader appears as a small removable volume. On Linux

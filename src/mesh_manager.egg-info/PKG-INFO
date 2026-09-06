@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: mesh-manager
+Version: 0.24.0
+Summary: Manage a Meshtastic mesh and its devices from the box that carries the gateway radio, and bridge it into TAK.
+License: GPL-3.0-or-later
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: NOTICE
+Requires-Dist: PyQRCode==1.2.1
+Requires-Dist: cryptography>=41
+Dynamic: license-file
+
 <p align="center">
   <img src="assets/mesh-manager-banner.svg" alt="Mesh Manager" width="820">
 </p>

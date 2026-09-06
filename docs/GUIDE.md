@@ -321,6 +321,26 @@ back** re-applies a release the box already holds, hash checked, without an SSH 
 
 ![The About page with updates and roll back](../assets/guide/about.png)
 
+### On a laptop
+
+A laptop updates itself, because nothing on it runs as root and nobody wants to watch a releases page. The
+application reads the public releases, takes the disk image on a Mac or the zip on Windows, checks it against
+the hash published beside it, and swaps itself over. It refuses anything whose hash it cannot check or that
+does not match, the download never lands on the copy that is running, and the version that was working is kept
+until the new one has started, so a failed update leaves you exactly where you were.
+
+It looks a minute or so after it starts, then every six hours. Choose what it should do on Settings, or with
+`UPDATE_MODE` in the laptop's config, three plain words:
+
+| `UPDATE_MODE` | What it does |
+| --- | --- |
+| `off` | Never looks. |
+| `manual` | Looks, and tells you: the menu by the clock says which version is waiting and offers **Update to it**. This is the default. |
+| `auto` | Looks, and takes it: it downloads, checks, swaps and restarts on its own. |
+
+Laptops set up before this version carry `UPDATE_MODE=off`, which nothing chose, so the application moves that
+one setting to `manual` on its first run and says so in its log. Choose `off` yourself and it stays off.
+
 ## Connections and agents
 
 An AI agent can connect to the box over MCP with a token you add here, at one of three autonomy
