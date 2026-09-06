@@ -4,6 +4,7 @@ Nothing answers before sign-in except /healthz and /login."""
 import argparse
 import base64
 import collections
+import contextvars
 import hashlib
 import hmac
 import html
@@ -195,6 +196,7 @@ class Web:
         threading.Thread(target=self._pump, name="events-pump", daemon=True).start()
         threading.Thread(target=self._status_tick, name="status-tick", daemon=True).start()
         self.desktop = str((config or {}).get("MODE") or "") == "desktop"
+
         if PRUNE_ON_START and not self.desktop:   # Spec 067: tidy at once, not one update later
             try:
                 U.prune_staged(self.state_dir, running=__version__, arch=self.arch)
@@ -623,7 +625,7 @@ def state_strip(st):
         lamp, word = "ok", "Bridging to TAK"
     heard = int((st.get("nodes_heard") if st.get("nodes_heard") is not None else st.get("nodes_seen")) or 0)   # 0.17.2: heard here, not the radio's database
     db = st.get("nodes_db")
-    counts = f"{heard} heard here" + (f", {int(db)} in the radio's database" if db is not None else "")
+    counts = f"{heard} heard here" + (f", {int(db)} in the radio's database, this radio included" if db is not None else "")
     parts = [f"<span class='word'><i class='lamp lamp--{lamp}'></i>{e(word)}</span>", f"<span>{e(counts)}</span>"]
     if st.get("region") or st.get("modem_preset"):
         parts.append(f"<span>{e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</span>")
@@ -677,6 +679,52 @@ APP_HEAD = ("<link rel='manifest' href='/manifest.webmanifest'><meta name='theme
 VIEWPORT = "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
 
 
+# Spec 069: the words on a screen follow the shape of the machine it is running on. Held per request rather
+# than per process: one process serves one shape in the field, but the suite serves two at once and a module
+# global let the second overwrite the first, which is exactly the kind of quiet wrongness this slice is about.
+_DESKTOP = contextvars.ContextVar("mm_desktop", default=False)
+
+
+def set_shape(desktop):
+    _DESKTOP.set(bool(desktop))
+
+
+def is_desktop():
+    return _DESKTOP.get()
+
+
+def this_box(cap=False):
+    """What to call the machine this screen runs on. A laptop is not a box, and the product knows which it is."""
+    w = "this laptop" if is_desktop() else "this box"
+    return w[0].upper() + w[1:] if cap else w
+
+
+def the_kit():
+    return "laptop" if is_desktop() else "box"
+
+
+def where_the_log_is():
+    """Where to look when something is wrong, on this shape. A laptop has no systemd and no SSH."""
+    if is_desktop():
+        return "open <code>log/app.log</code> in the application's own folder; the menu by the clock has Show the files"
+    return "read <code>journalctl -u mesh-manager-bridge -n 200</code> over SSH"
+
+
+def audit_detail(row):
+    """One line of detail for the audit table. A Python traceback is not a thing to put in front of an
+    operator: it is thirty lines of our own plumbing under their name. Keep what failed, drop the rest."""
+    out = []
+    for k, v in (row or {}).items():
+        if k in ("ts", "who", "event", "action", "name"):
+            continue
+        t = str(v)
+        if "\n" in t:
+            lines = [l.strip() for l in t.splitlines() if l.strip()]
+            t = lines[-1] if lines else ""
+        out.append(f"{k}: {t}"[:160])
+    return " · ".join(out)
+
+
 def page(title, body, active="", own="", st=None, pending=0, head="", update=None, notice=""):
     prim = "".join(f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}</a>" for p, t in NAV_PRIMARY)
     more = ""
@@ -693,7 +741,7 @@ def page(title, body, active="", own="", st=None, pending=0, head="", update=Non
 {("<a class='pill upd' href='/about'>update available: " + e(str(update)) + "</a>") if update else ""}<span class='headctl'>{icon_button("type", "Words on buttons", "Words on buttons", "Show a word beside every icon", cls="head icon", attrs="data-labels-toggle aria-pressed='false'")}{theme}</span></header>
 <div class='state' role='status'><span class='body' id='state-body'>{state_strip(st)}</span>{("<span class='pill' style='background:var(--warn);color:#fff;border-color:var(--warn)' data-tip='Sign-in is off' data-tip-more='Anyone who can reach this address is the operator'>" + e(notice) + "</span>") if notice else ""}<span id='live' class='live' data-tip='How long since the box last spoke to this page'>live <b>…</b></span></div>
 <main><h1>{e(title)}</h1>{body}</main>
-<footer>Mesh Manager by MilUX Ltd · GPL-3.0-or-later · the mesh as it is now, from the box that carries the radio</footer>
+<footer>Mesh Manager by MilUX Ltd · GPL-3.0-or-later · the mesh as it is now, from the {the_kit()} that carries the radio</footer>
 {LIVE_JS}{TIP_JS}</body></html>"""
 
 
@@ -751,7 +799,7 @@ def dur(secs):
 def overview_cards(st):
     if not st or "version" not in st:
         return ("<p class='bad'>The bridge is not answering, so the radio is not being read and nothing is reaching TAK. "
-                "Restart the box; if it comes back the same, read <code>journalctl -u mesh-manager-bridge</code> over SSH.</p>")
+                f"Restart {this_box()}; if it comes back the same, {where_the_log_is()}.</p>")
     radio = st.get("radio") or "(none)"
     present, boot, conn = st.get("radio_present"), st.get("bootloader"), st.get("connected")
     radio_txt = ("in bootloader mode" if boot else ("present" if present else "MISSING")) + (", connected" if conn else ", not connected")
@@ -1162,6 +1210,26 @@ OVERLAY_JS = r"""<script>
      when nothing does. A hub has no position of its own and its map used to be an empty box. */
   if(!window.L){show('plan');return;}
   var map=L.map('map-geo',{zoomControl:true,attributionControl:true});window.mmMap=map;
+  /* Spec 068: a Leaflet map with no centre and zoom renders nothing at all, not even imagery, and every call
+     that would have set one was behind a check that the container already had a size. A map built while its
+     container was still zero-wide therefore stayed blank and never recovered. Give it a view the moment it
+     exists, from where it was last left if this browser remembers, and let the fitting below improve it when
+     the data and the size arrive. */
+  (function(){var c=null;try{var v=JSON.parse(localStorage.getItem('mm-map-view')||'null');
+      if(v&&isFinite(v.lat)&&isFinite(v.lon)&&isFinite(v.z))c=v;}catch(e){}
+    map.setView(c?[c.lat,c.lon]:[54.0,-2.5],c?c.z:5);})();
+  map.on('moveend zoomend',function(){try{var c=map.getCenter();
+    localStorage.setItem('mm-map-view',JSON.stringify({lat:c.lat,lon:c.lng,z:map.getZoom()}));}catch(e){}});
+  /* Spec 068: a Leaflet map with no centre and zoom renders nothing at all, not even imagery, and every call
+     that would have set one was behind a check that the container already had a size. A map opened while its
+     container was still zero-wide therefore stayed blank for ever. Give it a view the moment it exists, from
+     where it was last left if this browser remembers, and let the fitting below improve it when the data and
+     the size arrive. */
+  (function(){var c=null;try{var v=JSON.parse(localStorage.getItem('mm-map-view')||'null');
+      if(v&&isFinite(v.lat)&&isFinite(v.lon)&&isFinite(v.z))c=v;}catch(e){}
+    map.setView(c?[c.lat,c.lon]:[54.0,-2.5],c?c.z:5);})();
+  map.on('moveend zoomend',function(){try{var c=map.getCenter();
+    localStorage.setItem('mm-map-view',JSON.stringify({lat:c.lat,lon:c.lng,z:map.getZoom()}));}catch(e){}});
   var layers={},current=null,byName={};
   (tiles.sources||[]).forEach(function(s){var o={maxZoom:20,attribution:s.attribution||''};if(s.subdomains){o.subdomains=s.subdomains;}if(s.maxzoom){o.maxNativeZoom=s.maxzoom;}if(s.minzoom){o.minNativeZoom=s.minzoom;}
     var l=L.tileLayer(s.url,o);l._mm=s;layers[s.id]=l;if(s.internet){byName[s.name||s.id]=l;}});
@@ -2266,7 +2334,7 @@ def channels_body(ch, own_id="?", st=None, rotation=None):
     st = st or {}
     primary = next((c.get("name") for c in ch.get("channels", []) if c.get("role") == "PRIMARY"), None) or st.get("primary_channel") or "the primary channel"
     err = f"<p class='warn'>{e(ch['error'])}</p>" if ch.get("error") else ""
-    qr = ("<h2>Join a channel</h2><p class='meta'>The join QR carries the channel name, the key, the region and the modem preset; the key appears nowhere else on this screen. "
+    qr = ("<h2>Put another device on this channel</h2><p class='meta'>The join QR carries the channel name, the key, the region and the modem preset; the key appears nowhere else on this screen. "
           "Show it only to a device you mean to join. Each channel row has its own QR.</p><button type='button' data-qr-open data-qr-index='0' data-qr-name='" + e(primary) + "'>Show the join QR for " + e(primary) + "</button>"
           f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Join QR' hidden><img src='/channels/qr.png' alt='Join QR for {e(primary)}' width='320' height='320'>"
           f"<div><b data-qr-name>{e(primary)}</b> · {e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</div><p class='meta'>Scan it in the Meshtastic app, or hold it up to a tracker's onboarding.</p>"
@@ -2489,7 +2557,7 @@ def shelf_card(sh):
                  f"<td><span class='{cls}'>{e(st)}</span><div class='sub'>{e(str(i.get('file') or ''))}</div>{('<div class=sub>put it at ' + e(str(i.get('path') or '')) + '</div>') if st != 'verified' else ''}</td>"
                  f"<td class='meta'>{e(str(i.get('note') or ''))}</td></tr>")
     return (f"<div class='card' style='grid-column:1/-1'><div class='k'>Shelf</div><div class='v'>Firmware pinned for the fleet</div><p class='meta'>Images live on the box under {e(str(sh.get('dir') or ''))}, put there by the installer or by you; the bridge flashes only a file whose sha256 matches its pin.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Image</th><th>On this box</th><th>Note</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No firmware pinned in this release.</td></tr>'}</tbody></table></div></div>")
+            f"<div class='tablewrap'><table><thead><tr><th>Image</th><th>On {this_box()}</th><th>Note</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No firmware pinned in this release.</td></tr>'}</tbody></table></div></div>")
 
 
 ROLE_HINTS = {"TRACKER": "sends its position, does not relay", "ROUTER": "relays for everyone, costs battery, best up high", "CLIENT": "talks and relays a little",
@@ -2638,23 +2706,23 @@ def help_body(st, cfg, reg, shelf, declared_region):
               "<tr><td>asked, no answer yet (sent hh:mm)</td><td>No answer in the window. Over LoRa that is slow and lossy, not failed: read the device again later.</td></tr>"
               "<tr><td>not written: …</td><td>Refused before anything was sent, and the reason.</td></tr></tbody></table>")
     where = (f"<p class='meta'>Units <code>mesh-manager-bridge</code> (owns the radio{', forwards to TAK' if st.get('tak') != 'off' else ''}) and <code>mesh-manager-web</code> (this screen). The bridge answers on <code>{e(str(st.get('socket') or ''))}</code>; "
-             f"its state, the register, the exports and the firmware shelf live under <code>{e(str(st.get('state_dir') or ''))}</code>. When something is wrong: <code>journalctl -u mesh-manager-bridge -n 200</code>. "
+             f"its state, the register, the exports and the firmware shelf live under <code>{e(str(st.get('state_dir') or ''))}</code>. When something is wrong, {where_the_log_is()}. "
              "A radio in bootloader mode presents a serial port and answers nothing; the bridge waits rather than restarting, and the Bench page names the recovery step.</p>")
     setup = ("<h2 style='margin-top:0'>Setting the kit up</h2><ol class='steps'>"
              "<li><a href='/radio'>Name this radio</a> and check its region and preset: every device on the mesh must share them.</li>"
              "<li><a href='/channels'>Mint a channel</a> of your own, or adopt a join URL you were given. The default key is everyone's key.</li>"
              "<li><a href='/channels'>Show the join QR</a> to a phone, or <a href='/bench'>onboard a device on the bench</a> by USB: names, a role, this radio's channel and admin key, each read back.</li>"
-             "<li><a href='/settings#position'>Say where this box is</a> if it has no GPS receiver, so the map has a centre.</li>"
+             f"<li><a href='/settings#position'>Say where {this_box()} is</a> if it has no GPS receiver, so the map has a centre.</li>"
              "<li><a href='/'>Watch the picture</a>: nodes, signal, battery and who has gone quiet. <a href='/health'>Health</a> holds the alerts and their thresholds.</li>"
              + ("<li>Point it at TAK: the bridge speaks to the TAK Server the installer was given; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li>" if st.get("tak") != "off"
-                else "<li>This box runs without TAK: the mesh is managed from this screen alone; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li>") + "</ol>")
+                else f"<li>{this_box(cap=True)} runs without TAK: the mesh is managed from this screen alone; the <a href='/settings'>standing brief</a> tells connected agents what this mesh is for.</li>") + "</ol>")
     return (f"{setup}<h2>The kit</h2><div class='cards'>{card('This radio', e(str(own.get('name') or '?')) + ' <span class=pill>' + e(str(own.get('id') or '')) + '</span>')}"
             f"{card('Rides', e(str(st.get('region') or '?')) + ' · ' + e(str(st.get('modem_preset') or '?')) + '<div class=meta>primary ' + e(str(st.get('primary_channel') or '?')) + '</div>')}"
             f"{card('The fleet', str(len(rows)) + ' device' + ('s' if len(rows) != 1 else '') + '<div class=meta>' + str(len(managed)) + ' managed by this radio</div>')}"
             f"{card('The radio is at', e(str(st.get('radio') or '?')))}</div>"
             f"<div class='tablewrap' style='margin-top:1rem'><table><thead><tr><th>Device</th><th>Holder</th><th>Hardware · firmware</th><th>Managed</th></tr></thead><tbody>{fleet}</tbody></table></div>"
             f"<h2>Before the kit travels</h2>{region}"
-            f"<h2>The shelf</h2><p class='meta'>Firmware the fleet may carry, pinned in this release; recovery images are the way back when a device will not boot.</p><div class='tablewrap'><table><thead><tr><th>Image</th><th>On this box</th><th>Note</th></tr></thead><tbody>{pins}</tbody></table></div>"
+            f"<h2>The shelf</h2><p class='meta'>Firmware the fleet may carry, pinned in this release; recovery images are the way back when a device will not boot.</p><div class='tablewrap'><table><thead><tr><th>Image</th><th>On {this_box()}</th><th>Note</th></tr></thead><tbody>{pins}</tbody></table></div>"
             f"<h2>What goes wrong</h2><p class='meta'>The same rules the connected agent reads; every one was paid for on a real mesh.</p>{lessons_html()}"
             f"<h2>The four states of a write</h2>{states}<p class='meta'>Every time on this screen is Zulu.</p><h2>Where things are</h2>{where}")
 
@@ -2725,7 +2793,7 @@ UPDATE_JS = r"""<script>
     ap.disabled=true;res('downloading and checking '+v);
     fetch('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:v})}).then(function(r){return r.json();}).then(function(j){
       if(j.error){res('not applied: '+j.error,'bad');ap.disabled=false;return;}res('installing '+v+'; the screen will come back on the new version','warn');
-      var t0=Date.now();(function poll(){setTimeout(function(){fetch('/healthz').then(function(r){return r.json();}).then(function(h){if(h.version&&h.version!==j.running){window.location.href='/about';}else if(Date.now()-t0<600000){poll();}else{res('the screen is back but still on '+h.version+': read the last update log below','bad');}}).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: ssh to the box and read journalctl -u mesh-manager-update','bad');}});},3000);})();})
+      var t0=Date.now();(function poll(){setTimeout(function(){fetch('/healthz').then(function(r){return r.json();}).then(function(h){if(h.version&&h.version!==j.running){window.location.href='/about';}else if(Date.now()-t0<600000){poll();}else{res('the screen is back but still on '+h.version+': read the last update log below','bad');}}).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: look at the update log below','bad');}});},3000);})();})
     .catch(function(){res('the box went away mid-request; it may be restarting','warn');});});});}
 })();
 </script>"""
@@ -3091,7 +3159,7 @@ def rollback_box(web):
     if not back:
         return ("<div class='card' id='rollback-box'><div class='k'>Roll back</div>"
                 "<div class='v'>nothing to roll back to</div>"
-                "<p class='meta'>A roll back re-applies a release this box has already taken, from what is still "
+                f"<p class='meta'>A roll back re-applies a release {this_box()} has already taken, from what is still "
                 "staged on disk. Only the running version is here, so there is nothing to return to yet.</p></div>")
     auto = web.update_mode() == "auto"
     items = "".join(
@@ -3127,7 +3195,7 @@ ROLLBACK_JS = r"""<script>
             if(h.version&&h.version===v){window.location.href='/about';}
             else if(Date.now()-t0<600000){poll();}
             else{res('the screen is back but on '+h.version+': read the last update log below','bad');}
-          }).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: read journalctl -u mesh-manager-update on the box','bad');}});},3000);})();})
+          }).catch(function(){if(Date.now()-t0<600000){poll();}else{res('the screen did not come back in ten minutes: look at the update log below','bad');}});},3000);})();})
       .catch(function(){b.disabled=false;res(window.mmNoAnswer,'bad');});});});});
 })();
 </script>"""
@@ -3408,7 +3476,7 @@ def activity_body(web):
     forms = "".join(proposal_form(pr) for pr in props) or "<p class='meta'>Nothing pending. An agent at propose autonomy queues its requests here for you to run or dismiss.</p>"
     tail = K.audit_tail(web.etc_dir, 200)
     audit_rows = "".join(f"<tr><td class='meta'><time datetime='{e(str(x.get('ts') or ''))}' data-age>{e(age(x.get('ts') or ''))}</time></td><td>{e(str(x.get('who') or ''))}</td><td>{e(str(x.get('event') or ''))}</td>"
-                         f"<td>{e(str(x.get('action') or x.get('name') or ''))}</td><td class='meta'>{e(json.dumps({k: v for k, v in x.items() if k not in ('ts', 'who', 'event', 'action')}, default=str)[:160])}</td></tr>"
+                         f"<td>{e(str(x.get('action') or x.get('name') or ''))}</td><td class='meta'>{e(audit_detail(x))}</td></tr>"
                          for x in reversed(tail)) or "<tr><td colspan=5 class='meta'>No audit lines yet.</td></tr>"
     return (f"<h2>Proposals waiting for you</h2><p class='meta'>Each is the catalogue's own form, filled in by the agent; change a field before you run it if you like. Running it reads back from the radio like any other write.</p><div class='cards'>{forms}</div>"
             "<h2>Audit</h2><p class='meta'>Every agent call, proposal, run and dismissal, newest first, under the connection's name.</p>"
@@ -3444,7 +3512,7 @@ def peers_section(p, hub=False):
         return f"<h2 id='peers'>Peers</h2><p class='meta bad'>{e(str(p['error']))}</p>"
     site = p.get("site") or {}
     listening = (f"listening on port {e(str(site.get('port')))}" if site.get("listening") else "not listening: peers cannot join this site until the installer's --peer-bind is set")
-    head = (f"<h2 id='peers'>Peers</h2><p class='meta'>Mesh Managers joined to this one over the internet (ADR 003). Each side sends its picture, nodes, positions and battery, and shows the other's, marked with where it came from. Nothing goes on the air, and channel keys never cross.</p>"
+    head = (f"<h2 id='peers'>Peers</h2><p class='meta'>Mesh Managers joined to this one over the internet. Each side sends its picture, nodes, positions and battery, and shows the other's, marked with where it came from. Nothing goes on the air, and channel keys never cross.</p>"
             f"<div class='cards'>{card('This site', e(str(site.get('name') or '?')) + ' <span class=pill>' + e(str(site.get('short') or '')) + '</span><div class=meta>' + e(str(site.get('address') or 'no address set: the invite names this machine by its hostname')) + ' · ' + e(listening) + '</div>', 'ok' if site.get('listening') else '')}</div>")
     rows = ""
     for q in p.get("peers") or []:
@@ -3655,6 +3723,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             return page(title, body, active, own=own, st=st if st is not None else self._ask("status"), pending=len(K.proposals(web.etc_dir)), head=head, update=web.update_available(), notice=open_note)
 
         def do_GET(self):
+            set_shape(web.desktop)   # Spec 069: before anything renders a word
             path = self.path.split("?")[0]
             if path == "/healthz":
                 return self._json(200, {"ok": True, "bridge": web.client.reachable(), "version": __version__})
@@ -3920,6 +3989,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             return {k: v[0] for k, v in urllib.parse.parse_qs(raw.decode("utf-8", "replace")).items()}
 
         def do_POST(self):
+            set_shape(web.desktop)
             path = self.path.split("?")[0]
             self._raw()
             if path == "/mcp":

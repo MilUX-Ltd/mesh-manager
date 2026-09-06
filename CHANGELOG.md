@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 0.27.0 (6 September 2026)
+
+Spec 069, the defect slice from the morning's product review: six findings that needed no decision from anyone.
+Each of them passed a hardware gate and failed a person.
+
+- **A laptop is no longer called a box.** The footer, the Help page, the About text, the firmware shelf and the
+  roll back card all said "the box" on a machine that is a laptop. One helper now gives the word for the shape
+  this screen is running on, held per request rather than per process.
+- **Nobody is told to run `journalctl` on a Mac.** Where to look when something is wrong follows the shape: the
+  unit's log on a box, the application's own log and the menu's Show the files on a laptop. Help is where the
+  guide sends a stuck person, so it was the worst place for it.
+- **The audit table no longer prints our plumbing at the operator.** A Python traceback was rendered raw, thirty
+  and more times, under the name of the operator who did not write it. The table now shows what failed in one
+  line and never a traceback.
+- **The node count no longer reads as a contradiction.** The strip counts the radio's whole database including
+  the radio; the Nodes page counts the ones not heard here. Four plus seven is eleven and nothing said where
+  the twelfth went. The strip now names its basis, so the two reconcile.
+- **No operator screen cites an architecture decision record.** "(ADR 003)" is not a thing an operator has.
+- **The Channels heading says what its control does.** "Join a channel" sat above a QR code for a different
+  device to scan; nobody joins anything from that screen.
+
+The rest of the review is carded, and three of those need a decision from Matt before anyone builds them.
+
+- The map is given a centre and a zoom the moment it is built, and remembers where it was last left in that
+  browser. Leaflet renders nothing at all without a view, not even imagery, and every call that set one was
+  behind a check that the container already had a size, so a map built while its container was still zero-wide
+  stayed blank and never recovered. Found while proving the 0.26.0 fix in a pane that had collapsed to no width.
+
 - The public cut's changelog filter now understands a list of card references and any capitalisation, keeps the
   line break before the clause it removes, and tidies the punctuation left behind. A release note opening
   "

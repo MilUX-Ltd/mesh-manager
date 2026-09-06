@@ -41,6 +41,9 @@ src = read("src/mesh_manager/web.py") or ""
 check_true("AC2 the map is built whether or not the box has a position",
            "if(!window.L){show('plan');return;}" in src and "if(!has||!window.L)" not in src)
 check_true("AC2 and a box with nothing positioned is still given a view", "map.setView([54.0,-2.5],5)" in src)
+check_true("AC2 the map has a view from the moment it exists, whatever size its container is",
+           "map.setView(c?[c.lat,c.lon]:[54.0,-2.5],c?c.z:5)" in src)
+check_true("AC2 and where it was last left is remembered", "mm-map-view" in src)
 check_true("AC3 nodes with positions are drawn without one of our own", "function drawWithoutOwn" in src and "drawWithoutOwn(J);return;" in src)
 check_true("AC4 the words name where to set the box's position", "Where this box is" in src and "/settings" in src)
 
