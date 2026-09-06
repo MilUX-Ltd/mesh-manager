@@ -52,6 +52,10 @@ the network you are sitting on, and nobody can dial in to it. With no radio plug
 says it is watching for one, joins and shows what its peers send, and takes a radio the moment one appears. The
 demo mesh is what `--demo` asks for, not what a missing radio gives.
 
+A laptop is also a **bench**: a radio you plug in that is not the one it is using appears on the Bench page,
+with its maker and serial number where the device says them, ready to read, onboard and set up. On a laptop
+with no radio of its own, everything plugged in is bench kit.
+
 From a terminal instead, with the release installed in a virtual environment, `mesh-manager-desktop` does the
 same without the menu bar, and `--in-process` runs both parts in one process as the app does. Either way the
 files live under the platform's application directory (on a Mac, `Library/Application Support/Mesh Manager` in

@@ -221,6 +221,75 @@ class CountingSocket:
 accept_item = P.accept_item   # Spec 052: the loop guard, pure
 
 
+def bench_ports(system=None, ports=None, serial_dir=None, gateway="", gateway_serial="", gps=""):
+    """Spec 063: the radios plugged into this computer, ready for the bench, on any platform. Linux keeps its
+    /dev/serial/by-id names, which are stable and already written in registers; macOS and Windows use the ports
+    the system reports. This box's own gateway and its receiver are never bench kit, matched by the device's own
+    serial number where there is one, so the same radio in another socket is still recognised."""
+    import platform as _pf
+    system = system or _pf.system()
+    serial_dir = SERIAL_DIR if serial_dir is None else serial_dir
+    if ports is None:
+        try:
+            from serial.tools import list_ports
+            ports = list(list_ports.comports())
+        except Exception:  # noqa: BLE001
+            ports = []
+    by_device = {}
+    for p_ in ports:
+        d = str(getattr(p_, "device", "") or "")
+        if d:
+            by_device[d] = p_
+    def detail(p_):
+        vid, pid = getattr(p_, "vid", None), getattr(p_, "pid", None)
+        ser = str(getattr(p_, "serial_number", "") or "")
+        return {"vendor": str(getattr(p_, "manufacturer", "") or ""), "product": str(getattr(p_, "product", "") or ""),
+                "serial": ser, "vid": f"{vid:04x}" if vid else "", "pid": f"{pid:04x}" if pid else "",
+                "id": (f"{vid:04x}:{pid:04x}:{ser}" if vid and pid and ser else "")}
+    gw_real = os.path.realpath(gateway) if gateway else ""
+    gps_real = os.path.realpath(gps) if gps else ""
+    gw_serial = str(gateway_serial or "").strip()
+    if not gw_serial and gateway and gateway in by_device:
+        gw_serial = str(getattr(by_device[gateway], "serial_number", "") or "")
+    candidates = []
+    # a box keeps its stable by-id names; where that directory does not exist, which is every laptop, the
+    # system's own ports are what there is
+    if os.path.isdir(serial_dir) and system != "Windows":
+        try:
+            for nm in sorted(os.listdir(serial_dir)):
+                candidates.append((os.path.join(serial_dir, nm), by_device.get(os.path.realpath(os.path.join(serial_dir, nm)))))
+        except OSError:
+            pass
+    else:
+        looks = ("usbmodem", "usbserial", "SLAB", "wchusbserial", "ttyACM", "ttyUSB")
+        for d, p_ in sorted(by_device.items()):
+            base = os.path.basename(d)
+            if system == "Windows":
+                # every port on Windows is COMn, so the name says nothing: a USB device is one that
+                # tells you its vendor and product, and a bare COM port is the machine's own
+                if getattr(p_, "vid", None) and getattr(p_, "pid", None):
+                    candidates.append((d, p_))
+                continue
+            if any(w in base for w in looks) and "Bluetooth" not in base and "debug-console" not in base:
+                candidates.append((d, p_))
+    out = []
+    for path, p_ in candidates:
+        real = os.path.realpath(path)
+        info = detail(p_) if p_ is not None else {"vendor": "", "product": "", "serial": "", "vid": "", "pid": "", "id": ""}
+        if gw_real and real == gw_real:
+            continue
+        if gw_serial and info["serial"] and info["serial"] == gw_serial:
+            continue
+        if gps_real and real == gps_real:
+            continue
+        if re.search(r"gps|gnss", (path + " " + info["product"] + " " + info["vendor"]), re.I):
+            info["kind"] = "gps"
+        rec = {"path": path, "tty": os.path.basename(real), **info}
+        rec["id"] = info["id"] or path
+        out.append(rec)
+    return out
+
+
 class NullSocket:
     """The server shape (Spec 050): no TAK Server on this box; whatever the gateway would send goes nowhere, uncounted."""
     def connect(self, addr): pass
@@ -347,7 +416,8 @@ class Bridge(TAKMeshtasticGateway):
         self._redial_pinned()
         if radioless:
             self._touch(); sd_notify("READY=1")
-            self.logger.info(f"mesh-manager-bridge {__version__} as a hub; site {self.peering.id[:12] if self.peering else '?'}; socket {socket_path}; state {state_dir}")
+            shape = "a hub" if self.box_mode == "hub" else ("a laptop, watching for a radio" if self.box_mode == "desktop" else self.box_mode)
+            self.logger.info(f"mesh-manager-bridge {__version__} as {shape}; site {self.peering.id[:12] if self.peering else '?'}; socket {socket_path}; state {state_dir}")
             return
         if self.box_mode in ("server", "desktop"):
             self.socket_client = NullSocket()
@@ -2414,33 +2484,31 @@ class Bridge(TAKMeshtasticGateway):
         return os.path.realpath(self.conf["SERIAL"]) if self.conf.get("SERIAL") else ""
 
     def op_bench_devices(self, **_):
-        try:
-            names = sorted(os.listdir(self.serial_dir))
-        except OSError:
-            names = []
-        gw = self._gateway_real()
-        gps = self.gps_path()
-        gps_real = os.path.realpath(gps) if gps else ""
+        """Spec 063: what is plugged in and ready for the bench, on a box or on a laptop."""
+        rows = bench_ports(ports=getattr(self, "_ports_for_test", None), serial_dir=self.serial_dir,
+                           gateway=self.conf.get("SERIAL") or "", gps=self.gps_path() or "")
         out = []
-        for nm in names:
-            path = os.path.join(self.serial_dir, nm)
-            if gw and os.path.realpath(path) == gw:
-                continue
-            if gps_real and os.path.realpath(path) == gps_real:
-                continue
-            boot = bool(self.bootloader_check(path))
-            rec = {"path": path, "tty": os.path.basename(os.path.realpath(path)), "bootloader": boot}
-            if boot:
-                rec["recovery"] = RECOVERY_UF2
-            if re.search(r"gps|gnss", nm, re.I):
-                rec["kind"] = "gps"      # the box's own receiver on the same bus: not a radio, never opened
+        for rec in rows:
+            rec = dict(rec)
+            if rec.get("kind") != "gps":
+                boot = bool(self.bootloader_check(rec["path"]))
+                rec["bootloader"] = boot
+                if boot:
+                    rec["recovery"] = RECOVERY_UF2
             out.append(rec)
         return {"gateway": self.conf.get("SERIAL") or "", "devices": out}
 
     def _bench_open(self, path):
         path = str(path or "")
-        if not path.startswith(self.serial_dir.rstrip("/") + "/") or "/.." in path:
-            return None, f"path must be under {self.serial_dir}/"
+        # Spec 063: on a box the bench lives under /dev/serial/by-id; on a laptop it is whatever the system
+        # reports as a port. Either way the path has to be one this bridge itself listed a moment ago, which
+        # keeps the gateway and anything else out without a pattern to argue about.
+        if "/.." in path or "\0" in path:
+            return None, "that is not a device path"
+        if not path.startswith(self.serial_dir.rstrip("/") + "/"):
+            seen = {d.get("path") for d in self.op_bench_devices().get("devices", [])}
+            if path not in seen:
+                return None, f"{path} is not a radio this computer can see on the bench"
         gw = self._gateway_real()
         if gw and os.path.realpath(path) == gw:
             return None, "that is the gateway radio; it is set from the Radio page"
@@ -4084,8 +4152,10 @@ def main(argv=None):
     conf = read_config(a.config)
     if a.serial:
         conf["SERIAL"] = a.serial
-    if not conf.get("SERIAL") and conf.get("MODE") != "hub":
-        print("ERR no SERIAL in the config and no --serial given (a site with no radio is MODE=hub)", file=sys.stderr)
+    if not conf.get("SERIAL") and conf.get("MODE") not in ("hub", "desktop"):
+        # Spec 062: a laptop with nothing plugged in is a site watching for a radio, not an error; a box with a
+        # radio in its config that is simply unplugged waits too. Only a server shape with no radio is a mistake.
+        print("ERR no SERIAL in the config and no --serial given (a site with no radio is MODE=hub, a laptop is MODE=desktop)", file=sys.stderr)
         return 2
     b = Bridge(conf, socket_path=a.socket, state_dir=a.state_dir, observe=a.observe, silence_limit=a.silence_limit)
     try:

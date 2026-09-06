@@ -2422,7 +2422,11 @@ def bench_cards(d, shelf=None):
     cards = ""
     for dev in d.get("devices", []):
         path, name = str(dev.get("path") or ""), os.path.basename(str(dev.get("path") or ""))
-        head = f"<div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(bench_name(path))}</div><div class='sub'>{e(name)}</div>"
+        # Spec 063: what the device says of itself, where it says anything, so a laptop's ports are legible
+        made = " · ".join(x for x in (str(dev.get("vendor") or ""), str(dev.get("product") or "")) if x)
+        ser = str(dev.get("serial") or "")
+        told = (f"<div class='sub'>{e(made)}{' · ' if made and ser else ''}{('serial ' + e(ser)) if ser else ''}</div>") if (made or ser) else ""
+        head = f"<div class='k'>{e(dev.get('tty') or '')}</div><div class='v'>{e(bench_name(path))}</div><div class='sub'>{e(name)}</div>{told}"
         if dev.get("bootloader"):
             cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='bad'>In bootloader mode: it answers nothing.</p>{recovery_steps(path, shelf)}</div>"
             continue

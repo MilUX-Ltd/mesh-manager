@@ -52,4 +52,9 @@ check_true("AC5 and says nothing of sites when there are none", not any("joined"
 # AC6: the guide
 g = read("docs/GUIDE.md") or ""
 check_true("AC6 the guide says a laptop can join a hub", "join a hub" in g.lower() and "laptop" in g.lower())
+# 0.22.0: found running the bench gate. The bridge's own command refused a laptop with no radio, though the
+# application's in-process path allowed it, so `mesh-manager-bridge` could not start a bench-only laptop.
+_br = read("src/mesh_manager/bridge.py") or ""
+check_true("AC1 the bridge's command starts a laptop with no radio", 'conf.get("MODE") not in ("hub", "desktop")' in _br)
+
 finish()

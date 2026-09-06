@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.22.0 (6 September 2026) Matt: "finding a second radio plugged into it."
+
+- **The bench works on a laptop.** Devices were found by listing `/dev/serial/by-id`, which only Linux has, so
+  the Bench page was always empty on a Mac or on Windows. Discovery now asks the system for its ports and what
+  each device says of itself: the maker, the product, the serial number, and a name that does not change when it
+  is plugged into another socket. A box keeps its `/dev/serial/by-id` names, so registers written on one still
+  match.
+- **The gateway is never bench kit**, on any platform, matched by the device's own serial number as well as its
+  path, so the same radio in a different socket is still recognised as the one in use.
+- **The bench can open what it listed.** The path rule was Linux-only; a bench operation now accepts any device
+  this computer has just listed, which keeps the gateway out without a pattern to argue about.
+- Found while gating this: `mesh-manager-bridge` refused to start on a laptop with no radio, though the
+  application's own path allowed it. A laptop with nothing plugged in starts, and says it is watching for one.
+
 ## 0.21.0 (6 September 2026) Matt: "this would be epic, the desktop link."
 
 - **A laptop is a site.** It joins a hub by invite like any box, dialling out, so nothing is opened on the
