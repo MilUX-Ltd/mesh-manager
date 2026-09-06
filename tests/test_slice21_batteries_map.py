@@ -79,8 +79,10 @@ def get(p):
 s, full = get("/map/full")
 check_true("AC5 /map/full is the map with no header", s == 200 and "id='map-geo'" in full and "<header" not in full and "class='bare'" in full and "id='map-pop'" not in full)
 s, mp = get("/map")
-# 5 Sep 2026 UX reviews: the rings are a three-way switch, not a slider, and Pop out is an icon with a name
-check_true("AC5 /map has Pop out and the rings switch", s == 200 and "id='map-pop'" in mp and "name='rings'" in mp and "zoomend" in mp and "niceStep" in mp)
+# The 5 Sep 2026 UX pass made the rings a three-way switch and this line held it there. Matt reversed that on
+# 6 Sep: the useful settings are between the presets, and one slider now dims the rings, the nodes and the
+# tracks together (Spec 066). Pop out is still an icon with a name.
+check_true("AC5 /map has Pop out and the dimming slider", s == 200 and "id='map-pop'" in mp and "id='map-dim'" in mp and "name='rings'" not in mp and "zoomend" in mp and "niceStep" in mp)
 check_true("AC7 the map waits for a size before it fits and refits on resize; centre on me is a one-kilometre view (0.2.12)", "function sized()" in mp and "ResizeObserver" in mp and "visibilitychange" in mp and "toBounds(1000)" in mp and "map-centre" in mp and "!fitted&&sized()" in mp)
 check_true("AC6 each ring is a gold line over a deep-green halo (0.2.8)", "color:tok('--gold'),weight:2" in mp and "color:tok('--accent'),weight:4" in mp)
 s, nodes = get("/nodes")

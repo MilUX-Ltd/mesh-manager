@@ -312,6 +312,24 @@ press, install on its own, or never talk to GitHub. Each form has its own Save a
 
 ![The Settings page](../assets/guide/settings.png)
 
+### Playback, and getting back to live
+
+Under the map is a timeline, a row per node and a tick per position report. Press or drag it and the map leaves
+the live picture: it shows where every node was at that instant, with the run each one had walked. The clock
+beside the scrubber tells you which you are looking at. It reads **live** when the map is now, and the instant
+with how far back it is when it is not.
+
+Two ways back. The **Back to live** button beside the scrubber, or the `l` key. And if you walk away, the map
+comes back on its own: two minutes with nobody touching the playback and it returns to live, counting down in
+words beside the clock so it is never a surprise. A playback that is running is never interrupted; the two
+minutes start when it stops.
+
+### Dimming the overlay
+
+The **Dim** slider takes the range rings, the node markers and the tracks from solid to invisible together, so
+you can see the imagery underneath. At nought the overlay is off and the label says so. It is remembered in
+that browser.
+
 ## Updates
 
 About shows the running version, when the box last checked, and **Update now** when a newer release

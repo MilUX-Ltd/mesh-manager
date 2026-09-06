@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.25.0 (6 September 2026) Matt, using the application: "there needs to be 1) a timeout that brings it back to live
+if not touched. and 2) a button to bring it back to live. Also, what happened to my slider for dimming the
+rings, nodes and tracks. i'd like that slider back."
+
+- **The map says whether it is live, and comes back.** Scrub the timeline and the clock beside the scrubber
+  reads the instant and how far back it is, instead of going blank. A **Back to live** button sits beside the
+  scrubber, disabled while the map is live, and the `l` key does the same. Two minutes with nobody touching the
+  playback and the map returns to live on its own, counting down in words first. A playback that is running is
+  never interrupted; the clock starts when it stops, which includes reaching the end of the window.
+- **The dimming slider is back, and does more.** Spec 019 gave the map a slider from invisible to solid for the
+  range rings; the page-by-page pass of 5 September replaced it with three presets. It is a slider again, and
+  one value now dims the range rings, the node markers and the tracks together, so the imagery underneath can
+  be seen. At nought the overlay is off and the label says so. A browser holding the old rings setting keeps its
+  value.
+- The suite that held the three presets in place has been changed to hold the slider, with the reason recorded
+  in the line above it. A test can lock in a decision the owner has since overturned.
+
+- `release/sync-desktop-builds.sh` copies the desktop builds from the private release to the public one, each
+  checked against its published hash and refused without one, and `publish-release.sh` waits for the Windows
+  build and calls it. The Windows application is built by a workflow that can only upload to the private
+  release, so it had never reached the repository people download from, and 0.24.0's laptop updater would have
+  found nothing for a Windows machine. The 0.24.0 public release was mended by hand. LESSONS 51.
+
+- `release/publish-release.sh` now publishes to both repositories, the private one and the public one people
+  install from, with the same files under the same names, and it carries the desktop builds and the cut for a
+  newer Python when those have been made. The public release was made by hand and `install.sh` was left off it;
+  the public repository's own verification caught that within the minute. `--private-only` skips the public half.
+  release forgets.
+
 ## 0.24.0 (6 September 2026) Matt: "then, in-app update for a laptop. It would be great if the app could update
 automatically, or let the user choose to do that."
 

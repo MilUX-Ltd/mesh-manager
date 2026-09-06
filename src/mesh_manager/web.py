@@ -1197,6 +1197,7 @@ OVERLAY_JS = r"""<script>
     Object.keys(byNode).forEach(function(id,idx){var pts=byNode[id];pts.sort(function(a,b){return a.ts<b.ts?-1:1;});var stride=Math.max(1,Math.floor(pts.length/600));var col=tok(TRAIL_COLOURS[idx%TRAIL_COLOURS.length]);
       for(var i=stride;i<pts.length;i+=stride){var a=pts[i-stride],b=pts[i];var age=now-Date.parse(b.ts);if(age>win)continue;var d=map.distance([a.lat,a.lon],[b.lat,b.lon]);if(d>2000)continue;
         var op=0.25+0.75*Math.max(0,1-age/win);L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{color:col,weight:4,opacity:op,interactive:true}).bindTooltip((names[id]||id)+' · '+b.ts.slice(11,16)+'Z',{sticky:true,className:'mm-link'}).addTo(trails_);}});
+    dimTracks();
     if(window.requestAnimationFrame){requestAnimationFrame(function(){if(typeof drawTimeline==='function')drawTimeline();});}}
   function fetchTrails(force){var th=parseFloat(trailHours()),ch=parseFloat(coverHours());var hrs=Math.max(th>0?th:0,ch>0?ch:0);if(!(hrs>0)){trails_.clearLayers();cover_.clearLayers();return;}var now=Date.now();if(!force&&now-trailLast<60000)return;trailLast=now;
     var since=new Date(now-hrs*3600*1000).toISOString().replace(/\.\d+Z$/,'Z');
@@ -1265,8 +1266,20 @@ OVERLAY_JS = r"""<script>
   var rings_=L.layerGroup().addTo(map),centre=null;
   function niceStep(raw){if(!(raw>0))return 10;var mag=Math.pow(10,Math.floor(Math.log10(raw)));var c_=[1,2,5].map(function(x){return x*mag;}).filter(function(v){return v<=raw;});return c_.length?c_[c_.length-1]:mag;}
   function ringStep(){var b=map.getBounds(),m=map.getCenter();var h=map.distance([b.getNorth(),m.lng],[b.getSouth(),m.lng])/2,w=map.distance([m.lat,b.getWest()],[m.lat,b.getEast()])/2;return niceStep(Math.min(h,w)/3);}
-  function alpha(){var v=60;try{var s=localStorage.getItem('mm-ring-alpha');if(s!==null)v=parseInt(s,10);}catch(e){}var el=document.querySelector('input[name=rings]:checked');if(el){v=parseInt(el.value,10);}if(isNaN(v))v=60;return Math.max(0,Math.min(100,v))/100;}
-  function rings(){rings_.clearLayers();if(!centre||!map._loaded)return;var a=alpha(),lbl=document.getElementById('ring-step');if(a<=0){if(lbl){lbl.textContent='rings off';}return;}var step=ringStep();if(lbl){lbl.textContent='rings every '+dist(step);}
+  // Spec 066: one slider dims the range rings, the node markers and the tracks together, so the imagery
+  // underneath can be seen. It was a slider in Spec 019, became three presets on 5 September, and is a slider
+  // again because the useful settings are between the presets. A browser holding the old rings value keeps it.
+  function dimValue(){var v=null,el=document.getElementById('map-dim');
+    if(el&&el.value!==''){v=parseInt(el.value,10);}
+    if(v===null||isNaN(v)){try{var s=localStorage.getItem('mm-dim');if(s===null)s=localStorage.getItem('mm-ring-alpha');if(s!==null)v=parseInt(s,10);}catch(e){}}
+    if(v===null||isNaN(v))v=60;return Math.max(0,Math.min(100,v));}
+  function alpha(){return dimValue()/100;}
+  function dimNodes(){var a=alpha();[overlay,play_].forEach(function(grp){if(!grp)return;grp.eachLayer(function(l){var el=l.getElement&&l.getElement();if(el){el.style.opacity=String(a);el.style.pointerEvents=a<=0?'none':'';}
+    if(l.setStyle&&!l.getElement){try{l.setStyle({opacity:a,fillOpacity:a*0.7});}catch(e){}}});});}
+  function dimTracks(){var a=alpha();trails_.eachLayer(function(l){if(!l.setStyle)return;var base=(l.options&&l.options.mmOpacity);if(base===undefined)base=l.options?l.options.opacity:1;
+    if(l.options)l.options.mmOpacity=base;try{l.setStyle({opacity:base*a});}catch(e){}});}
+  function applyDim(){rings();dimNodes();dimTracks();var lbl=document.getElementById('map-dim');if(lbl)lbl.setAttribute('aria-valuetext',dimLabel(dimValue()));}
+  function rings(){rings_.clearLayers();if(!centre||!map._loaded)return;var a=alpha(),lbl=document.getElementById('ring-step');if(a<=0){if(lbl){lbl.textContent=dimLabel(0);}return;}var step=ringStep();if(lbl){lbl.textContent='rings every '+dist(step);}
     for(var k=1;k<=3;k++){L.circle(centre,{radius:k*step,color:tok('--accent'),weight:4,opacity:a*0.55,dashArray:'4 6',fill:false,interactive:false}).addTo(rings_);
       L.circle(centre,{radius:k*step,color:tok('--gold'),weight:2,opacity:a,dashArray:'4 6',fill:false,interactive:false}).addTo(rings_);
       L.tooltip({permanent:true,direction:'top',className:'mm-ring',opacity:a,interactive:false}).setLatLng([centre[0]+(k*step)/110574,centre[1]]).setContent(dist(k*step)).addTo(rings_);}}
@@ -1277,8 +1290,10 @@ OVERLAY_JS = r"""<script>
       L.DomEvent.disableClickPropagation(d);L.DomEvent.on(b,'click',function(ev){L.DomEvent.stop(ev);if(!ownLL)return;map.invalidateSize();map.fitBounds(ownLL.toBounds(1000),{animate:false});});return d;}});
   map.addControl(new Centre({position:'topleft'}));
   function centreBtn(on){var b=document.getElementById('map-centre');if(!b)return;b.disabled=!on;b.setAttribute('data-tip-more',on?'A one-kilometre view with this box in the middle':'No position for this box yet');}
-  (function(){var rs=document.querySelectorAll('input[name=rings]');if(!rs.length)return;try{var s0=localStorage.getItem('mm-ring-alpha');if(s0!==null){rs.forEach(function(r){r.checked=(r.value===s0);});}}catch(e){}
-    rs.forEach(function(r){r.addEventListener('change',function(){try{localStorage.setItem('mm-ring-alpha',r.value);}catch(e){}rings();});});})();
+  (function(){var sl=document.getElementById('map-dim');if(!sl)return;
+    try{var s0=localStorage.getItem('mm-dim');if(s0===null)s0=localStorage.getItem('mm-ring-alpha');if(s0!==null)sl.value=String(Math.max(0,Math.min(100,parseInt(s0,10)||0)));}catch(e){}
+    sl.addEventListener('input',function(){try{localStorage.setItem('mm-dim',sl.value);}catch(e){}applyDim();});
+    applyDim();})();
   var lay=document.getElementById('layers');if(lay){try{var lo=localStorage.getItem('mm-layers');lay.open=lo===null?window.innerWidth>700:lo==='1';}catch(e){lay.open=window.innerWidth>700;}lay.addEventListener('toggle',function(){try{localStorage.setItem('mm-layers',lay.open?'1':'0');}catch(e){}});}
   var pop=document.getElementById('map-pop');if(pop){pop.addEventListener('click',function(){window.open('/map/full','mm-map','popup=yes,width=1100,height=800');});}
   // place a waypoint by pressing the map, or type a grid reference: either fills the degrees the form sends
@@ -1352,7 +1367,8 @@ OVERLAY_JS = r"""<script>
     var nopos=(J.nodes||[]).filter(function(n){return n.heard_here!==false&&(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined);});
     var ul=document.getElementById('nopos');if(ul){ul.innerHTML=nopos.length?'<b>Heard, but no position, so not on the map:</b> '+nopos.map(function(n){var t=document.createElement('span');t.textContent=(n.label||n.name||n.id)+((n.direct_snr!==null&&n.direct_snr!==undefined)?' ('+n.direct_snr+' dB)':' (relayed)');return t.innerHTML;}).join(', '):'';}
     if(!fitted&&sized()&&!benchAt){var b=L.latLngBounds([c]);pts.forEach(function(n){b.extend([n.lat,n.lon]);});map.fitBounds(b.pad(0.35),{maxZoom:17});fitted=true;}
-    if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}}
+    if(benchAt&&!fitted&&sized()){map.setView(benchAt,16);fitted=true;}
+    dimNodes();}
   // Spec 040 and Spec 047: playback. Every node where it last was at instant T (nothing interpolated), the run it had
   // walked since its last gap, hollow with the age when its last report is older than its gap; a timeline with a row per
   // node and a tick per report, seekable by press or drag; speeds, reverse, fit, keys. Built from the trails rows the map holds.
@@ -1364,6 +1380,20 @@ OVERLAY_JS = r"""<script>
   // one step of the clock: forward stops only at the end, backward only at the start; the window slides with now, so a T just below
   // the start is clamped, never mistaken for the end of a backward run (found on the demo: play stopped before its first frame)
   function stepPlay(T,dt,dir,spd,rg){var nT=T+dt*dir*spd,playing=true;if(dir>0&&nT>=rg[1]){nT=rg[1];playing=false;}else if(dir<0&&nT<=rg[0]){nT=rg[0];playing=false;}if(nT<rg[0])nT=rg[0];if(nT>rg[1])nT=rg[1];return {T:nT,playing:playing};}
+  // Spec 066: the words for the time, so the live state can use them and the suite can check them
+  function two(n){return ('0'+n).slice(-2);}
+  function fmtUTC(t){var d=new Date(t);return two(d.getUTCHours())+':'+two(d.getUTCMinutes())+':'+two(d.getUTCSeconds())+'Z';}
+  function fmtDur(ms){var s=Math.max(0,Math.round(ms/1000));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return (h?h+' h ':'')+m+' min';}
+  function fmtAge(ms){var s=Math.max(0,Math.round(ms/1000));if(s<60)return s+' s';var m=Math.floor(s/60);if(m<60)return m+' min';return Math.floor(m/60)+' h '+(m%60)+' min';}
+  // Spec 066: live is a state and the map says which one it is in. Within a second of the end counts as live,
+  // because the window slides with now and the scrubber can never quite catch it.
+  function liveState(T,rg){if(T===null||T===undefined||T>=rg[1]-1000)return {live:true,words:'live'};
+    return {live:false,words:fmtUTC(T)+' · '+fmtDur(rg[1]-T)+' back'};}
+  // Spec 066: a map left alone in the past comes back on its own. Never while a playback is running: that is
+  // somebody using it. The clock starts when the playback stops, which includes reaching the end of the window.
+  function idleReturn(idleMs,playing,timeoutMs){return !playing&&idleMs>=timeoutMs;}
+  // Spec 066: what the dimming slider says it is doing, so nought is never a mystery
+  function dimLabel(v){v=Math.max(0,Math.min(100,parseInt(v,10)||0));return v<=0?'overlay off':'overlay '+v+'%';}
   /* pure:end */
   var play_=L.layerGroup().addTo(map),playT=document.getElementById('play-t'),playGo=document.getElementById('play-go'),playAt=document.getElementById('play-at'),playPos=document.getElementById('play-pos');
   var SPEEDS=[1,10,60,300,1000],speedSel=document.getElementById('play-speed'),tl=document.getElementById('timeline'),tctx=tl?tl.getContext('2d'):null;
@@ -1376,21 +1406,28 @@ OVERLAY_JS = r"""<script>
   function speed(){return SPEEDS[speedSel?parseInt(speedSel.value,10):0]||1;}
   function tracks(){var g=groupChosen();var by={};lastRows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(g&&(groups_[r.node]||'')!==g)return;(by[r.node]=by[r.node]||[]).push(r);});
     return Object.keys(by).sort(function(a,b){return (names_[a]||a).toLowerCase()<(names_[b]||b).toLowerCase()?-1:1;}).map(function(id){var pts=by[id].slice().sort(function(a,b){return a.ts<b.ts?-1:1;});var times=pts.map(function(r){return Date.parse(r.ts);});return {id:id,pts:pts,times:times,gap:gapFor(times)};});}
-  function two(n){return ('0'+n).slice(-2);}
-  function fmtUTC(t){var d=new Date(t);return two(d.getUTCHours())+':'+two(d.getUTCMinutes())+':'+two(d.getUTCSeconds())+'Z';}
-  function fmtDur(ms){var s=Math.max(0,Math.round(ms/1000));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);return (h?h+' h ':'')+m+' min';}
-  function fmtAge(ms){var s=Math.max(0,Math.round(ms/1000));if(s<60)return s+' s';var m=Math.floor(s/60);if(m<60)return m+' min';return Math.floor(m/60)+' h '+(m%60)+' min';}
-  function atEnd(){var rg=playRange();return T===null||T>=rg[1]-1000;}
-  function renderPlay(){play_.clearLayers();var rg=playRange();
-    if(atEnd()){if(!map.hasLayer(overlay))map.addLayer(overlay);if(!map.hasLayer(trails_))map.addLayer(trails_);if(playAt)playAt.textContent='now';if(playPos)playPos.textContent='';if(playT&&!scrubbing)playT.value=1000;drawTimeline();return;}
+  function atEnd(){return liveState(T,playRange()).live;}
+  // Spec 066: the button that comes back, and the clock that comes back on its own
+  var IDLE_MS=120000,lastTouch=Date.now(),liveBtn=document.getElementById('play-live'),idleEl=document.getElementById('play-idle');
+  function touchPlay(){lastTouch=Date.now();}
+  function goLive(){T=null;setPlaying(false);touchPlay();renderPlay();}
+  function setLiveBtn(live){if(!liveBtn)return;liveBtn.disabled=!!live;liveBtn.classList.toggle('on',!live);}
+  if(liveBtn)liveBtn.addEventListener('click',goLive);
+  setInterval(function(){var ls=liveState(T,playRange());
+    if(ls.live){if(idleEl)idleEl.textContent='';return;}
+    var idle=Date.now()-lastTouch;
+    if(idleReturn(idle,playing,IDLE_MS)){goLive();return;}
+    if(idleEl)idleEl.textContent=playing?'':'back to live in '+fmtAge(Math.max(0,IDLE_MS-idle));},1000);
+  function renderPlay(){play_.clearLayers();var rg=playRange();var ls=liveState(T,rg);setLiveBtn(ls.live);
+    if(ls.live){if(!map.hasLayer(overlay))map.addLayer(overlay);if(!map.hasLayer(trails_))map.addLayer(trails_);if(playAt)playAt.textContent=ls.words;if(playPos)playPos.textContent='';if(playT&&!scrubbing)playT.value=1000;if(idleEl)idleEl.textContent='';drawTimeline();return;}
     if(map.hasLayer(overlay))map.removeLayer(overlay);if(map.hasLayer(trails_))map.removeLayer(trails_);
-    if(playAt)playAt.textContent=fmtUTC(T);if(playPos)playPos.textContent=fmtDur(T-rg[0])+' of '+fmtDur(rg[1]-rg[0]);if(playT&&!scrubbing)playT.value=Math.round((T-rg[0])/(rg[1]-rg[0])*1000);
+    if(playAt)playAt.textContent=ls.words;if(playPos)playPos.textContent=fmtDur(T-rg[0])+' of '+fmtDur(rg[1]-rg[0]);if(playT&&!scrubbing)playT.value=Math.round((T-rg[0])/(rg[1]-rg[0])*1000);
     tracks().forEach(function(tr){if(hidden_[tr.id])return;var p=posAt(tr.pts,tr.id,T);if(!p)return;var stale=isStaleAt(T,tr.times,tr.gap);
       var run=[];for(var i=tr.pts.length-1;i>=0;i--){var ts=tr.times[i];if(ts>T)continue;if(run.length&&(Date.parse(run[0].ts)-ts)>tr.gap)break;run.unshift(tr.pts[i]);}
       if(run.length>1)L.polyline(run.map(function(r){return [r.lat,r.lon];}),{color:tok('--gold'),weight:4,opacity:.8}).addTo(play_);
       var nn=(lastJ&&lastJ.nodes||[]).filter(function(x){return x.id===tr.id;})[0]||{};
       L.marker([p.lat,p.lon],{icon:nodeIcon(nn.icon,'play'+(stale?' stale':'')),keyboard:false}).bindTooltip((names_[tr.id]||tr.id)+(stale?' · '+fmtAge(T-Date.parse(p.ts))+' old':''),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});
-    drawTimeline();}
+    dimNodes();drawTimeline();}
   function tlLayout(){if(!tl)return null;var r=tl.getBoundingClientRect(),dpr=window.devicePixelRatio||1;var w=Math.max(200,Math.floor(r.width)),h=Math.max(40,Math.floor(r.height));if(tl.width!==Math.round(w*dpr)||tl.height!==Math.round(h*dpr)){tl.width=Math.round(w*dpr);tl.height=Math.round(h*dpr);}tctx.setTransform(dpr,0,0,dpr,0,0);return [w,h];}
   function drawTimeline(){if(!tctx)return;tlRows=tracks();var want=Math.max(60,tlHead+Math.max(1,tlRows.length)*14+6);if(Math.abs(tl.clientHeight-want)>2){tl.style.height=want+'px';}
     var dims=tlLayout();if(!dims)return;var W=dims[0],H=dims[1];var rg=playRange(),W0=rg[0],W1=rg[1];tctx.clearRect(0,0,W,H);
@@ -1401,21 +1438,23 @@ OVERLAY_JS = r"""<script>
     tlRows.forEach(function(tr,i){var y=tlHead+i*tlRowH;tctx.globalAlpha=hidden_[tr.id]?.45:1;tctx.fillStyle=tok('--ink');tctx.fillText((names_[tr.id]||tr.id).slice(0,16),4,y+Math.max(0,(tlRowH-11)/2));
       tctx.fillStyle=tok('--accent');tr.times.forEach(function(t){tctx.fillRect(x(t),y+1,1.5,Math.max(2,tlRowH-2));});tctx.globalAlpha=1;});
     var cx=x(atEnd()?W1:T);tctx.fillStyle=tok('--gold');tctx.fillRect(cx-1,0,2,H);}
-  function seekFromEvent(ev){var r=tl.getBoundingClientRect();var rg=playRange();var f=Math.min(1,Math.max(0,(ev.clientX-r.left-tlLabelW)/(r.width-tlLabelW-6)));T=rg[0]+f*(rg[1]-rg[0]);renderPlay();}
+  function seekFromEvent(ev){touchPlay();var r=tl.getBoundingClientRect();var rg=playRange();var f=Math.min(1,Math.max(0,(ev.clientX-r.left-tlLabelW)/(r.width-tlLabelW-6)));T=rg[0]+f*(rg[1]-rg[0]);renderPlay();}
   if(tl){tl.addEventListener('pointerdown',function(ev){var r=tl.getBoundingClientRect();if(ev.clientX-r.left<tlLabelW){var row=Math.floor((ev.clientY-r.top-tlHead)/tlRowH);var tr=tlRows[row];if(tr){hidden_[tr.id]=!hidden_[tr.id];renderPlay();}return;}scrubbing=true;try{tl.setPointerCapture(ev.pointerId);}catch(e){}seekFromEvent(ev);});
     tl.addEventListener('pointermove',function(ev){if(scrubbing)seekFromEvent(ev);});tl.addEventListener('pointerup',function(ev){scrubbing=false;try{tl.releasePointerCapture(ev.pointerId);}catch(e){}});tl.addEventListener('pointercancel',function(){scrubbing=false;});
     if(window.ResizeObserver){new ResizeObserver(function(){drawTimeline();}).observe(tl);}}
   function setPlaying(p){playing=p;lastFrame=null;if(playGo){var ic=window.mmIcons||{};playGo.setAttribute('aria-label',p?'Pause':'Play the window back');playGo.setAttribute('data-tip',p?'Pause':'Play the window back');playGo.innerHTML=(p?(ic.pause||''):(ic.play||''))+"<span class='lbl'>"+(p?'Pause':'Play')+"</span>";}}
   function frame(now){if(playing&&!scrubbing){var rg=playRange();if(T===null)T=dir>0?rg[0]:rg[1];if(lastFrame!==null){var st=stepPlay(T,now-lastFrame,dir,speed(),rg);T=st.T;if(!st.playing)setPlaying(false);}lastFrame=now;renderPlay();}requestAnimationFrame(frame);}
   requestAnimationFrame(frame);
-  if(playT){playT.addEventListener('input',function(){var rg=playRange();T=rg[0]+(rg[1]-rg[0])*parseInt(playT.value,10)/1000;scrubbing=true;renderPlay();scrubbing=false;});}
-  if(playGo){playGo.addEventListener('click',function(){if(playing){setPlaying(false);return;}if(atEnd()&&dir>0){T=playRange()[0];}setPlaying(true);});}
-  var ps=document.getElementById('play-start');if(ps){ps.addEventListener('click',function(){var rg=playRange();T=dir>0?rg[0]:rg[1];renderPlay();});}
-  var pr=document.getElementById('play-rev');if(pr){pr.addEventListener('click',function(){dir=-dir;pr.setAttribute('aria-pressed',dir<0?'true':'false');pr.classList.toggle('on',dir<0);});}
-  var pf=document.getElementById('play-fit');if(pf){pf.addEventListener('click',function(){var b=null;tracks().forEach(function(tr){if(hidden_[tr.id])return;tr.pts.forEach(function(r){var ll=L.latLng(r.lat,r.lon);b=b?b.extend(ll):L.latLngBounds([ll]);});});if(b&&b.isValid()){map.fitBounds(b.pad(0.25));}});}
+  if(playT){playT.addEventListener('input',function(){touchPlay();var rg=playRange();T=rg[0]+(rg[1]-rg[0])*parseInt(playT.value,10)/1000;scrubbing=true;renderPlay();scrubbing=false;});}
+  if(playGo){playGo.addEventListener('click',function(){touchPlay();if(playing){setPlaying(false);return;}if(atEnd()&&dir>0){T=playRange()[0];}setPlaying(true);});}
+  var ps=document.getElementById('play-start');if(ps){ps.addEventListener('click',function(){touchPlay();var rg=playRange();T=dir>0?rg[0]:rg[1];renderPlay();});}
+  var pr=document.getElementById('play-rev');if(pr){pr.addEventListener('click',function(){touchPlay();dir=-dir;pr.setAttribute('aria-pressed',dir<0?'true':'false');pr.classList.toggle('on',dir<0);});}
+  var pf=document.getElementById('play-fit');if(pf){pf.addEventListener('click',function(){touchPlay();var b=null;tracks().forEach(function(tr){if(hidden_[tr.id])return;tr.pts.forEach(function(r){var ll=L.latLng(r.lat,r.lon);b=b?b.extend(ll):L.latLngBounds([ll]);});});if(b&&b.isValid()){map.fitBounds(b.pad(0.25));}});}
   // keys: space, the arrows (one per cent of the window, ten with shift), [ and ] for speed, r to reverse, f to fit; never while typing
   window.addEventListener('keydown',function(ev){var tg=ev.target&&ev.target.tagName;if(tg==='INPUT'||tg==='SELECT'||tg==='TEXTAREA')return;var geo=document.getElementById('map-geo');if(!geo||geo.closest('[hidden]'))return;var rg=playRange(),win=rg[1]-rg[0];
-    if(ev.code==='Space'||ev.key===' '){ev.preventDefault();if(playGo)playGo.click();}
+    touchPlay();
+    if(ev.key==='l'||ev.key==='L'){ev.preventDefault();goLive();}
+    else if(ev.code==='Space'||ev.key===' '){ev.preventDefault();if(playGo)playGo.click();}
     else if(ev.key==='ArrowLeft'||ev.key==='ArrowRight'){ev.preventDefault();if(T===null)T=rg[1];T=Math.min(rg[1],Math.max(rg[0],T+(ev.key==='ArrowRight'?1:-1)*win*(ev.shiftKey?0.1:0.01)));renderPlay();}
     else if(ev.key==='['||ev.key===']'){if(speedSel){var i=parseInt(speedSel.value,10)+(ev.key===']'?1:-1);if(i>=0&&i<SPEEDS.length)speedSel.value=String(i);}}
     else if(ev.key==='r'){if(pr)pr.click();}else if(ev.key==='f'){if(pf)pf.click();}});
@@ -1456,7 +1495,7 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
     groups = sorted({str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
     gsel = ("<label class='meta' data-tip='Group' data-tip-more='Only this group&#39;s devices on the map, the trails and the playback'>Group <select id='group-filter'><option value=''>everyone</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>") if groups else "<select id='group-filter' hidden aria-hidden='true'><option value=''></option></select>"
     layers = ("<details class='fold ctl' id='layers' style='margin-top:0'><summary data-tip='Layers, trails, rings and grid' data-tip-more='What the map draws besides the nodes'>" + ICONS["layers"] + "Map layers</summary><div class='controls' style='margin:var(--s2) 0 0'>" + gsel +
-              "<span class='meta' data-tip='Rings' data-tip-more='Range rings and their labels: geometry, not what the radio will reach'>Rings</span>" + seg("rings", (("0", "off"), ("60", "faint"), ("100", "solid")), "60") + "<span class='meta' id='ring-step'></span>"
+              "<label class='meta' for='map-dim' data-tip='Dim the overlay' data-tip-more='The range rings, the node markers and the tracks together, from solid to invisible, so you can see the map underneath'>Dim <input type='range' id='map-dim' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:120px;margin:0'></label><span class='meta' id='ring-step'></span>"
               "<label class='meta' for='trail-hours' data-tip='Trails' data-tip-more='Each node&#39;s track over the window, fading with age'>Trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option><option value='72'>3 d</option></select></label>"
               "<label class='meta check' data-tip='Neighbours' data-tip-more='Who hears whom, from the neighbour reports nodes broadcast'><input type='checkbox' id='graph-on'> Neighbours</label>"
               "<label class='meta check' data-tip='Waypoints' data-tip-more='Waypoints heard on the mesh, as pins'><input type='checkbox' id='wps-on' checked> Waypoints</label>"
@@ -1487,7 +1526,9 @@ def playback_bar():
             + f"<label class='meta' data-tip='Speed' data-tip-more='[ and ] change it'>Speed <select id='play-speed'>{speeds}</select></label>"
             + icon_button("fit", "Fit the map to the tracks", "Fit the map to the tracks", "The whole window's tracks in view (f)", attrs="id='play-fit'")
             + "<input type='range' id='play-t' min='0' max='1000' value='1000' aria-label='Scrub the window' style='width:160px;vertical-align:middle;margin:0'>"
-            "<span id='play-at' class='meta' style='font-variant-numeric:tabular-nums'></span><span id='play-pos' class='meta'></span></div>"
+            + icon_button("live", "Back to live", "Back to live", "The map as it is now (l). It comes back on its own after two minutes untouched", attrs="id='play-live' disabled")
+            + "<span id='play-at' class='meta' style='font-variant-numeric:tabular-nums'></span><span id='play-pos' class='meta'></span>"
+            "<span id='play-idle' class='meta'></span></div>"
             "<canvas id='timeline' style='width:100%;height:80px;display:block;border:1px solid var(--line);border-radius:var(--r);background:var(--surface-raised);touch-action:none' aria-label='Timeline: a row per node, a tick per report; press or drag to seek, press a name to hide it'></canvas>"
             "<p class='meta' style='margin:var(--s1) 0 0'>A row per node, a tick per position report; press or drag to seek, press a name to hide it. Nothing is interpolated: a node sits where it last reported, hollow with the age when that is older than its usual gap. For a record, export the positions on Health and open them in Pinecone.</p></div>")
 
@@ -1708,6 +1749,8 @@ ICONS = {
     "skip_back": _svg("<path d='M3 2.5v11M13 3l-8 5 8 5z'/>", fill="currentColor"),
     "reverse": _svg("<path d='M8 3 2.5 8 8 13zM14 3 8.5 8l5.5 5z'/>", fill="currentColor"),
     "fit": _svg("<path d='M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10'/>"),
+    # Spec 066: back to live. A filled dot with a broadcast arc, which is what people read as "now".
+    "live": _svg("<circle cx='8' cy='8' r='2.2' fill='currentColor' stroke='none'/><path d='M4.4 11.6a5 5 0 0 1 0-7.2M11.6 4.4a5 5 0 0 1 0 7.2'/>"),
     "close": _svg("<path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/>"),
     "chevron": _svg("<path d='M3 6l5 5 5-5'/>"),
     "filter": _svg("<path d='M2 3h12L9.5 8.5v4.5l-3 1.5V8.5z'/>"),
