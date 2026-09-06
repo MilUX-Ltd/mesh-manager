@@ -1,2 +1,0 @@
-PyQRCode==1.2.1
-cryptography>=41
