@@ -2347,22 +2347,47 @@ class Bridge(TAKMeshtasticGateway):
         s.close()
 
     @staticmethod
-    def _default_wait_volume(label, timeout):
+    def _default_wait_volume(label, timeout, system=None, volumes="/Volumes"):
+        """Spec 064: a device in its bootloader shows up as a small removable volume. On Linux that is a block
+        device to be mounted; on a Mac it is already mounted under /Volumes and the path is the answer."""
+        import platform as _pf
+        system = system or _pf.system()
+        want = label.upper().replace("-", "").replace(" ", "")
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                out = subprocess.run(["lsblk", "-rno", "NAME,LABEL,RM"], capture_output=True, text=True, timeout=10).stdout
-                for ln in out.splitlines():
-                    parts = ln.split()
-                    if len(parts) >= 2 and parts[1].upper().replace("-", "") == label.upper().replace("-", ""):
-                        return "/dev/" + parts[0]
-            except (OSError, subprocess.SubprocessError):
-                pass
+        while True:
+            if system == "Darwin":
+                try:
+                    for nm in sorted(os.listdir(volumes)):
+                        if nm.upper().replace("-", "").replace(" ", "") == want:
+                            return os.path.join(volumes, nm)
+                except OSError:
+                    pass
+            else:
+                try:
+                    out = subprocess.run(["lsblk", "-rno", "NAME,LABEL,RM"], capture_output=True, text=True, timeout=10).stdout
+                    for ln in out.splitlines():
+                        parts = ln.split()
+                        if len(parts) >= 2 and parts[1].upper().replace("-", "") == label.upper().replace("-", ""):
+                            return "/dev/" + parts[0]
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            if time.time() >= deadline:
+                return None
             time.sleep(1)
-        return None
 
     @staticmethod
-    def _default_mount(dev):
+    def _default_mount(dev, system=None):
+        """Spec 064: on a Mac the volume is already mounted and the path is the answer; on Linux it is mounted here."""
+        import platform as _pf
+        system = system or _pf.system()
+        if system == "Darwin":
+            if os.path.isdir(dev):
+                return dev
+            out = subprocess.run(["diskutil", "mount", dev], capture_output=True, text=True, timeout=30)
+            m = re.search(r"on (\S+)", out.stdout) or re.search(r"at (\S+)", out.stdout)
+            if out.returncode != 0 or not m:
+                raise RuntimeError(f"diskutil mount: {out.stderr.strip() or out.stdout.strip()}")
+            return m.group(1).rstrip(".")
         out = subprocess.run(["udisksctl", "mount", "-b", dev, "--no-user-interaction"], capture_output=True, text=True, timeout=30)
         m = re.search(r" at (\S+)", out.stdout)
         if out.returncode != 0 or not m:
@@ -2381,8 +2406,16 @@ class Bridge(TAKMeshtasticGateway):
             os.close(fd)
 
     @staticmethod
-    def _default_unmount(dev):
-        subprocess.run(["udisksctl", "unmount", "-b", dev, "--no-user-interaction"], capture_output=True, text=True, timeout=30)
+    def _default_unmount(dev, system=None, run=None):
+        """Spec 064: each platform's own way of letting a volume go."""
+        import platform as _pf
+        system = system or _pf.system()
+        args = ["diskutil", "unmount", dev] if system == "Darwin" else ["udisksctl", "unmount", "-b", dev, "--no-user-interaction"]
+        if run is not None:
+            run(args)
+            return None
+        subprocess.run(args, capture_output=True, text=True, timeout=30)
+        return None
 
     @staticmethod
     def _default_wait_port(path, timeout):

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.23.0 (6 September 2026) Matt: "and flashing over USB on macOS."
+
+- **Flashing works from a Mac.** A device held in its bootloader appears as a small removable volume. On Linux
+  the bridge found it with `lsblk` and mounted it with `udisksctl`, neither of which a Mac has; it now watches
+  `/Volumes` for the bootloader label, takes the path as the mount, and lets go with `diskutil`. The shelf, the
+  pinned image, the hash checked before the copy, the confirmation and the read back afterwards are unchanged.
+- Proved against a real mounted volume on a Mac: found by label, copied, flushed, let go. A true flash needs a
+  device that presents a bootloader volume, so that gate waits for a RAK or a T1000-E.
+
 ## 0.22.0 (6 September 2026) Matt: "finding a second radio plugged into it."
 
 - **The bench works on a laptop.** Devices were found by listing `/dev/serial/by-id`, which only Linux has, so

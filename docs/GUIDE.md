@@ -54,7 +54,9 @@ demo mesh is what `--demo` asks for, not what a missing radio gives.
 
 A laptop is also a **bench**: a radio you plug in that is not the one it is using appears on the Bench page,
 with its maker and serial number where the device says them, ready to read, onboard and set up. On a laptop
-with no radio of its own, everything plugged in is bench kit.
+with no radio of its own, everything plugged in is bench kit. Flashing works from a laptop too: a device held
+in its bootloader appears as a small removable volume, and the bench copies the pinned firmware onto it and
+waits for the radio to come back, on a Mac as on a box.
 
 From a terminal instead, with the release installed in a virtual environment, `mesh-manager-desktop` does the
 same without the menu bar, and `--in-process` runs both parts in one process as the app does. Either way the
