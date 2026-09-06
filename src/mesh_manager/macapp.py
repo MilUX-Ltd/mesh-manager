@@ -29,6 +29,9 @@ def menu_lines(status, url, radio):
     db = st.get("nodes_db")
     second = ("nothing heard yet" if not heard else f"{int(heard)} heard here") + (f", {int(db)} in the radio's database" if db else "")
     third = f"The screen is {url}"
+    peers = int(st.get("peers") or 0)   # Spec 062: the link, visible with the window closed
+    if peers:
+        return [first, second, f"joined to {peers} site{'' if peers == 1 else 's'}", third]
     return [first, second, third]
 
 
@@ -82,7 +85,8 @@ def main(argv=None):
         print("no menu bar here (rumps is not installed): running the screen in this terminal instead", flush=True)
         return D._run_together(dirs, radio is None, radio, None, False)
 
-    run = D.serve_in_process(dirs, demo=radio is None, radio=radio, port=None)
+    run = D.serve_in_process(dirs, demo=False, radio=radio, port=None)   # Spec 062: a site, radio or not
+    D.watch_for_radio(run, dirs)
     atexit.register(run.stop)   # whichever way the app ends, the bridge lets go of the radio
     _stop_on_terminate(run)
     D._wait_health(run.url + "healthz", 60)

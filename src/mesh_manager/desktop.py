@@ -143,10 +143,37 @@ def app_log(dirs):
 
 class Running:
     """Spec 059: the bridge and the screen running as threads of this process, and the one way to stop them."""
-    def __init__(self, bridge, srv, sock, port, demo):
+    def __init__(self, bridge, srv, sock, port, demo, radio=None, dirs=None):
         self.bridge, self.srv, self.sock, self.port, self.demo = bridge, srv, sock, port, demo
+        self.radio, self.dirs = radio, dirs
         self.url = f"http://127.0.0.1:{port}/"
         self._stopped = False
+        self._swap = threading.Lock()
+
+    def stopped(self):
+        return self._stopped
+
+    def swap_radio(self, radio, dirs=None):
+        """Spec 062: put a new bridge on the same socket, with the radio there is now (or none)."""
+        dirs = dirs or self.dirs
+        if self._stopped or self.demo or not dirs:
+            return False
+        with self._swap:
+            from . import bridge as B
+            from .common import read_config
+            old = self.bridge
+            conf = read_config(dirs["config"])
+            conf["SERIAL"] = radio or ""
+            try:
+                if old:
+                    old.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(0.5)
+            self.bridge = B.Bridge(conf, socket_path=self.sock, state_dir=dirs["state"])
+            threading.Thread(target=self.bridge.serve_forever, name="bridge", daemon=True).start()
+            self.radio = radio
+            return True
 
     def status(self):
         """What the bridge says of itself, or an empty picture while it is still starting."""
@@ -209,7 +236,31 @@ def serve_in_process(dirs, demo=False, radio=None, port=None):
         want = 0
     srv = W.make_server("127.0.0.1", want, sock, dirs["etc"], conf, state_dir=dirs["state"])
     threading.Thread(target=srv.serve_forever, name="screen", daemon=True).start()
-    return Running(bridge, srv, sock, srv.server_address[1], demo)
+    return Running(bridge, srv, sock, srv.server_address[1], demo, radio=radio, dirs=dirs)
+
+
+def watch_for_radio(run, dirs, every=4.0):
+    """Spec 062: a laptop that started with nothing plugged in takes a radio when one appears, and lets go when
+    it is pulled out, by swapping the bridge under the screen. The screen's socket does not move, so nothing the
+    person is looking at has to be reloaded."""
+    def loop():
+        while not run.stopped():
+            time.sleep(every)
+            try:
+                found = find_radio()
+                have = run.radio
+                if found == have:
+                    continue
+                if found and not have:
+                    print(f"a radio appeared on {found}: taking it", flush=True)
+                elif have and not found:
+                    print(f"the radio on {have} went away: this laptop is still a site", flush=True)
+                else:
+                    print(f"the radio changed to {found}: taking it", flush=True)
+                run.swap_radio(found, dirs)
+            except Exception as ex:  # noqa: BLE001
+                print(f"the radio watcher stumbled: {type(ex).__name__}: {ex}", flush=True)
+    threading.Thread(target=loop, name="radio-watch", daemon=True).start()
 
 
 def main(argv=None):
@@ -226,7 +277,7 @@ def main(argv=None):
         dirs = {"root": a.root, "config": os.path.join(a.root, "config"), "etc": os.path.join(a.root, "etc"), "state": os.path.join(a.root, "state"), "socket": os.path.join(a.root, "bridge.sock")}
     radio = None if a.demo else find_radio(wanted=a.serial)
     first_config(dirs, serial=radio)
-    demo = a.demo or radio is None
+    demo = a.demo   # Spec 062: no radio is a site watching for one, not a demonstration
     if a.in_process or getattr(sys, "frozen", False):
         return _run_together(dirs, demo, radio, a.port, a.no_browser)
     port = a.port if a.port is not None else None
@@ -241,10 +292,13 @@ def main(argv=None):
     py = sys.executable
     if demo:
         bridge = subprocess.Popen([py, "-m", "mesh_manager.demo", sock], env=env)
-        why = "the demo mesh (no radio found)" if not a.demo else "the demo mesh"
+        why = "the demo mesh"
     else:
-        bridge = subprocess.Popen([py, "-m", "mesh_manager.bridge", "--config", dirs["config"], "--socket", sock, "--state-dir", dirs["state"], "--serial", radio], env=env)
-        why = f"the radio on {radio}"
+        cmd = [py, "-m", "mesh_manager.bridge", "--config", dirs["config"], "--socket", sock, "--state-dir", dirs["state"]]
+        if radio:
+            cmd += ["--serial", radio]
+        bridge = subprocess.Popen(cmd, env=env)
+        why = f"the radio on {radio}" if radio else "no radio yet: a site, watching for one"
     web_cmd = [py, "-m", "mesh_manager.web", "--config", dirs["config"], "--socket", sock, "--etc", dirs["etc"], "--state-dir", dirs["state"]]
     if port:
         web_cmd += ["--port", str(port)]
@@ -295,7 +349,9 @@ def _run_together(dirs, demo, radio, port, no_browser):
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     run = serve_in_process(dirs, demo=demo, radio=radio, port=port)
-    why = "the demo mesh" if demo else f"the radio on {radio}"
+    if not demo:
+        watch_for_radio(run, dirs)
+    why = "the demo mesh" if demo else (f"the radio on {radio}" if radio else "no radio yet: a site, watching for one")
     up = _wait_health(run.url + "healthz", 60, stop=stop)
     print(f"Mesh Manager {__version__} on this computer: the screen is {run.url} with {why}; files under {dirs['root']}; Ctrl-C stops it", flush=True)
     if up and not no_browser:

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.21.0 (6 September 2026) Matt: "this would be epic, the desktop link."
+
+- **A laptop is a site.** It joins a hub by invite like any box, dialling out, so nothing is opened on the
+  network it sits on and nobody can dial in to it. The sharing table, the air switch, catch-up and the
+  never-list are the ones a box already has.
+- **With no radio it is still a site.** A laptop with nothing plugged in runs the real bridge with no mesh of
+  its own, says it is watching for a radio, and joins and shows what its peers send. The demo mesh is what
+  `--demo` asks for, never what a missing radio gives, so nothing invented can reach somebody's hub.
+- **A radio that arrives is taken.** The application watches every few seconds and swaps its bridge onto a radio
+  when one appears, or off it when one is pulled out, without the person restarting anything.
+- The menu says how many sites the laptop is joined to, so the link is visible with the window closed.
+
 ## 0.20.2 (6 September 2026)
 
 Matt: "the app should load to map, not plan", and "I am still getting error emails from github".

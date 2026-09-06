@@ -50,7 +50,8 @@ def main(argv=None):
         print("no notification area here (pystray is not installed): running the screen in this window instead", flush=True)
         return D._run_together(dirs, radio is None, radio, None, False)
 
-    run = D.serve_in_process(dirs, demo=radio is None, radio=radio, port=None)
+    run = D.serve_in_process(dirs, demo=False, radio=radio, port=None)   # Spec 062
+    D.watch_for_radio(run, dirs)
     atexit.register(run.stop)
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:

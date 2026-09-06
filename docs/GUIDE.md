@@ -45,6 +45,13 @@ Open in a browser, Show the files, and Quit, which stops everything. The first t
 from an unidentified developer, right-click it and choose Open: the build is signed by us but not yet by Apple,
 and notarisation follows.
 
+A laptop is a site like any box, so it can **join a hub**: take an invite from the hub's Connections page and
+paste it into Join a site on the laptop's own. From then on what your radio hears reaches the other sites, and
+theirs reaches you, under the same sharing table a box has. The laptop dials out, so nothing has to be opened on
+the network you are sitting on, and nobody can dial in to it. With no radio plugged in it is still a site: it
+says it is watching for one, joins and shows what its peers send, and takes a radio the moment one appears. The
+demo mesh is what `--demo` asks for, not what a missing radio gives.
+
 From a terminal instead, with the release installed in a virtual environment, `mesh-manager-desktop` does the
 same without the menu bar, and `--in-process` runs both parts in one process as the app does. Either way the
 files live under the platform's application directory (on a Mac, `Library/Application Support/Mesh Manager` in

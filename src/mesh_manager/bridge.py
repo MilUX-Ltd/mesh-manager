@@ -324,13 +324,16 @@ class Bridge(TAKMeshtasticGateway):
         threading.Thread(target=self._watchdog_loop, name="watchdog", daemon=True).start()
         threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True).start()
         threading.Thread(target=self._alert_loop, name="alerts", daemon=True).start()
-        if self.box_mode == "hub":
-            # Spec 052: a site with no radio. No gateway, no serial device, no TAK, no mesh of its own.
+        radioless = self.box_mode == "hub" or (self.box_mode == "desktop" and not str(conf.get("SERIAL") or "").strip())
+        if radioless:
+            # Spec 052 and 062: a site with no radio, which a hub always is and a laptop is until one is
+            # plugged in. No gateway, no serial device, no TAK, no mesh of its own; still a site that joins.
             self.logger = logging.getLogger("mesh-manager-hub")
             if not self.logger.handlers:
                 h = logging.StreamHandler(); h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s")); self.logger.addHandler(h)
             self.logger.setLevel(logging.INFO)
             self.interface = None; self.meshtastic_devices = {}; self.meshtastic_connected = False; self.socket_client = NullSocket()
+            self.logger.info("no radio here" + (": this laptop is a site, watching for one" if self.box_mode == "desktop" else "; this is a hub"))
         else:
             TAKMeshtasticGateway.__init__(self, ip=conf.get("ip"), serial_device=conf.get("SERIAL") or None,
                                           debug=bool(conf.get("debug")))
@@ -342,7 +345,7 @@ class Bridge(TAKMeshtasticGateway):
             self.logger.error(f"peers: the site identity or listener failed: {type(ex).__name__}: {ex}")
         threading.Thread(target=self._peer_loop, name="peers", daemon=True).start()
         self._redial_pinned()
-        if self.box_mode == "hub":
+        if radioless:
             self._touch(); sd_notify("READY=1")
             self.logger.info(f"mesh-manager-bridge {__version__} as a hub; site {self.peering.id[:12] if self.peering else '?'}; socket {socket_path}; state {state_dir}")
             return

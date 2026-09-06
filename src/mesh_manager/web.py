@@ -602,7 +602,8 @@ def state_strip(st):
     elif st.get("bootloader"):
         lamp, word = "bad", "Radio in bootloader"
     elif not st.get("radio_present"):
-        lamp, word = "bad", "Radio missing"
+        # Spec 062: a laptop with nothing plugged in yet is not a fault, it is waiting
+        lamp, word = ("warn", "Watching for a radio") if st.get("mode") == "desktop" else ("bad", "Radio missing")
     elif not st.get("connected"):
         lamp, word = "warn", "Radio not connected"
     elif st.get("tak") == "off":
