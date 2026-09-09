@@ -1,0 +1,2 @@
+SDK_COMMIT=3e85d9354111e809c8600c94040b81d25ddb51f3
+SOURCE=https://github.com/meshtastic/TAKPacket-SDK/tree/3e85d9354111e809c8600c94040b81d25ddb51f3/dictionaries

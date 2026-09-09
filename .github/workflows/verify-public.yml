@@ -1,0 +1,31 @@
+# The published product, checked as the stranger who receives it (LESSONS 25). This runs with
+# no credentials on purpose: it asks GitHub for the newest release the way an installed box
+# does, downloads what a person downloads, verifies the hash, and follows the tree's own
+# instructions. A release that only works for someone signed in fails here.
+name: verify public release
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"      # Monday morning, so a rot is found before a customer finds it
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "owner/name of the public repository to check"
+        required: false
+        default: "MilUX-Ltd/mesh-manager"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the published product with no credentials
+        env:
+          # Deliberately empty. A token here would hide the fault this job exists to catch.
+          GITHUB_TOKEN: ""
+        run: ./release/verify-public.sh "${{ inputs.repo || 'MilUX-Ltd/mesh-manager' }}"

@@ -1,0 +1,1 @@
+../../skills/mesh-lessons/SKILL.md
