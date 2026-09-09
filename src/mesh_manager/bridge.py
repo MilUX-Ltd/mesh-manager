@@ -33,6 +33,7 @@ from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, r
 from .history import History
 from . import peers as P
 from . import mqttproxy as MQ
+from . import radiopos as RPOS
 
 SILENCE_LIMIT = 600                              # the deployed watchdog's figure
 
@@ -387,6 +388,7 @@ class Bridge(TAKMeshtasticGateway):
         self.mqtt_proxy = None                # Spec 070: carries the radio's MQTT over the box's network
         self.mqtt_reason = None               # why there is no proxy, in one sentence for the screen
         self.mqtt_client_factory = None       # the suite's fake broker client; paho's by default
+        self.radio_position = None            # Spec 071: what the radio was last told, and why
         self._gps_reader = gps_reader
         self.flash_hooks = {}                 # the block layer and esptool, replaceable by the suite
         self._subs = []
@@ -459,6 +461,49 @@ class Bridge(TAKMeshtasticGateway):
         if not radioless:
             # after the gateway thread, which is what gives us a radio to read the settings from
             threading.Thread(target=self._mqtt_proxy_start, name="mqttproxy-start", daemon=True).start()
+
+    # Spec 071: the box tells its radio where it is -----------------------
+    def push_position_to_radio(self):
+        """Give the radio the position the box already has, so it broadcasts one.
+
+        Never invents a position: no position means no write. Throttled, because every write is a
+        write to the radio's flash. Never fatal: a radio that will not take it must not stop the
+        bridge.
+        """
+        node = getattr(getattr(self, "interface", None), "localNode", None)
+        if node is None or not hasattr(node, "setFixedPosition"):
+            return None
+        own = None
+        try:
+            own = self.own_position()
+        except Exception:  # noqa: BLE001
+            own = None
+        if not own or own.get("lat") is None or own.get("lon") is None:
+            return None
+        current = (float(own["lat"]), float(own["lon"]))
+        ok, why = RPOS.due(time.time(), current, self.radio_position)
+        if not ok:
+            return why
+        alt = own.get("alt")
+        try:
+            node.setFixedPosition(current[0], current[1], int(alt or 0))
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"could not give the radio its position: {type(e).__name__}: {e}")
+            return f"the radio would not take it: {type(e).__name__}"
+        self.radio_position = {"lat": current[0], "lon": current[1], "at": time.time(),
+                               "source": own.get("source"), "why": why}
+        self.logger.info(f"gave the radio its position from {own.get('source')}: {why}")
+        return why
+
+    def radio_position_state(self):
+        """What the screen shows about the radio's position. Never raises: the suites build
+        bridges without running __init__."""
+        rp = getattr(self, "radio_position", None)
+        if not rp:
+            return {"set": False}
+        return {"set": True, "lat": rp.get("lat"), "lon": rp.get("lon"),
+                "at": utc(rp["at"]) if rp.get("at") else None,
+                "source": rp.get("source"), "why": rp.get("why")}
 
     # Spec 070: the MQTT client proxy ------------------------------------
     def _mqtt_settings(self):
@@ -1320,6 +1365,7 @@ class Bridge(TAKMeshtasticGateway):
                 "forwarded_counter": getattr(self.socket_client, "packets", None) if self.observe else None,
                 "gps": self.gps_state,
                 "mqtt": self.mqtt_state(),          # Spec 070: whether the box is carrying the radio's MQTT
+                "radio_position": self.radio_position_state(),   # Spec 071: what the radio was told
                 "state_dir": self.state_dir, "socket": self.socket_path}
 
     def _heard_count(self):
@@ -1743,6 +1789,11 @@ class Bridge(TAKMeshtasticGateway):
                     if tag == "RMC" and len(f) >= 7 and f[2] == "A":
                         lat, lon = self._nmea_deg(f[3], f[4]), self._nmea_deg(f[5], f[6])
                         if lat is not None and lon is not None:
+                            # This branch returned a good fix and left the lamp saying
+                            # there was none, so a box placed by its own receiver reported "GPS no
+                            # fix". RMC carries no satellite count, so `used` stays unknown rather
+                            # than being reported as zero, which would be its own small lie.
+                            self.gps_state.update({"fix": True})
                             return {"lat": round(lat, 6), "lon": round(lon, 6), "sats": None, "quality": None, "time": self._nmea_time(f[1]), "path": path}
                 except (ValueError, IndexError):
                     continue
@@ -1779,6 +1830,10 @@ class Bridge(TAKMeshtasticGateway):
                     self.gps_fix = None      # the receiver has lost its fix: stop placing the box by a stale one
             if fix:
                 self._gps_misses = 0
+            try:
+                self.push_position_to_radio()      # Spec 071: the radio follows the box
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"pushing the position to the radio failed: {type(e).__name__}: {e}")
             self._stop.wait(300 if fix else 60)
 
     def _radio_own_gps(self):

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.29.0 (9 September 2026)
+
+Spec 071,.
+
+- **A box now tells its radio where it is.** The receiver is on the box and the radio, half a metre away on the
+  end of a USB cable, usually has none of its own, so until now a box was a node with no location to everyone
+  else on the mesh and to anything downstream of MQTT. The position comes from the same place the map uses, so
+  nothing new decides where a box is, and a box with no position writes nothing rather than inventing one.
+  Throttled, because every write is a write to the radio's flash: on first use, on real movement, or once an
+  hour.
+- **The GPS lamp agreed with the position it was showing.** `read_gps` returns on whichever sentence satisfies
+  it first, and the RMC branch returned a perfectly good fix while leaving the lamp saying there was none. A box
+  whose receiver emits RMC first read "GPS no fix" while being placed by that fix. It was wrong in the direction
+  that wastes an operator's time.
+
 ## 0.28.1 (9 September 2026)
 
 - **The MQTT proxy carried nothing.** 0.28.0 connected to the broker on both boxes and relayed not one message.

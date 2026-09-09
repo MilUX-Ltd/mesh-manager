@@ -74,6 +74,11 @@ class FakeNode:
         else:
             getattr(self.device_config, config_name).CopyFrom(getattr(self.localConfig, config_name))
 
+    def setFixedPosition(self, lat, lon, alt=0):
+        # Spec 071: what the box pushes to the radio, recorded so a suite can read it.
+        self.calls.append(("setFixedPosition", lat, lon, alt))
+        self.fixed_positions = getattr(self, "fixed_positions", []) + [(lat, lon, alt)]
+
     def removeNode(self, nid):
         self.calls.append(("removeNode", nid))
 
