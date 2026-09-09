@@ -32,10 +32,12 @@ class FakeNode:
         self.localConfig.lora.region = 3; self.localConfig.lora.modem_preset = 6; self.localConfig.lora.tx_power = 14
         self.localConfig.device.role = 0
         self.localConfig.position.position_broadcast_secs = 900
+        self.moduleConfig = localonly_pb2.LocalModuleConfig()
         # the device: what a write actually lands on, and what an admin request answers from
         self.device_channels = [channel_pb2.Channel() for _ in range(8)]
         for i in range(8): self.device_channels[i].CopyFrom(self.channels[i])
         self.device_config = localonly_pb2.LocalConfig(); self.device_config.CopyFrom(self.localConfig)
+        self.device_module_config = localonly_pb2.LocalModuleConfig(); self.device_module_config.CopyFrom(self.moduleConfig)
         self.device_owner = mesh_pb2.User(); self.device_owner.long_name = "Bench"; self.device_owner.short_name = "BNCH"
         self.calls = []
         self.readback_delay = 0.0        # seconds before an answer; None = the radio never answers
@@ -64,8 +66,13 @@ class FakeNode:
             self.localConfig.lora.region = 1; self.device_config.lora.region = 1
 
     def writeConfig(self, config_name):
+        # The real Node.writeConfig takes both localConfig and moduleConfig section names
+        # ("mqtt" lands on set_module_config.mqtt), so the fake has to route the same way.
         self.calls.append(("writeConfig", config_name))
-        getattr(self.device_config, config_name).CopyFrom(getattr(self.localConfig, config_name))
+        if config_name in localonly_pb2.LocalModuleConfig.DESCRIPTOR.fields_by_name:
+            getattr(self.device_module_config, config_name).CopyFrom(getattr(self.moduleConfig, config_name))
+        else:
+            getattr(self.device_config, config_name).CopyFrom(getattr(self.localConfig, config_name))
 
     def removeNode(self, nid):
         self.calls.append(("removeNode", nid))
@@ -87,6 +94,9 @@ class FakeNode:
         elif which == "get_config_request":
             name = admin_pb2.AdminMessage.ConfigType.Name(p.get_config_request).replace("_CONFIG", "").lower()
             getattr(resp.get_config_response, name).CopyFrom(getattr(self.device_config, name))
+        elif which == "get_module_config_request":
+            name = admin_pb2.AdminMessage.ModuleConfigType.Name(p.get_module_config_request).replace("_CONFIG", "").lower()
+            getattr(resp.get_module_config_response, name).CopyFrom(getattr(self.device_module_config, name))
         elif which == "get_owner_request":
             resp.get_owner_response.CopyFrom(self.device_owner)
         elif which == "get_device_metadata_request":
@@ -126,6 +136,9 @@ class FakeIface:
         self._pid = getattr(self, "_pid", 1000) + 1
         self.data.append({"data": text, "dest": destinationId, "portNum": "TEXT_MESSAGE_APP", "wantAck": wantAck, "onResponse": onResponse, "channelIndex": channelIndex})
         return types.SimpleNamespace(id=self._pid)
+    def sendMqttClientProxyMessage(self, topic, data):
+        # Spec 070: what the proxy hands back to the radio, recorded so a suite can read it.
+        self.proxied = getattr(self, "proxied", []) + [(topic, data)]
     def sendTraceRoute(self, dest, hopLimit=7, channelIndex=0): self.traces.append((dest, hopLimit))
     def sendPosition(self, destinationId="^all", wantResponse=False, channelIndex=0, **kw): self.positions.append(destinationId)
     def close(self): pass

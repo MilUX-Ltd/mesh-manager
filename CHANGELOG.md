@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.28.0 (9 September 2026)
+
+Spec 070,.
+
+- **A gateway radio no longer needs its own wifi to reach a broker.** The estate's radios are Heltec V4 boards
+  on the end of a USB cable, inside boxes whose network is wired, so they never could. Edge said so once a
+  minute in its own log: `[Router] MQTT not connected, queue packet`. The firmware already had the answer,
+  `proxy_to_client_enabled`, which hands the radio's MQTT traffic to whatever is on the other end of the serial
+  link. On a phone that is the Meshtastic app. Now, on a box, it is Mesh Manager. The alternative was putting
+  the estate's wifi password on every radio.
+- **The proxy carries bytes and decides nothing.** Which packets may go to MQTT, what a channel uplinks, how a
+  position is truncated and what is encrypted stay firmware decisions, so nothing here can drift from the radio.
+- **A new operation points the gateway radio at a broker** and turns the proxy on, confirming what it wrote
+  against the radio's own answer. It never echoes the password back, and the state the screen reads says whether
+  a password is set, never what it is.
+- **A broker that refuses, drops or vanishes leaves the mesh alone.** Every failure is caught and recorded, and
+  the proxy reconnects without a restart.
+- `paho-mqtt` is both declared and bundled, so an offline box installs it.
+
 ## 0.27.0 (6 September 2026)
 
 Spec 069, the defect slice from the morning's product review: six findings that needed no decision from anyone.

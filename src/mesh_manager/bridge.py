@@ -32,6 +32,7 @@ from . import channel as CH
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, read_config, utc
 from .history import History
 from . import peers as P
+from . import mqttproxy as MQ
 
 SILENCE_LIMIT = 600                              # the deployed watchdog's figure
 
@@ -383,6 +384,9 @@ class Bridge(TAKMeshtasticGateway):
         self.waypoints = {}                   # Spec 041: waypoints heard on the mesh, by id, the live ones
         self.neighbor_edges = {}              # Spec 042: (reporter, neighbour) -> {snr, ts}, from NeighborInfo
         self.gps_port_factory = None          # opens the receiver's port; pyserial by default
+        self.mqtt_proxy = None                # Spec 070: carries the radio's MQTT over the box's network
+        self.mqtt_reason = None               # why there is no proxy, in one sentence for the screen
+        self.mqtt_client_factory = None       # the suite's fake broker client; paho's by default
         self._gps_reader = gps_reader
         self.flash_hooks = {}                 # the block layer and esptool, replaceable by the suite
         self._subs = []
@@ -452,6 +456,75 @@ class Bridge(TAKMeshtasticGateway):
         self.logger.info(f"mesh-manager-bridge {__version__} on {conf.get('SERIAL')}; socket {socket_path}; state {state_dir}")
         if self._gps_reader:
             threading.Thread(target=self._gps_loop, name="gps", daemon=True).start()
+        if not radioless:
+            # after the gateway thread, which is what gives us a radio to read the settings from
+            threading.Thread(target=self._mqtt_proxy_start, name="mqttproxy-start", daemon=True).start()
+
+    # Spec 070: the MQTT client proxy ------------------------------------
+    def _mqtt_settings(self):
+        """The broker settings as the radio holds them, or None when there is no radio yet."""
+        node = getattr(self.interface, "localNode", None)
+        if node is None:
+            return None
+        try:
+            return MQ.settings_from(node.moduleConfig.mqtt)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _mqtt_proxy_start(self, settle=2.0):
+        """Start the proxy if the radio has asked for one. Never fatal: a box whose broker is
+        misconfigured still runs its mesh."""
+        self._stop.wait(settle)          # let the gateway finish its handshake
+        if self._stop.is_set():
+            return
+        try:
+            settings = self._mqtt_settings()
+            if settings is None:
+                self.mqtt_reason = MQ.why_not({}, has_radio=False)
+                return
+            self.mqtt_reason = MQ.why_not(settings, has_radio=True)
+            if self.mqtt_reason:
+                self.logger.info(f"no MQTT proxy: {self.mqtt_reason}")
+                return
+            proxy = MQ.Proxy(self.interface, settings, client_factory=self.mqtt_client_factory,
+                             log=self.logger)
+            if pub is not None:
+                pub.subscribe(proxy.on_radio, "meshtastic.mqttclientproxymessage")
+            proxy.start()
+            self.mqtt_proxy = proxy
+            self.logger.info(f"MQTT proxy: carrying the radio's traffic to {settings['address']}:{settings['port']}"
+                             f" over this box's network")
+        except Exception as e:  # noqa: BLE001
+            self.mqtt_reason = f"the MQTT proxy could not start: {type(e).__name__}: {e}"
+            self.logger.warning(self.mqtt_reason)
+
+    def restart_mqtt_proxy(self):
+        """Called after the radio's MQTT config changes, so the new settings take at once."""
+        old = self.mqtt_proxy
+        self.mqtt_proxy = None
+        if old is not None:
+            if pub is not None:
+                try:
+                    pub.unsubscribe(old.on_radio, "meshtastic.mqttclientproxymessage")
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            try:
+                old.stop()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        threading.Thread(target=self._mqtt_proxy_start, name="mqttproxy-restart",
+                         args=(0.0,), daemon=True).start()
+
+    def mqtt_state(self):
+        """What the screen shows about the proxy. Never the password.
+
+        getattr, not attribute access: op_status is called on bridges the suites build without
+        running __init__, and a status call must never be the thing that raises.
+        """
+        proxy = getattr(self, "mqtt_proxy", None)
+        if proxy is not None:
+            return dict(proxy.state(), running=True)
+        return {"running": False, "connected": False, "reason": getattr(self, "mqtt_reason", None)}
 
     @property
     def gateway(self):
@@ -1246,6 +1319,7 @@ class Bridge(TAKMeshtasticGateway):
                 "primary_channel": primary, "watchdog": self.watchdog_state, "position": self.own_position(),
                 "forwarded_counter": getattr(self.socket_client, "packets", None) if self.observe else None,
                 "gps": self.gps_state,
+                "mqtt": self.mqtt_state(),          # Spec 070: whether the box is carrying the radio's MQTT
                 "state_dir": self.state_dir, "socket": self.socket_path}
 
     def _heard_count(self):
@@ -1985,6 +2059,14 @@ class Bridge(TAKMeshtasticGateway):
         from meshtastic.protobuf import admin_pb2
         def build(p): p.get_config_request = admin_pb2.AdminMessage.ConfigType.Value(section.upper() + "_CONFIG")
         def extract(raw): return getattr(raw.get_config_response, section)
+        return section, build, extract
+
+    @staticmethod
+    def _spec_module_section(section):
+        """Spec 070: the same round trip as _spec_section, for a module config section."""
+        from meshtastic.protobuf import admin_pb2
+        def build(p): p.get_module_config_request = admin_pb2.AdminMessage.ModuleConfigType.Value(section.upper() + "_CONFIG")
+        def extract(raw): return getattr(raw.get_module_config_response, section)
         return section, build, extract
 
     def _spec_owner(self):
@@ -3280,6 +3362,54 @@ class Bridge(TAKMeshtasticGateway):
             if str(have).strip().upper() != str(want).strip().upper():
                 diffs.append({"field": k, "is": have, "should": want})
         return diffs
+
+    def op_gateway_mqtt_set(self, address=None, username=None, password=None, root=None,
+                            tls=None, enabled=None, confirm=None, **_):
+        """Spec 070: point the gateway radio's MQTT at a broker and tell it to proxy through this
+        box. The radio keeps the settings, which is the Meshtastic contract and the same place the
+        phone apps read them; the proxy carries the traffic over the box's network.
+
+        Never echoes the password back: the screen has no reason to see it again."""
+        if str(confirm or "").strip().lower() not in ("yes", "on", "true", "1"):
+            return {"error": "changing how this box talks to a broker needs confirm"}
+        node = getattr(self.interface, "localNode", None)
+        if node is None:
+            return {"error": "no gateway radio on this box"}
+        addr = str(address or "").strip()
+        if not addr:
+            return {"error": "a broker address is needed"}
+        on = lambda v: str(v or "").strip().lower() in ("yes", "on", "true", "1")  # noqa: E731
+        try:
+            m = node.moduleConfig.mqtt
+            m.enabled = on(enabled) if enabled is not None else True
+            m.address = addr
+            m.username = str(username or "")
+            m.password = str(password or "")
+            m.root = str(root or "").strip("/") or "msh"
+            m.tls_enabled = on(tls)
+            m.proxy_to_client_enabled = True     # the whole point of this op
+            m.encryption_enabled = True          # never hand a broker plaintext
+            m.json_enabled = False
+            node.writeConfig("mqtt")
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"writing the radio's MQTT config failed: {type(e).__name__}: {e}"}
+        written = ["enabled", "address", "username", "password", "root", "tls_enabled",
+                   "proxy_to_client_enabled", "encryption_enabled", "json_enabled"]
+        got = self._admin_many(node, [self._spec_module_section("mqtt")])
+        rb, why = {}, None
+        if isinstance(got.get("mqtt"), Exception) or "mqtt" not in got:
+            why = f"the radio did not answer the read of its MQTT config within {self.READBACK_S} s"
+        else:
+            g = got["mqtt"]
+            rb = {"enabled": bool(g.enabled), "address": g.address, "username": g.username,
+                  "root": g.root, "tls_enabled": bool(g.tls_enabled),
+                  "proxy_to_client_enabled": bool(g.proxy_to_client_enabled),
+                  "encryption_enabled": bool(g.encryption_enabled),
+                  "password_set": bool(g.password)}     # whether, never what
+        ok = bool(rb) and rb.get("address") == addr and rb.get("proxy_to_client_enabled") is True
+        self._emit("mqtt", action="gateway_mqtt_set", confirmed=ok)
+        self.restart_mqtt_proxy()
+        return {"written": written, "confirmed": ok, "read_back": rb, "unconfirmed": why}
 
     def op_drift(self, **_):
         prof = self.op_profile()
