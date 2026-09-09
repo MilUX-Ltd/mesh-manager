@@ -521,6 +521,11 @@ details.more{position:fixed;bottom:0;right:0;z-index:1101;margin:0;background:va
 .state .state-rest{display:none}.state.open .state-rest{display:contents}.state button.strip{display:inline-flex;margin-left:auto}.state.open button.strip svg{transform:rotate(180deg)}
 button.icon,details.fold.ctl.icon summary{width:44px;height:44px;min-height:44px}.row-actions{gap:var(--s2)}.regform{grid-template-columns:1fr}
 header .brand small{display:none}}
+.chat-lock{margin-left:var(--s1);opacity:.75;vertical-align:-2px}
+.chat-lock svg{width:13px;height:13px}
+.bytecount{text-align:right;font-variant-numeric:tabular-nums}
+.bytecount.warn{color:var(--warn)}
+.bytecount.chat-over{color:var(--bad);font-weight:600}
 """
 # The primary bar is where the operator lives (5 Sep 2026 reviews): the mesh, the nodes, the
 # messages, the channels, the health. Radio is a set-up page, pressed once a deployment, and sits
@@ -1858,6 +1863,7 @@ ICONS = {
     "onboard": _svg("<circle cx='8' cy='8' r='6'/><path d='M5.2 8.2l1.9 1.9L11 6.2'/>"),
     "trash": _svg("<path d='M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 7v4M9.2 7v4'/>"),
     "key": _svg("<circle cx='5.5' cy='10.5' r='3'/><path d='M7.6 8.4 13.5 2.5M11 5l2 2'/>"),
+    "lock": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='3' y='7' width='10' height='6' rx='1'/><path d='M5.5 7V5a2.5 2.5 0 0 1 5 0v2'/></svg>",
     "qr": _svg("<rect x='2' y='2' width='4.5' height='4.5'/><rect x='9.5' y='2' width='4.5' height='4.5'/><rect x='2' y='9.5' width='4.5' height='4.5'/><path d='M9.5 9.5h2v2h-2zM14 9.5v1M9.5 14h1M12.5 12.5H14V14'/>"),
     "users": _svg("<circle cx='6' cy='5.5' r='2.5'/><path d='M1.5 14c.5-2.7 2.2-4 4.5-4s4 1.3 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 10c1.6.4 2.4 1.7 2.5 4'/>"),
     "shapes": _svg("<circle cx='11.5' cy='4.5' r='2.5'/><rect x='2' y='9' width='5' height='5' rx='1'/><path d='M4.5 2 7 6.5H2zM9.5 9.5h5v5h-5z'/>"),
@@ -3247,6 +3253,18 @@ def message_rows(web, labels=None):
     return rows or "<tr><td colspan=5 class='meta'>Nothing heard on the channels since the bridge started. Anything you send shows here too.</td></tr>"
 
 
+def _op_max_bytes(op, field="text", fallback=200):
+    """The limit the box itself enforces, so the screen cannot disagree with it (Spec 073)."""
+    try:
+        spec = [o for o in C.ACTIONS if o.get("op") == op][0]
+        return int([x for x in spec["inputs"] if x["name"] == field][0]["max_bytes"])
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
+SEND_MAX = _op_max_bytes("send_text", fallback=200)
+PEER_MAX = _op_max_bytes("peer_send_text", fallback=180)
+
 def messages_body(web, nodes, chans=None, st=None, groups=None):
     """Spec 048: Messages as a chat. The list of chats on the left, up to three open on the right, from
     what the box holds and hears; the page's script derives the conversations."""
@@ -3258,9 +3276,9 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
     glist = [dict(g, members=[n.get("id") for n in nodes if str(n.get("group") or "") == str(g.get("name"))]) for g in ((groups or {}).get("groups") or [])]
     nmap = {str(n.get("id")): {"name": dname(n), "icon": str(n.get("icon") or "radio"), "group": str(n.get("group") or ""), "db": not n.get("heard_here", True)} for n in nodes if n.get("id")}
     chips = "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick)
-    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role")} for c in live],
+    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role"), "has_key": bool(c.get("has_key"))} for c in live],
                        "groups": [{"name": g.get("name"), "icon": g.get("icon") or "radio", "count": int(g.get("count") or 0), "members": g.get("members") or []} for g in glist],
-                       "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"],
+                       "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"], "lock": ICONS["lock"],
                        "dots": ICONS["dots"], "muted": ICONS["bell_off"], "pin": ICONS["pin"]}).replace("&", "&amp;").replace("'", "&#39;")
     tools = ("<div class='chat-tools'>" + icon_button("plus", "New message", "New message", "Start a chat with any radio, channel or group, spoken to or not", attrs="id='chat-new'")
              + icon_button("check_all", "Mark all read", "Mark all read", "Every chat's unread count to nought", attrs="id='chat-readall'")
@@ -3277,10 +3295,10 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
             "data-confirm-remote='Send to {site} over the link: it goes onto that mesh only if {site} allows it, prefixed with this site&#39;s name: “{text}”'>"
             f"<aside class='chat-side' aria-label='Chats'>{tools}<div class='chat-list' id='chat-list'></div></aside><section class='chat-panes' id='chat-panes' aria-live='polite'></section></div>{picker}"
             f"<template id='chat-composer'><div class='chat-compose'>{('<div class=quick data-tip=Fills-the-box>' + chips + '</div>') if chips else ''}"
-            f"<form data-action='send_text' data-chat-composer><input type='text' name='text' maxlength='200' required placeholder='{e(send['title'])} (200 bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
-            "<div class='note'></div><div class='res meta' role='status'></div></form></div></template>"
-            f"<template id='chat-composer-remote'><div class='chat-compose'><form data-action='peer_send_text' data-chat-composer><input type='text' name='text' maxlength='180' required placeholder='Send over the link (180 bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
-            "<div class='note'></div><div class='res meta' role='status'></div></form></div></template>"
+            f"<form data-action='send_text' data-chat-composer><input type='text' name='text' maxlength='{SEND_MAX}' required placeholder='{e(send['title'])} ({SEND_MAX} bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
+            f"<div class='note'></div><div class='bytecount meta' data-bytecount='{SEND_MAX}' aria-live='off'>0/{SEND_MAX}</div><div class='res meta' role='status'></div></form></div></template>"
+            f"<template id='chat-composer-remote'><div class='chat-compose'><form data-action='peer_send_text' data-chat-composer><input type='text' name='text' maxlength='{PEER_MAX}' required placeholder='Send over the link ({PEER_MAX} bytes at most)' aria-label='Message' autocomplete='off'><button type='submit'>Send</button>"
+            f"<div class='note'></div><div class='bytecount meta' data-bytecount='{PEER_MAX}' aria-live='off'>0/{PEER_MAX}</div><div class='res meta' role='status'></div></form></div></template>"
             f"<p class='meta' style='margin-top:var(--s3)'>{e(send['description'])} A direct message sends on Enter; a message to a channel or a group asks first, because every device hears it and it costs airtime. Receipts show on each bubble: handed to the radio, delivered, or not delivered and why; a message the radio gave up on can be sent again from its bubble. A message to everyone is never acknowledged. New message starts a chat with any radio, channel or group; each chat's menu marks it read or unread, pins, mutes or hides it; the field above the list finds a chat or a line.</p>"
             + CHAT_JS)
 
@@ -3369,10 +3387,35 @@ CHAT_JS = r"""<script>
     inp.addEventListener('input',draw);inp.addEventListener('keydown',function(ev){if(ev.key==='Escape'){closePicker();}else if(ev.key==='Enter'){ev.preventDefault();var f=out.querySelector('button');if(f)f.click();}});pk.querySelector('.close').addEventListener('click',closePicker);draw();inp.focus();}
   function receipt(m){if(m.from!==own&&!m.mine)return '';if(m.ack==='delivered')return "<span class='pill'>delivered</span>";if(typeof m.ack==='string'&&m.ack.indexOf('aired:')===0)return "<span class='pill'>on the air at "+esc(m.ack.slice(6))+"</span>";if(typeof m.ack==='string'&&m.ack.indexOf('not aired')===0)return "<span class='pill' data-tip='The far site keeps its air closed'>"+esc(m.ack)+"</span>";if(m.mine&&!m.ack)return "<span class='pill'>sent over the link</span>";if(m.ack)return "<span class='pill' data-tip='The radio gave up' data-tip-more='"+esc(m.ack)+"'>not delivered · "+esc(String(m.ack).replace(/_/g,' ').toLowerCase())+"</span>";
     var to=String(m.to||'^all');if(to==='^all'||to==='!ffffffff')return "<span class='pill' data-tip='A message to everyone is never acknowledged'>sent to everyone</span>";return "<span class='pill'>handed to the radio</span>";}
+  function byteLen(v){return new TextEncoder().encode(v).length;}
+  function wireByteCount(win){
+    // Spec 073: count what the BOX counts. maxlength counts UTF-16 units and the box counts UTF-8
+    // bytes, so a degree sign in a bearing made the two disagree and the send was refused after
+    // the operator had already pressed it.
+    var f=win.querySelector('form[data-chat-composer]');if(!f)return;
+    var inp=f.querySelector("input[name='text']"),out=f.querySelector('.bytecount'),btn=f.querySelector("button[type='submit']");
+    if(!inp||!out)return;
+    var max=parseInt(out.dataset.bytecount,10)||200;
+    function tick(){
+      var n=byteLen(inp.value),over=n>max;
+      out.textContent=n+'/'+max;
+      out.classList.toggle('warn',!over&&n>max*0.9);
+      out.classList.toggle('chat-over',over);
+      if(btn)btn.disabled=over;
+      inp.setAttribute('aria-invalid',over?'true':'false');
+    }
+    inp.addEventListener('input',tick);f.addEventListener('reset',function(){setTimeout(tick,0);});tick();
+  }
+  function chatLock(c){
+    // The security state of the channel, at the moment of composing to it, rather than a page away.
+    if(!c||c.key===undefined&&c.has_key===undefined)return '';
+    return c.has_key?("<span class='chat-lock' data-tip='This channel has a key'>"+(D.lock||'')+"</span>"):'';
+  }
   function renderPane(key){var panes=document.getElementById('chat-panes');var win=panes.querySelector("[data-key='"+key+"']");var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);var c=chats.filter(function(x){return x.key===key;})[0]||{key:key,name:key,sub:''};
     if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;win.dataset.seenAt=String(seen[key]||0);
       win.innerHTML="<div class='chat-head'><button type='button' class='line icon back' aria-label='Back to the chats' data-tip='Back to the chats'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 3 5 8l5 5'/></svg></button><span class='nodeicon'>"+chatIcon(c)+"</span><span class='nm'><span class='name'></span><br><span class='sub'></span></span><details class='chat-menu'><summary class='line icon' aria-label='More for this chat' data-tip='More for this chat' data-tip-more='Mark read or unread, pin, mute, hide'>"+(D.dots||'&#8943;')+"</summary><div class='menu-list' role='menu'></div></details><button type='button' class='line icon close' aria-label='Close this chat' data-tip='Close this chat'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' aria-hidden='true'><path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/></svg></button></div><div class='chat-msgs'></div>";
       win.appendChild(document.getElementById(isRemoteChat(key)?'chat-composer-remote':'chat-composer').content.cloneNode(true));
+      wireByteCount(win);
       win.querySelector('.close').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.toggle('open',open.length>0);renderList();});
       win.querySelector('.back').addEventListener('click',function(){open=open.filter(function(k){return k!==key;});keep();win.remove();root.classList.remove('open');renderList();});
       win.querySelector('.menu-list').addEventListener('click',function(ev){var b=ev.target.closest('[data-act]');if(!b)return;win.querySelector('details.chat-menu').open=false;act(key,b.dataset.act);});
@@ -3389,7 +3432,7 @@ CHAT_JS = r"""<script>
       win.querySelector('.chat-msgs').addEventListener('click',function(ev){var b=ev.target.closest('[data-act]');if(!b)return;var bub=b.closest('.bubble');var m=msgsFor(key)[parseInt(bub.dataset.i,10)];if(!m)return;
         if(b.dataset.act==='copy'){copyText(m.text||'',b);}else if(b.dataset.act==='resend'){sendBody(win,{text:m.text||'',channel:(m.channel===undefined||m.channel===null)?0:m.channel,to:String(m.to||'^all')},'',false,null);}});
       panes.appendChild(win);}
-    win.querySelector('.name').textContent=chatName(c);win.querySelector('.sub').textContent=chatSub(c);win.querySelector('.menu-list').innerHTML=menuFor(key);
+    win.querySelector('.name').textContent=chatName(c);win.querySelector('.name').insertAdjacentHTML('beforeend',chatLock(c));win.querySelector('.sub').textContent=chatSub(c);win.querySelector('.menu-list').innerHTML=menuFor(key);
     var box=win.querySelector('.chat-msgs');var atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40||!box.children.length;box.innerHTML='';var lastDay='';
     var list=msgsFor(key),divAt=firstUnreadIndex(list,own,parseInt(win.dataset.seenAt||'0',10));
     list.forEach(function(m,i){var day=String(m.ts||'').slice(0,10);if(day&&day!==lastDay){lastDay=day;var d=document.createElement('div');d.className='chat-day';d.textContent=day;box.appendChild(d);}

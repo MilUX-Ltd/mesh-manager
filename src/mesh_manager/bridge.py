@@ -2148,7 +2148,7 @@ class Bridge(TAKMeshtasticGateway):
         if not re.fullmatch(r"![0-9a-f]{8}", nid):
             return None, None, "id must be a radio id, !hex"
         if write and not self._register_load().get(nid, {}).get("managed"):
-            return None, nid, f"{nid} is not managed: bring it to the bench first"
+            return None, nid, (f"{nid} is not known to be managed: read the node first, and if it still says this, it has not been given this box's admin key at the bench")
         try:
             if self.node_factory:
                 return self.node_factory(nid), nid, None
@@ -3422,53 +3422,100 @@ class Bridge(TAKMeshtasticGateway):
                 diffs.append({"field": k, "is": have, "should": want})
         return diffs
 
+    @staticmethod
+    def _write_mqtt(node, address, username, password, root, tls, enabled):
+        """The MQTT module settings and the two LoRa flags that decide whether MQTT can carry
+        anything, written together. Setting one without the others produces a connection that
+        carries nothing and looks like success: six of the eight radios done by cable on 9 Sep had
+        ignore_mqtt on, which silently discards everything arriving from MQTT."""
+        on = lambda v: str(v or "").strip().lower() in ("yes", "on", "true", "1")  # noqa: E731
+        m = node.moduleConfig.mqtt
+        m.enabled = on(enabled) if enabled is not None else True
+        m.address = str(address or "").strip()
+        m.username = str(username or "")
+        m.password = str(password or "")
+        m.root = str(root or "").strip("/") or "msh"
+        m.tls_enabled = on(tls)
+        m.proxy_to_client_enabled = True     # the box or the paired phone carries it; no radio needs wifi
+        m.encryption_enabled = True          # never hand a broker plaintext
+        m.json_enabled = False
+        node.writeConfig("mqtt")
+        lora = node.localConfig.lora
+        lora.config_ok_to_mqtt = True        # its packets may be uplinked
+        lora.ignore_mqtt = False             # and it will accept what comes back
+        node.writeConfig("lora")
+
+    @staticmethod
+    def _mqtt_read_back(mqtt, lora):
+        """What the screen may see: whether a password is set, never what it is."""
+        return {"enabled": bool(mqtt.enabled), "address": mqtt.address, "username": mqtt.username,
+                "root": mqtt.root, "tls_enabled": bool(mqtt.tls_enabled),
+                "proxy_to_client_enabled": bool(mqtt.proxy_to_client_enabled),
+                "encryption_enabled": bool(mqtt.encryption_enabled),
+                "json_enabled": bool(mqtt.json_enabled),
+                "password_set": bool(mqtt.password),
+                "config_ok_to_mqtt": bool(lora.config_ok_to_mqtt) if lora is not None else None,
+                "ignore_mqtt": bool(lora.ignore_mqtt) if lora is not None else None}
+
+    def op_node_mqtt_set(self, id=None, address=None, username=None, password=None, root=None,
+                         tls=None, enabled=None, confirm=None, **_):
+        """Spec 072: point a radio's MQTT at a broker, or turn it off, over the air.
+
+        A radio carries its own MQTT settings and a paired phone reads them off it, so this is what
+        makes a phone work without a cable."""
+        if str(confirm or "").strip().lower() not in ("yes", "on", "true", "1"):
+            return {"error": "changing how a radio talks to a broker needs confirm"}
+        node, nid, err = self._remote(id, write=True)
+        if err:
+            return {"error": err}
+        if not str(address or "").strip():
+            return {"error": "a broker address is needed"}
+        err = self._remote_prepare(node, nid)
+        if err:
+            return {"error": err}
+        try:
+            self._write_mqtt(node, address, username, password, root, tls, enabled)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"writing MQTT to {nid} failed: {type(e).__name__}: {e}"}
+        got = self._admin_many(node, [self._spec_module_section("mqtt"), self._spec_section("lora")])
+        rb, why = {}, None
+        if "mqtt" not in got or isinstance(got.get("mqtt"), Exception):
+            why = f"{nid} did not answer the read of its MQTT config within {self.READBACK_S} s"
+        else:
+            rb = self._mqtt_read_back(got["mqtt"], got.get("lora"))
+        want_on = str(enabled or "").strip().lower() not in ("off", "no", "false", "0")
+        ok = bool(rb) and rb.get("enabled") is want_on and (
+            not want_on or rb.get("address") == str(address).strip())
+        self._emit("mqtt", id=nid, action="node_mqtt_set", confirmed=ok)
+        return {"written": ["mqtt", "config_ok_to_mqtt", "ignore_mqtt"], "confirmed": ok,
+                "read_back": rb, "unconfirmed": why}
+
     def op_gateway_mqtt_set(self, address=None, username=None, password=None, root=None,
                             tls=None, enabled=None, confirm=None, **_):
         """Spec 070: point the gateway radio's MQTT at a broker and tell it to proxy through this
-        box. The radio keeps the settings, which is the Meshtastic contract and the same place the
-        phone apps read them; the proxy carries the traffic over the box's network.
-
-        Never echoes the password back: the screen has no reason to see it again."""
+        box. Shares its writer with the remote operation (Spec 072) so the two cannot drift."""
         if str(confirm or "").strip().lower() not in ("yes", "on", "true", "1"):
             return {"error": "changing how this box talks to a broker needs confirm"}
         node = getattr(self.interface, "localNode", None)
         if node is None:
             return {"error": "no gateway radio on this box"}
-        addr = str(address or "").strip()
-        if not addr:
+        if not str(address or "").strip():
             return {"error": "a broker address is needed"}
-        on = lambda v: str(v or "").strip().lower() in ("yes", "on", "true", "1")  # noqa: E731
         try:
-            m = node.moduleConfig.mqtt
-            m.enabled = on(enabled) if enabled is not None else True
-            m.address = addr
-            m.username = str(username or "")
-            m.password = str(password or "")
-            m.root = str(root or "").strip("/") or "msh"
-            m.tls_enabled = on(tls)
-            m.proxy_to_client_enabled = True     # the whole point of this op
-            m.encryption_enabled = True          # never hand a broker plaintext
-            m.json_enabled = False
-            node.writeConfig("mqtt")
+            self._write_mqtt(node, address, username, password, root, tls, enabled)
         except Exception as e:  # noqa: BLE001
             return {"error": f"writing the radio's MQTT config failed: {type(e).__name__}: {e}"}
-        written = ["enabled", "address", "username", "password", "root", "tls_enabled",
-                   "proxy_to_client_enabled", "encryption_enabled", "json_enabled"]
-        got = self._admin_many(node, [self._spec_module_section("mqtt")])
+        got = self._admin_many(node, [self._spec_module_section("mqtt"), self._spec_section("lora")])
         rb, why = {}, None
-        if isinstance(got.get("mqtt"), Exception) or "mqtt" not in got:
+        if "mqtt" not in got or isinstance(got.get("mqtt"), Exception):
             why = f"the radio did not answer the read of its MQTT config within {self.READBACK_S} s"
         else:
-            g = got["mqtt"]
-            rb = {"enabled": bool(g.enabled), "address": g.address, "username": g.username,
-                  "root": g.root, "tls_enabled": bool(g.tls_enabled),
-                  "proxy_to_client_enabled": bool(g.proxy_to_client_enabled),
-                  "encryption_enabled": bool(g.encryption_enabled),
-                  "password_set": bool(g.password)}     # whether, never what
-        ok = bool(rb) and rb.get("address") == addr and rb.get("proxy_to_client_enabled") is True
+            rb = self._mqtt_read_back(got["mqtt"], got.get("lora"))
+        ok = bool(rb) and rb.get("address") == str(address).strip() and rb.get("proxy_to_client_enabled") is True
         self._emit("mqtt", action="gateway_mqtt_set", confirmed=ok)
         self.restart_mqtt_proxy()
-        return {"written": written, "confirmed": ok, "read_back": rb, "unconfirmed": why}
+        return {"written": ["mqtt", "config_ok_to_mqtt", "ignore_mqtt"], "confirmed": ok,
+                "read_back": rb, "unconfirmed": why}
 
     def op_drift(self, **_):
         prof = self.op_profile()

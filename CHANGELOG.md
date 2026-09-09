@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 1.0.0 (9 September 2026)
+
+The first release with a version that says what the product is: a Meshtastic mesh, the devices on it and the
+boxes that carry them, managed from a screen.
+
+**Spec 072: turn a radio's MQTT on and off from the screen.** A radio carries its own MQTT settings and a paired
+phone reads them off the radio, which is why putting the settings on the radio makes any phone work. Until now
+the only way to get them there was a cable. The operation that wrote MQTT to a box's own gateway radio now takes
+a node id and goes over the air, so a tracker, a handheld or a phone's radio can be pointed at a broker, or
+turned off, from the screen. The MQTT settings and the two LoRa flags that decide whether MQTT can carry
+anything travel together, because setting one without the others produces a connection that carries nothing and
+looks like success. Both operations share one writer, so they cannot drift.
+
+**Spec 073: the composer counts the bytes the box counts.** `maxlength` counts UTF-16 code units and the box
+counts UTF-8 bytes, so a degree sign in a bearing, a pound sign or a curly apostrophe made the two disagree: the
+browser accepted the message and the box refused it, with nothing to say by how much it was over. There is now a
+live byte count under each composer, taken from the limit the box itself enforces rather than a number written
+out twice, and the send is refused by the screen before it is refused by the radio.
+
+**The chat head says whether a channel has a key**, so the security state of a channel is in the operator's eye
+at the moment of composing to it rather than one page away.
+
 ## 0.29.1 (9 September 2026)
 
 - **A box no longer broadcasts an estimate as its position.** 0.29.0 pushed whatever `own_position()` returned,

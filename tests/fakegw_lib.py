@@ -236,6 +236,7 @@ class FakeRemoteNode:
         self.iface, self.nodeNum = iface, nid
         self.dev = FakeRemoteNode.device(nid, ours)
         self.localConfig = localonly_pb2.LocalConfig()
+        self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.channels = None
         self.calls = []
 
@@ -253,8 +254,13 @@ class FakeRemoteNode:
             if short_name: self.dev.device_owner.short_name = short_name
 
     def writeConfig(self, name):
+        # A module section ("mqtt") lands on the device's module config, as the real Node does.
         self.calls.append(("writeConfig", name))
-        if self._honours():
+        if not self._honours():
+            return
+        if name in localonly_pb2.LocalModuleConfig.DESCRIPTOR.fields_by_name:
+            getattr(self.dev.device_module_config, name).CopyFrom(getattr(self.moduleConfig, name))
+        else:
             getattr(self.dev.device_config, name).CopyFrom(getattr(self.localConfig, name))
 
     def writeChannel(self, index, adminIndex=0):
