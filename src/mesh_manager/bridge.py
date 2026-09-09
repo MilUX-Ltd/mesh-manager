@@ -480,6 +480,10 @@ class Bridge(TAKMeshtasticGateway):
             own = None
         if not own or own.get("lat") is None or own.get("lon") is None:
             return None
+        if not RPOS.worth_broadcasting(own.get("source")):
+            # An estimate from the devices we hear is not ours to broadcast: it would put a guess on
+            # the mesh as a fact, and that guess feeds back into everyone else's picture.
+            return f"not broadcasting a position from {own.get('source')}: it is an estimate, not a fix"
         current = (float(own["lat"]), float(own["lon"]))
         ok, why = RPOS.due(time.time(), current, self.radio_position)
         if not ok:

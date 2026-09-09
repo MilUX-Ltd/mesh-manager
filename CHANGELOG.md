@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.29.1 (9 September 2026)
+
+- **A box no longer broadcasts an estimate as its position.** 0.29.0 pushed whatever `own_position()` returned,
+  and that ranking includes the median of the fixes a box *hears* when it has no fix of its own. Edge lost its
+  fix, fell back to that estimate, and told its radio it was five hundred metres from where it is. Broadcasting
+  a guess as a fact is bad on its own; it is worse because the guess then feeds back into everyone else's
+  picture. Only a real fix or a deliberate declaration is broadcast now, and the screen says when a position is
+  being withheld and why.
+
 ## 0.29.0 (9 September 2026)
 
 Spec 071,.

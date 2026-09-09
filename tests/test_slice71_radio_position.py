@@ -67,6 +67,23 @@ node = br.interface.localNode
 check("AC6 the box's position is written to the radio",
       getattr(node, "fixed_positions", [])[-1:], [(51.212845, -1.505602, 0)])
 
+# AC13: an estimate is never broadcast. own_position ranks "devices" (the median of the fixes this
+# box HEARS) below a real fix; pushing that would put a guess on the mesh as a fact, and the guess
+# then feeds back into everyone else's picture.
+check_true("AC13 a fix is worth broadcasting", RP.worth_broadcasting("gps"))
+check_true("AC13 a declaration is worth broadcasting", RP.worth_broadcasting("declared"))
+check_true("AC13 an estimate from the devices we hear is NOT", not RP.worth_broadcasting("devices"))
+check_true("AC13 nor is whatever the radio was last told", not RP.worth_broadcasting("radio_stored"))
+
+brE = B.Bridge({"SERIAL": GW}, socket_path=os.path.join(state, "bE.sock"), state_dir=state,
+               observe=True, gps_reader=False)
+brE.serial_dir = byid; brE.bootloader_check = lambda path: False
+brE.own_position = lambda: {"lat": 51.213788, "lon": -1.498263, "source": "devices", "count": 7}
+why = brE.push_position_to_radio()
+check("AC13 the bridge writes no estimate to the radio",
+      getattr(brE.interface.localNode, "fixed_positions", []), [])
+check_true("AC13 and says why", "estimate" in (why or ""), repr(why))
+
 # AC7: and not written again while nothing has changed
 before = len(getattr(node, "fixed_positions", []))
 br.push_position_to_radio()
