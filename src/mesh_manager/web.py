@@ -526,6 +526,8 @@ header .brand small{display:none}}
 .bytecount{text-align:right;font-variant-numeric:tabular-nums}
 .bytecount.warn{color:var(--warn)}
 .bytecount.chat-over{color:var(--bad);font-weight:600}
+.sigword{margin-left:var(--s2);color:var(--ink-muted)}
+.chat-lock--open{color:var(--warn)}
 """
 # The primary bar is where the operator lives (5 Sep 2026 reviews): the mesh, the nodes, the
 # messages, the channels, the health. Radio is a set-up page, pressed once a deployment, and sits
@@ -954,7 +956,11 @@ def sig(snr, hops):
         return "<span class='sig sig--0'><span class='sub'>no reading</span></span>" + hop
     snr = float(snr)
     bars = 4 if snr >= 10 else 3 if snr >= 5 else 2 if snr >= -7 else 1 if snr >= -12 else 0
-    return f"<span class='sig sig--{bars}' data-tip='SNR {snr:g} dB' data-tip-more='Signal to noise of the last packet straight from this node'>{SIG_SVG}<span>{snr:g} dB</span></span>{hop}"
+    word = band_word(snr)
+    said = f"<span class='sigword'>{word}</span>" if word else ""
+    return (f"<span class='sig sig--{bars}' data-tip='Signal quality {word.lower()}: SNR {snr:g} dB' "
+            f"data-tip-more='Signal to noise of the last packet straight from this node. The Meshtastic app says the same word for the same node.'>"
+            f"{SIG_SVG}<span>{snr:g} dB</span>{said}</span>{hop}")
 
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -1680,6 +1686,14 @@ def fence_forms(L):
             "<div class='tablewrap'><table><thead><tr><th>Fence</th><th>Alert when</th><th>Applies to</th><th></th></tr></thead><tbody id='fence-list'><tr><td colspan=4 class='meta'>loading</td></tr></tbody></table></div></details>")
 
 
+def band_word(snr):
+    """The word the Meshtastic application on an operator's phone gives for the same node, so they
+    are not translating between two vocabularies (Spec 074). Checked against the app on a live mesh:
+    SNR 6.0 and 6.5 dB both read Good there, which is band 3 here."""
+    b = band(snr)
+    return {4: "Good", 3: "Good", 2: "Fair", 1: "Poor"}.get(b, "")
+
+
 def band(snr):
     """The four signal bands the glyph, the map and the link bar share; 0 for unknown."""
     if snr is None:
@@ -1864,6 +1878,7 @@ ICONS = {
     "trash": _svg("<path d='M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.8 7v4M9.2 7v4'/>"),
     "key": _svg("<circle cx='5.5' cy='10.5' r='3'/><path d='M7.6 8.4 13.5 2.5M11 5l2 2'/>"),
     "lock": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='3' y='7' width='10' height='6' rx='1'/><path d='M5.5 7V5a2.5 2.5 0 0 1 5 0v2'/></svg>",
+    "lockopen": "<svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><rect x='3' y='7' width='10' height='6' rx='1'/><path d='M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3'/></svg>",
     "qr": _svg("<rect x='2' y='2' width='4.5' height='4.5'/><rect x='9.5' y='2' width='4.5' height='4.5'/><rect x='2' y='9.5' width='4.5' height='4.5'/><path d='M9.5 9.5h2v2h-2zM14 9.5v1M9.5 14h1M12.5 12.5H14V14'/>"),
     "users": _svg("<circle cx='6' cy='5.5' r='2.5'/><path d='M1.5 14c.5-2.7 2.2-4 4.5-4s4 1.3 4.5 4M10.5 3.2a2.5 2.5 0 0 1 0 4.6M12 10c1.6.4 2.4 1.7 2.5 4'/>"),
     "shapes": _svg("<circle cx='11.5' cy='4.5' r='2.5'/><rect x='2' y='9' width='5' height='5' rx='1'/><path d='M4.5 2 7 6.5H2zM9.5 9.5h5v5h-5z'/>"),
@@ -2089,7 +2104,7 @@ def nodes_tables(nodes, routes=None, silent_min=30):
 def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None):
     rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min)
     live = [n for n in nodes if n.get("heard_here", True)]
-    head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Heard</th><th>Ask</th></tr></thead>"
+    head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Last heard</th><th>Ask</th></tr></thead>"
     lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here since the bridge started, "
             f"<span id='nodes-db-count'>{db}</span> more in the radio's database. Joined on radio id; names are labels, never identity.</p>") if intro else ""
     def cnt(k):
@@ -2501,7 +2516,7 @@ def register_body(reg, drift=None, availability=None, inv=None, groups=None):
     return (f"<p class='meta'>{n} device{'s' if n != 1 else ''} the radio knows of or the bench has seen, {managed} managed. Joined on radio id and nothing else: the node's own name from the air sits beside your label, never in its place. "
             "A device is managed only when a read of the device itself showed this radio's public key among its admin keys; the bench is where that happens.</p>"
             + (f"<p class='meta'><b>{int(inv.get('behind') or 0)} behind the shelf</b>, <b class='{'bad' if inv.get('key_alarms') else ''}'>{int(inv.get('key_alarms') or 0)} changed key{'s' if int(inv.get('key_alarms') or 0) != 1 else ''}</b> to accept. <a href='/export/inventory.csv'>Export the inventory (CSV)</a>.</p>" if inv else "")
-            + "<div class='tablewrap'><table><thead><tr><th>Device</th><th>Label · holder</th><th class='hide-narrow'>Hardware</th><th class='hide-narrow'>Firmware</th><th class='hide-narrow'>Key</th><th>Managed</th><th>Heard</th><th class='hide-narrow' data-tip='Heard %' data-tip-more='How much of the last 24 hours the node was heard for'>Heard %</th></tr></thead>"
+            + "<div class='tablewrap'><table><thead><tr><th>Device</th><th>Label · holder</th><th class='hide-narrow'>Hardware</th><th class='hide-narrow'>Firmware</th><th class='hide-narrow'>Key</th><th>Managed</th><th>Last heard</th><th class='hide-narrow' data-tip='Heard %' data-tip-more='How much of the last 24 hours the node was heard for'>Heard %</th></tr></thead>"
             f"<tbody id='register-rows'>{register_rows(reg, availability, inv)}</tbody></table></div>{stale_form()}<div id='groups-body' style='margin-top:var(--s4)'>{groups_section(groups)}</div><div id='drift-body' style='margin-top:var(--s4)'>{drift_section(drift)}</div>{DRIFT_JS}{js}{WRITE_JS}")
 
 
@@ -2904,7 +2919,7 @@ def health_cards(h):
                  f"<td class='meta'>{('<time datetime=' + chr(39) + e(d['last_telemetry']) + chr(39) + ' data-age>' + e(age(d['last_telemetry'])) + '</time>') if d.get('last_telemetry') else 'none'}</td></tr>")
     return (f"<div class='cards'>{cards}</div><h2>Channel utilisation by the hour</h2>{health_chart(h)}"
             "<h2>Per node</h2><p class='meta'>Packets this radio heard from each node in the window, and the last device metrics each reported. Utilisation is the share of air time the node's radio hears busy; air time is the share it spends transmitting.</p>"
-            "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Packets</th><th>Per hour</th><th>Utilisation</th><th>Air time</th><th>Battery</th><th>Reported</th></tr></thead>"
+            "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Packets</th><th>Per hour</th><th>Channel utilisation</th><th>Air utilisation</th><th>Battery</th><th>Reported</th></tr></thead>"
             f"<tbody>{rows or '<tr><td colspan=7 class=meta>Nothing in the window yet.</td></tr>'}</tbody></table></div>")
 
 
@@ -3276,9 +3291,9 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
     glist = [dict(g, members=[n.get("id") for n in nodes if str(n.get("group") or "") == str(g.get("name"))]) for g in ((groups or {}).get("groups") or [])]
     nmap = {str(n.get("id")): {"name": dname(n), "icon": str(n.get("icon") or "radio"), "group": str(n.get("group") or ""), "db": not n.get("heard_here", True)} for n in nodes if n.get("id")}
     chips = "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick)
-    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role"), "has_key": bool(c.get("has_key"))} for c in live],
+    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role"), "has_key": bool(c.get("has_key")), "precise": (c.get("position_precision") in (None, 32))} for c in live],
                        "groups": [{"name": g.get("name"), "icon": g.get("icon") or "radio", "count": int(g.get("count") or 0), "members": g.get("members") or []} for g in glist],
-                       "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"], "lock": ICONS["lock"],
+                       "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"], "lock": ICONS["lock"], "lockopen": ICONS["lockopen"],
                        "dots": ICONS["dots"], "muted": ICONS["bell_off"], "pin": ICONS["pin"]}).replace("&", "&amp;").replace("'", "&#39;")
     tools = ("<div class='chat-tools'>" + icon_button("plus", "New message", "New message", "Start a chat with any radio, channel or group, spoken to or not", attrs="id='chat-new'")
              + icon_button("check_all", "Mark all read", "Mark all read", "Every chat's unread count to nought", attrs="id='chat-readall'")
@@ -3407,9 +3422,15 @@ CHAT_JS = r"""<script>
     inp.addEventListener('input',tick);f.addEventListener('reset',function(){setTimeout(tick,0);});tick();
   }
   function chatLock(c){
-    // The security state of the channel, at the moment of composing to it, rather than a page away.
-    if(!c||c.key===undefined&&c.has_key===undefined)return '';
-    return c.has_key?("<span class='chat-lock' data-tip='This channel has a key'>"+(D.lock||'')+"</span>"):'';
+    // The security state of the channel, at the moment of composing to it rather than a page away.
+    // The words are the ones the Meshtastic app gives for the same channel, so an operator moving
+    // between the two is not translating: Secure, or Insecure channel, and whether position is precise.
+    if(!c||c.has_key===undefined)return '';
+    var secure=!!c.has_key, precise=c.precise!==false;
+    var word=(secure?'Secure':'Insecure channel')+(precise?'':', not precise');
+    return "<span class='chat-lock"+(secure?'':' chat-lock--open')+"' data-tip='"+word+"' data-tip-more='"
+      +(secure?'This channel has its own key.':'This channel uses the default key, so anyone with it can read what is sent.')
+      +(precise?'':' Position on it is reduced.')+"'>"+(secure?(D.lock||''):(D.lockopen||D.lock||''))+"</span>";
   }
   function renderPane(key){var panes=document.getElementById('chat-panes');var win=panes.querySelector("[data-key='"+key+"']");var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);var c=chats.filter(function(x){return x.key===key;})[0]||{key:key,name:key,sub:''};
     if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;win.dataset.seenAt=String(seen[key]||0);

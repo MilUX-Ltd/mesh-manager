@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 1.0.1 (9 September 2026)
+
+Spec 074: one vocabulary across the Meshtastic application on an operator's phone and Mesh Manager on the box.
+An operator moves between the two several times an hour, and the same thing had two names.
+
+- **Signal now has a word, not just bars.** The screen drew four bars and a dB figure and never said whether that
+  was good, so the judgement was left to someone squinting at a glyph. It now says Good, Fair or Poor beside the
+  figure, and says nothing when there is no reading rather than guessing. The words were checked against the
+  Meshtastic application on a live mesh rather than assumed.
+- **"Last heard"**, in the node table and the register, which is the phrase the operator already knows.
+- **"Air utilisation"** beside **"Channel utilisation"**: "air time" read as a duration when it is a percentage.
+- **A channel's security reads in the same words as the phone**: Secure, or Insecure channel, and not precise
+  when the channel reduces position. An open padlock for the insecure case.
+
+Deliberately not taken from the phone: node cards in place of the table, a slate palette in place of the brand,
+a terse voice in place of empty states that do real work, and an unread badge whose honest version needs a
+refactor.
+
 ## 1.0.0 (9 September 2026)
 
 The first release with a version that says what the product is: a Meshtastic mesh, the devices on it and the
