@@ -169,6 +169,32 @@ check("AC8 counts what it carried", (st.get("sent"), st.get("received")), (1, 1)
 check_true("AC8 the password is nowhere in the state", "secret-not-for-the-screen" not in repr(st))
 p6.stop()
 
+# AC11: the wiring, not just the handler. The first suite drove on_radio directly and so never
+# touched pypubsub, which is where the whole thing was broken on the live box: pypubsub fixes a
+# topic's argument spec from its first subscriber and **kwargs registers as nothing, so the
+# library's send raised inside its publishing thread and was swallowed.
+try:
+    from pubsub import pub as _pub
+    FakeClient.instances = []
+    iface2 = FakeIface()
+    p7 = MP.Proxy(iface2, settings(), client_factory=FakeClient)
+    p7.start(); time.sleep(0.05)
+    c7 = FakeClient.instances[-1]; c7.say_connected()
+    _pub.subscribe(p7.on_radio, "meshtastic.mqttclientproxymessage")
+    try:
+        _pub.sendMessage("meshtastic.mqttclientproxymessage",
+                         proxymessage=Msg("milux/2/e/MilUXPriv/!ee000072", b"viapubsub"),
+                         interface=iface2)
+        check("AC11 a message sent the way the library sends it reaches the broker",
+              c7.published[-1:], [("milux/2/e/MilUXPriv/!ee000072", b"viapubsub", False)])
+    except Exception as e:  # noqa: BLE001  a clean red, not a crash
+        check_true("AC11 a message sent the way the library sends it reaches the broker", False,
+                   f"{type(e).__name__}: {str(e)[:120]}")
+    p7.stop()
+except ImportError:
+    from _common import skip
+    skip("AC11 delivery through pypubsub", "pypubsub is not installed here")
+
 # AC9: the op writes the radio's MQTT config and reads it back
 import fakegw_lib  # noqa: E402
 fakegw_lib.install()

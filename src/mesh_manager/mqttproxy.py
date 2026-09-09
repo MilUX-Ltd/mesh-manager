@@ -126,8 +126,17 @@ class Proxy:
         }
 
     # the two directions ----------------------------------------------------
-    def on_radio(self, proxymessage, **_):
-        """The radio wants something published. Send exactly what it gave us."""
+    def on_radio(self, proxymessage=None, interface=None, **_):
+        """The radio wants something published. Send exactly what it gave us.
+
+        `interface` is declared even though it is unused, and that is not tidiness. pypubsub fixes
+        a topic's argument spec from its FIRST subscriber, and `**kwargs` does not register as
+        accepting anything: subscribing with only `proxymessage` made every real send from the
+        library raise SenderUnknownMsgDataError inside the publishing thread, where nothing sees
+        it. The proxy connected, the firmware published, and not one message crossed.
+        """
+        if proxymessage is None:
+            return
         try:
             topic = getattr(proxymessage, "topic", "")
             which = proxymessage.WhichOneof("payload_variant") if hasattr(proxymessage, "WhichOneof") else "data"

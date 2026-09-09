@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.28.1 (9 September 2026)
+
+- **The MQTT proxy carried nothing.** 0.28.0 connected to the broker on both boxes and relayed not one message.
+  pypubsub fixes a topic's argument spec from its first subscriber and `**kwargs` registers as accepting
+  nothing, so the library's own send raised inside its publishing thread and was swallowed. The handler now
+  declares the argument the library passes. Found on the estate, not by the suite, which had been calling the
+  handler directly rather than through the wiring the product actually uses. LESSONS 53.
+
 ## 0.28.0 (9 September 2026)
 
 Spec 070,.
