@@ -39,7 +39,18 @@ version line stays 0.x until the interface settles; the
 - **The map.** Nodes and links over Google, OpenStreetMap, the box's own offline MBTiles, or
   any ATAK custom map source you already carry. Trails that fade with age, a coverage layer
   of every position heard coloured by signal, range rings that follow the zoom, MGRS beside
-  every position with a 1 km grid, and a pop-out window for a wall display.
+  every position with a 1 km grid, and a pop-out window for a wall display. Each radio has a
+  colour of its own, drawn from its id so it is the same on every screen, and never a green,
+  an amber or a red, because those mean signal and state on the same map. Radios that overlap
+  draw as one marker at their centre of mass; press it for who is in it. A radio that has gone
+  quiet stays on the map, marked, and never moves that centre of mass: a six-hour-old position
+  is not a statement about where anything is now.
+- **Messages.** A chat per channel, per radio and per group, with receipts on every bubble.
+  Up to three open side by side, dragged into the order you want, and any one of them popped
+  out into a window of its own to leave beside the map.
+- **MQTT.** The box carries the gateway radio's MQTT for it, over the box's own network, so
+  the radio needs no wifi. The Radio page says whether it is connected, to which broker and
+  what it has carried each way, sets it, and turns it off again.
 - **The fleet.** A register of the devices you own. On the bench over USB: read, export,
   onboard, restore, and flash from a shelf verified by hash. Over the air: rename, region,
   channel push, reboot, every write read back before it is shown as done.
@@ -62,7 +73,9 @@ version line stays 0.x until the interface settles; the
 - **On your phone.** Installable from the browser (a manifest and icons, no service worker),
   44 px targets, tooltips on a long press, every icon with a word behind a switch.
 - **Updates.** The screen checks for a release, verifies its hash, and applies it on one
-  press, and can roll back to any release still on the box. The box downloads nothing else.
+  press, and can roll back to the release it was on before. The box keeps that one and tidies
+  the rest away, and says which it could not remove and why rather than failing quietly. The
+  box downloads nothing else.
 - **Joining meshes.** Two sites out of radio range join over the internet, box to box, with no
   broker: each sends what its own table lets out, items carry the site they came from, and a
   site with a radio can put a peer's messages on its own air. What a link may never carry is

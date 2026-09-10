@@ -7,7 +7,8 @@ from _common import ROOT, check, check_true, finish, read, skip  # noqa: E402
 g = read("docs/GUIDE.md")
 check_true("AC1 docs/GUIDE.md exists", g is not None)
 g = g or ""
-SECTIONS = ["Setting up", "The mesh and the map", "Nodes", "Messages", "Channels", "Bench", "Register and groups", "Health and alerts", "Settings", "Updates", "Connections and agents", "Help"]
+SECTIONS = ["Setting up", "The mesh and the map", "Nodes", "Messages", "Channels", "The radio", "Bench", "Register and groups",
+            "Health and alerts", "Joining meshes", "Settings", "Updates", "Connections and agents", "Help"]
 heads = re.findall(r"^## (.+)$", g, re.M)
 check("AC1 every section is there", [s for s in SECTIONS if s not in heads], [])
 imgs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", g)
@@ -20,9 +21,11 @@ try:
     check("AC2 every image is tracked", [i for i in imgs if i.replace("../", "") not in tracked], [])
 except (OSError, subprocess.SubprocessError) as ex:
     skip("AC2 every image is tracked", f"git not usable here: {ex}")
-# each section has at least one image between its heading and the next
-parts = re.split(r"^## .+$", g, flags=re.M)[1:]
-check("AC3 every section has a screenshot", [SECTIONS[i] for i, p in enumerate(parts[:len(SECTIONS)]) if "![" not in p] if len(parts) >= len(SECTIONS) else ["(too few sections)"], [])
+# each section has at least one image between its heading and the next. Matched by NAME, not by
+# position: the positional zip silently checked the wrong bodies from the first section the list
+# did not name (Joining meshes), and would have gone on passing while checking nothing useful.
+bodies = dict(zip(heads, re.split(r"^## .+$", g, flags=re.M)[1:]))
+check("AC3 every section has a screenshot", [s for s in SECTIONS if "![" not in bodies.get(s, "")], [])
 readme = read("README.md") or ""
 check_true("AC4 the README links the guide", "docs/GUIDE.md" in readme)
 cut = read("release/cut-public.sh")

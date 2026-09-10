@@ -3676,7 +3676,7 @@ class Bridge(TAKMeshtasticGateway):
         except (OSError, ValueError):
             d = {}
         st = dict(self.ALERT_DEFAULTS); st.update({k: v for k, v in (d.get("settings") or {}).items() if k in self.ALERT_DEFAULTS})
-        return {"settings": st, "open": d.get("open") or {}, "alerted_unknown": d.get("alerted_unknown") or [], "fence_state": d.get("fence_state") or {}}
+        return {"settings": st, "open": d.get("open") or {}, "acked": d.get("acked") or {}, "alerted_unknown": d.get("alerted_unknown") or [], "fence_state": d.get("fence_state") or {}}
 
     # ---- geofences (Spec 045): drawn areas, kept on the box; crossings become alerts
     def _fences_path(self):
@@ -3844,6 +3844,10 @@ class Bridge(TAKMeshtasticGateway):
         key = f"{node}:{kind}"
         if key in a["open"]:
             return False
+        if key in a.get("acked", {}):
+            # Someone has seen this one and the condition has not cleared since. Raising it again
+            # every pass is how an alert list becomes wallpaper (Spec 077).
+            return False
         a["open"][key] = {"node": node, "kind": kind, "text": text, "since": utc(time.time())}
         h = getattr(self, "history", None)
         if h and h.ok:
@@ -3856,8 +3860,11 @@ class Bridge(TAKMeshtasticGateway):
 
     def _clear_alert(self, a, node, kind):
         key = f"{node}:{kind}"
+        was_acked = a.get("acked", {}).pop(key, None) is not None
         if key not in a["open"]:
-            return False
+            # An acknowledged alert whose condition has now cleared: forget the acknowledgement so
+            # that if it happens again it is raised again.
+            return was_acked
         a["open"].pop(key, None)
         h = getattr(self, "history", None)
         if h and h.ok:
@@ -3951,7 +3958,41 @@ class Bridge(TAKMeshtasticGateway):
         with self._peers_lock:  # Spec 053: the peers' open alerts, each with its origin
             for bag in self.remote_alerts.values():
                 open_.extend(dict(o) for o in bag.values())
-        return {"open": sorted(open_, key=lambda x: x.get("since") or "", reverse=True), "recent": recent, "settings": a["settings"]}
+        acked = sorted((dict(v, key=k) for k, v in (a.get("acked") or {}).items()),
+                       key=lambda x: x.get("acked") or "", reverse=True)
+        return {"open": sorted(open_, key=lambda x: x.get("since") or "", reverse=True), "acked": acked,
+                "recent": recent, "settings": a["settings"]}
+
+    def op_alert_ack(self, node=None, kind=None, every=None, confirm=None, **_):
+        """Spec 077: take an alert off the open list because someone has seen it.
+
+        It is remembered, not deleted: while the condition holds the alert is not raised again, and
+        when the condition clears the acknowledgement is forgotten, so a recurrence alerts afresh.
+        The history keeps the alert either way, so acknowledging never loses the record."""
+        a = self._alerts_load()
+        take_all = str(every or "").strip().lower() in ("yes", "on", "true", "1", "all")
+        if take_all:
+            if str(confirm or "").strip().lower() not in ("yes", "on", "true", "1"):
+                return {"error": f"acknowledging all {len(a['open'])} alerts at once needs confirm"}
+            keys = list(a["open"])
+        else:
+            nid, k = str(node or "").strip(), str(kind or "").strip()
+            if not nid or not k:
+                return {"error": "which alert: a node and a kind, or every=yes for all of them"}
+            keys = [f"{nid}:{k}"]
+        now, done = utc(time.time()), []
+        for key in keys:
+            row = a["open"].pop(key, None)
+            if row is None:
+                continue
+            a.setdefault("acked", {})[key] = {"node": row.get("node"), "kind": row.get("kind"),
+                                              "text": row.get("text"), "since": row.get("since"), "acked": now}
+            done.append(key)
+            self._emit("alert", state="acknowledged", node=row.get("node"), what=row.get("kind"))
+        if not done:
+            return {"error": "no open alert matched", "open": len(a["open"])}
+        self._alerts_save(a)
+        return {"acknowledged": done, "open": len(a["open"]), "at": now}
 
     def op_alert_test(self, **_):
         if self.box_mode in ("server", "hub", "desktop"):

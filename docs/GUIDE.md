@@ -96,10 +96,29 @@ besides the nodes: range rings (off, faint, solid), trails over a window, the ne
 waypoints, the coverage layer from a survey walk, the MGRS grid, and a group filter. The icon with
 the arrow opens the map in a window of its own.
 
-Each node is drawn as its icon in a circle; a link from the box is coloured by the signal of the
-last packet that came straight from that node, dashed when it has only ever come through a relay.
-The readout at the bottom left gives MGRS and degrees under the pointer. Under **Centre** are two
-controls: centre on this box, and draw a fence.
+Each node is drawn as its icon in a circle, in a colour of its own, and its name sits in a box tinted to
+match. The colour comes from the node's id, so the same radio is the same colour on the laptop and on your
+phone at once, and it survives a reload. None of the colours is a green, an amber or a red: those are the
+signal bands and the alert lamps on this same map, and a colour that could be read as a state would be worse
+than no colour at all. A link from the box is coloured by the signal of the last packet that came straight
+from that node, dashed when it has only ever come through a relay. The readout at the bottom left gives MGRS
+and degrees under the pointer. Under **Centre** are two controls: centre on this box, and draw a fence.
+
+**Radios in one place.** Eight radios in one field would draw eight markers on top of each other, so
+**Combine** in Map layers draws them as one marker at their centre of mass with the number in it. The
+threshold is what overlaps on the screen, not a distance on the ground, so the same field is one marker zoomed
+out and separate radios zoomed in. Radios in different groups are never combined, and nor is the box itself.
+Press a combined marker for the list of who is in it, each with its colour and how long since it was heard;
+press a name to go to that one.
+
+**A radio that has gone quiet** is still on the map. It is drawn hollow and its name reads *not heard lately*,
+and it is still counted inside a combined marker, but **it never moves the centre of mass**. A centre of mass
+says that these radios are here now, and a position from six hours ago is not a statement about now; letting
+it pull the marker would move it towards somewhere nobody is. When every radio in a combined marker has gone
+quiet there is no honest answer for where they are: the marker sits on the last it knew, drawn hollow, and
+says *none heard lately*. What counts as quiet is the radio's own rhythm, four times its usual gap between
+reports, so a tracker reporting every thirty seconds is quiet after two minutes and an hourly one is not quiet
+until four hours.
 
 **Fences.** Press the outline control, press the corners on the map, then **Finish** (or press
 **Circle instead** and set a radius). Name the fence, choose whether it alerts on coming in, going
@@ -167,6 +186,16 @@ toolbar. The unread total, muted and hidden chats excluded, sits beside the tool
 title. The field above the list finds a chat by name or id, or a line by its text, and says how many lines
 matched. When you open a chat, a red *New messages* line marks the first line you have not seen.
 
+**A chat in its own window.** *Pop out into its own window* in a chat's menu gives that conversation a window
+of its own, named after the chat, with no chat list and nothing else in it: one to leave open beside the map or
+on a second screen. It moves the chat rather than copying it, so the pane leaves the grid and there are never
+two composers on one conversation. Asking for that chat again brings its window forward instead of opening a
+second, and closing the window puts the chat back in the grid where it was.
+
+**Moving them about.** Drag a chat by its head to put it where you want it among the others, or use *Move left*
+and *Move right* in its menu, which are there because a drag is no use from a keyboard and awkward on a phone.
+The order is remembered.
+
 **On a bubble.** Hover or focus a bubble for *Copy*. A message of yours the radio gave up on offers *Send
 again*: the same text to the same radio.
 
@@ -190,6 +219,28 @@ because a packet the radio can decode carries it. The join QR shows in a sheet t
 after a minute; show it only to a device you mean to join.
 
 ![The Channels page](../assets/guide/channels.png)
+
+## The radio
+
+Radio is the settings area for the gateway radio, the one plugged into this box. Its long and short name,
+its role, whether it transmits, the hop limit and the rest are written to the radio and shown back only once
+the radio has answered with them, so what is on the page is what the radio actually holds. The region is its
+own card, because changing it changes which frequencies the radio uses and every device on the mesh has to
+agree.
+
+**MQTT.** The second card says what the box is doing about MQTT: connected and to which broker, what it has
+carried each way and what it is listening on, or the reason there is no proxy. Its form sets the broker
+address, the user, the password and the root topic, and turns it off again on the same form, because "how do
+I stop this" is the other half of "how do I set this up". The password is write-only: the card says whether
+one is set, never what it is.
+
+This is the radio's own MQTT, and it is a different thing from joining two Mesh Manager boxes to each other.
+Joining boxes is under **Connections**, and carries the picture, messages, waypoints and alerts between sites
+with a sharing table for each. MQTT points the radio at a broker so its traffic reaches anything else on that
+broker, a phone running the Meshtastic application included. The box carries it on the radio's behalf over
+the box's own network, so the radio needs no wifi of its own.
+
+![The Radio page: the radio's settings, its MQTT, and its region](../assets/guide/radio.png)
 
 ## Bench
 
@@ -231,6 +282,12 @@ threshold, a node not in the register, a node outside the fence around the box, 
 changed key. Each is shown here and sent to All Chat Rooms on the TAK Server when To TAK chat is on.
 **Thresholds** is a fold: minutes of silence, the battery percentage, the radius round the box,
 and two switches.
+
+**Acknowledge** on a row says you know about it, and takes it off the open list without it coming straight
+back on the next pass. It is not a way of saying the condition is fine: when the condition genuinely clears
+the acknowledgement is forgotten, so if it happens again it alerts afresh. *Acknowledge all* clears the board
+in one go and asks first. Acknowledged alerts are still reported, so nothing leaves the record. An alert that
+came over the link from another site is that site's to acknowledge, and says so.
 
 Then how busy the mesh is: channel utilisation with a plain verdict, this radio's transmit time
 against the region's duty-cycle budget, packets per hour, and a table per node. **Export** at the
@@ -330,12 +387,22 @@ The **Dim** slider takes the range rings, the node markers and the tracks from s
 you can see the imagery underneath. At nought the overlay is off and the label says so. It is remembered in
 that browser.
 
+**Names** is a second slider, beside Dim and separate from it, and it fades the box behind each name without
+touching the name itself. On a small map with many radios the boxes are what makes it unreadable, not the
+words; at nought there is no box at all and the names sit straight on the ground, as legible as they were at
+the other end. It starts solid, so nothing changes until you move it, and it is remembered on its own.
+
 ## Updates
 
 About shows the running version, when the box last checked, and **Update now** when a newer release
 exists: it downloads the release, checks its hash, and the box installs it with the settings it
 already has; the bridge and the screen restart, so the mesh is off TAK for about a minute. **Roll
 back** re-applies a release the box already holds, hash checked, without an SSH session.
+
+The box keeps the one release you can go back to and tidies the rest away as it installs, so the staging
+folder does not grow release after release. If it cannot remove one, it says which version and why rather than
+failing quietly; the usual cause is a release put there by something other than the screen, which belongs to
+root and is not the service's to delete. The ones it can remove still go.
 
 ![The About page with updates and roll back](../assets/guide/about.png)
 

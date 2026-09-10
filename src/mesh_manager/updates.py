@@ -3,6 +3,7 @@ that installs. The token lives beside the screen's other files at 0600; the chec
 download are the screen's; the install is the update unit's, as root, from a staging directory
 the screen filled and verified."""
 import hashlib
+import glob
 import json
 import os
 import re
@@ -192,7 +193,7 @@ def prune_staged(state_dir, keep=1, running=None, arch="amd64"):
     rows = staged(state_dir, arch=arch, running=running)
     back = [r for r in rows if not r.get("running")]
     drop = back[max(0, int(keep)):]
-    removed, freed = [], 0
+    removed, freed, failed = [], 0, []
     for r in drop:
         if r.get("running"):
             continue
@@ -204,9 +205,13 @@ def prune_staged(state_dir, keep=1, running=None, arch="amd64"):
                 os.remove(fp)
             os.rmdir(d)
             removed.append(r["version"])
-        except OSError:
-            pass
-    return {"kept": [r["version"] for r in rows if r["version"] not in removed], "removed": removed, "freed": freed}
+        except OSError as err:
+            # Spec 078: a tidy that cannot tidy must say so. This used to pass silently, so a box
+            # whose staging directories were written by root (any install not made from the screen)
+            # accumulated releases for ever while the card went on claiming one was kept.
+            failed.append({"version": r["version"], "why": f"{type(err).__name__}: {err.strerror or err}", "dir": d})
+    return {"kept": [r["version"] for r in rows if r["version"] not in removed], "removed": removed,
+            "freed": freed, "failed": failed}
 
 
 def staged(state_dir, arch="amd64", running=None):
@@ -225,8 +230,16 @@ def staged(state_dir, arch="amd64", running=None):
         d = os.path.join(root, name)
         if not os.path.isdir(d) or vtuple(name) is None:
             continue
-        tgz = os.path.join(d, f"mesh-manager-{name}-{arch}.tgz")
-        if not (os.path.exists(tgz) and os.path.exists(tgz + ".sha256") and os.path.exists(os.path.join(d, "install.sh"))):
+        # Spec 078: a release is cut per Python as well as per architecture, so a box on Ubuntu
+        # 26.04 holds mesh-manager-<v>-amd64-py314.tgz. Naming only the plain cut made staged()
+        # return nothing on those boxes: no roll back at all, and nothing for the tidy to remove,
+        # so releases piled up for ever. Take whichever cut is actually there, the plain one first.
+        tgz = None
+        for cand in sorted(glob.glob(os.path.join(d, f"mesh-manager-{name}-{arch}*.tgz")), key=len):
+            if os.path.exists(cand + ".sha256"):
+                tgz = cand
+                break
+        if not (tgz and os.path.exists(os.path.join(d, "install.sh"))):
             continue
         out.append({"version": name, "tarball": tgz, "size": os.path.getsize(tgz),
                     "staged": utc(os.path.getmtime(tgz)), "running": name == str(running or "")})

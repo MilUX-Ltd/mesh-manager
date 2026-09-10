@@ -22,5 +22,10 @@ mkdir -p "$(dirname "$LOG")"
     bash "$d/install.sh" "$tgz"; rc=$?
     echo "== $(date -u +%Y-%m-%dT%H:%M:%SZ) installer exited $rc"
     (( rc == 0 )) && rm -f "$ready"
+    # Spec 078: this script runs as root, so anything it touches under updates/ belongs to root and
+    # the screen (which runs as the service user) can never tidy it. Hand it back.
+    if (( rc == 0 )) && id -u mesh-manager >/dev/null 2>&1; then
+        chown -R mesh-manager:mesh-manager "$STATE/updates" 2>/dev/null || true
+    fi
     exit $rc
 } > "$LOG" 2>&1

@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+## 1.0.2 (10 September 2026)
+
+Nine slices, most of them Matt's list of what the map and the messages page still got wrong, and three
+defects found on the way.
+
+**The map tells radios apart.** Every pin was the same brand green and every name sat in the same white box,
+so a field of eight radios was a pile of identical circles. Each radio now has a colour of its own, taken from
+its id so it is the same on the laptop and the phone at once with nothing stored, and its name box is tinted to
+match. None of the eight colours is a green, an amber or a red: those are the signal bands and the alert lamps
+on the same map, and an identity colour that could be read as a state is worse than none. They live in the
+design tokens with their own set for the dark ground, and each one clears 4.5:1 on the surface it is drawn on.
+
+**Radios in one place draw as one marker.** *Combine*, in Map layers, draws overlapping radios as a single
+marker at their centre of mass with the number in it; press it for the list of who is in it, each with its
+colour and its age, and press a name to go to that one. The threshold is what overlaps on the screen rather
+than a distance on the ground, so the same field is one marker zoomed out and separate radios zoomed in.
+Radios in different groups are never combined, and nor is the box itself.
+
+**A quiet radio never moves the centre of mass.** A centre of mass says these radios are here, now. A position
+from six hours ago is not a statement about now, so a quiet radio is kept, drawn, counted, and left out of the
+average; dropping it off the map instead would hide the most important thing on a mesh screen. When every
+member of a marker has gone quiet there is no honest answer for where they are: it sits on the last it knew,
+drawn hollow, and says *none heard lately*. Quiet is the rule playback already used, four times a node's own
+median interval with a floor of two minutes, so the product has one definition and not two.
+
+**The name boxes fade, the names do not.** A second slider beside Dim takes the box behind each name from
+solid to gone without touching the text, because on a crowded map it is the boxes that make it unreadable. At
+nought the names sit straight on the ground and read as well as they did at the other end.
+
+**A chat in its own window.** *Pop out into its own window* gives a conversation a window of its own, named
+after the chat, with no chat list in it. It moves the chat rather than copying it, so there are never two
+composers on one conversation; asking for it again brings that window forward, and closing it puts the chat
+back in the grid where it was. A popped-out window never writes the list of open panes, because both windows
+share the same storage and one that did would rewrite the grid behind it and take it away on close. It does
+write what has been read, which is a real thing that happened.
+
+**Chats move about the grid.** Drag a chat by its head, or use *Move left* and *Move right* in its menu, which
+exist because a drag is no use from a keyboard and awkward on a phone. The order is remembered.
+
+**The gateway radio's MQTT, on the screen.** Spec 070 built the operation and said the screen would show
+whether the proxy was connected and what it had carried. It never did: the state went into the status and
+nothing rendered it, so both estate boxes were configured by hand over the socket and nobody noticed. There is
+now a card on the Radio page saying what is true, a form to set it, and the same form to turn it off. The
+password is write-only: the card says whether one is set, never what it is.
+
+**Alerts can be acknowledged.** Eleven open alerts with no way to clear any of them is an alert list nobody
+reads, which is worse than no alert list because it looks like assurance. Acknowledge takes a row off the open
+list and it does not come straight back on the next pass. It is not a way of saying the condition is fine: when
+the condition genuinely clears the acknowledgement is forgotten, so a recurrence alerts afresh. Acknowledged
+alerts are still reported. A peer's alert is theirs to acknowledge, and says so.
+
+**Fixed: changing a node's icon did nothing.** The page rendered a write form and shipped no handler for it, so
+the press went nowhere and the icon reverted. The suite now checks that every page rendering a write form ships
+the script that intercepts it, which is the class of fault rather than the instance.
+
+**Fixed: a tidy that could not tidy said nothing.** The box keeps the one release you can go back to and tidies
+the rest away. Where it could not remove one it failed quietly; it now names the version and the cause, removes
+the ones it can, and `update.sh` hands the staging tree back to the service user so the cause goes away rather
+than being described. A cut built for another Python is found too.
+
+**The palette.** State colour is now the only saturated colour in a data surface: the brand green stays on the
+chrome, and green, amber and red mean signal and state wherever they appear.
+
 ## 1.0.1 (9 September 2026)
 
 Spec 074: one vocabulary across the Meshtastic application on an operator's phone and Mesh Manager on the box.
