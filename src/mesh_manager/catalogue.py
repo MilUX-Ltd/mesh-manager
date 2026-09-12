@@ -475,3 +475,4 @@ KNOWN_WORDS = set(KNOWN_WORDS) | {"alerts", "alert", "silent", "silence", "fence
 KNOWN_WORDS = set(KNOWN_WORDS) | {"rotation", "rotated", "checklist", "expected", "waiting", "back", "elsewhere", "restarts", "week"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"profile", "drift", "drifted", "unread", "enforced", "unenforced", "fleet", "line", "preset", "pressed", "blank"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"atak", "xml", "template", "tiles", "tile", "zoom", "quadkey", "imagery", "folder", "browsers", "browser", "viewer", "layer", "sources", "source"}
+KNOWN_WORDS = set(KNOWN_WORDS) | {"mode", "server", "desktop", "origin", "origin_name"}   # Spec 084: the box shapes, and where a row came from

@@ -1,10 +1,12 @@
 ---
 name: mesh-onboard
 description: Bring a device into the fleet on the bench, coaching the person at the cable. Use when the operator has a new tracker or radio in hand, when a device must be read or exported before a change, or when a device that was managed has stopped answering over the air. Works through Mesh Manager's bench actions; every write is read back from the device.
-audited: 2026-09-04
+audited: 2026-09-12
 audit_verdict: pass with cautions
+cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
-audit_sha: ae32918137f72f69
+audit_sha: 7e03b1c5a4d62f88
+product_version: 1.1.0
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -49,7 +51,12 @@ unconfirmed write.
 
 `register`: the device now carries `managed` true and an `onboarded_at`. If the operator
 wants a `label` or a `holder` on it, `register_set`. The device is now one you can reach
-over the air (`mesh-operate`, step 4a) once it is heard on the mesh.
+over the air (`mesh-operate`, step 6) once it is heard on the mesh.
+
+**If the fleet uses MQTT, this device does not have it yet.** Onboarding writes names, role,
+channel, region and the admin key, and nothing about a broker. A device that needs it is a
+separate write, and `mesh-join` says why the settings live on the radio and the box carries the
+connection.
 
 ## What you never do
 

@@ -171,7 +171,12 @@ if os.path.exists(_priv):
 else:
     skip("AC6 the firm's own fleet names", "private-strings.txt is not in this tree")
 tools_all = set(ids + ["propose", "mesh_context"])
-for sk in ("skills/mesh-lessons/SKILL.md", "skills/mesh-operate/SKILL.md", "skills/mesh-onboard/SKILL.md"):
+# Discovered, not hardcoded: Spec 084 added a fourth skill and a hardcoded list of three would
+# have gone on passing while saying nothing about it.
+_skills = sorted("skills/%s/SKILL.md" % d for d in os.listdir(os.path.join(ROOT, "skills"))
+                 if os.path.isdir(os.path.join(ROOT, "skills", d)))
+check_true("AC6 every skill in the tree is checked here", len(_skills) >= 3, str(_skills))
+for sk in _skills:
     text = read(sk) or ""
     check_true(f"AC6 {sk} exists with frontmatter", text.startswith("---") and "audit_verdict:" in text and "license:" in text)
     named = set(re.findall(r"`([a-z_]+)`", text))
@@ -180,7 +185,15 @@ for sk in ("skills/mesh-lessons/SKILL.md", "skills/mesh-operate/SKILL.md", "skil
 _cut = os.path.join(ROOT, "release", "cut-release.sh")
 if os.path.exists(_cut):
     chk = subprocess.run(["bash", os.path.join(ROOT, "release", "cut-release.sh"), "--check"], capture_output=True, text=True, cwd=ROOT)
-    check_true("AC6 --check reports which skills would ship", "skills" in (chk.stdout + chk.stderr) and "unaudited" in (chk.stdout + chk.stderr))
+    # Was: assert the word "unaudited" appears. That could only pass while something was being held
+    # back, so it asserted the broken state and would have failed the moment it was fixed (Spec 084).
+    # What matters is that the check accounts for every file and says which way each went.
+    _out = chk.stdout + chk.stderr
+    _reported = [ln for ln in _out.splitlines() if ln.startswith("skills: ")]
+    check("AC6 --check accounts for every skill and the role",
+          len(_reported), len(_skills) + 1)
+    check_true("AC6 and says which way each one went",
+               all(("ships" in ln) or ("HELD BACK" in ln) for ln in _reported), "\n".join(_reported))
     srv.shutdown()
 else:
     skip("the cut carries the role and skills", "the release tooling is not in this tree")

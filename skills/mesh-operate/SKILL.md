@@ -1,10 +1,12 @@
 ---
 name: mesh-operate
 description: Triage a Meshtastic mesh through Mesh Manager and prepare the fix to the gate. Use when the operator says the mesh is down, a tracker has vanished, nobody is getting messages, or before taking the kit somewhere new. Runs reads, asks the mesh what only the mesh can answer, and hands over the decision.
-audited: 2026-09-04
+audited: 2026-09-12
 audit_verdict: pass with cautions
+cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
-audit_sha: 53ff2a010736d1e0
+audit_sha: 41ac7e0b96d8f215
+product_version: 1.1.0
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -17,13 +19,21 @@ category: operations
 Load `mesh-lessons` first. Then work top down; stop at the first thing that explains the
 symptom, and say what you did not check.
 
-## 1. The bridge and the radio
+## 1. What kind of box this is
+
+`status` carries `mode`. A `tak-server` box bridges into a TAK Server, a `server` box has no TAK
+at all, and a `desktop` box is a laptop with a radio in the USB port. Read it before anything
+else, because it decides what "working" means here and which of the checks below apply. Proposing
+that somebody check TAK on a box that has none wastes their time and tells them you did not look.
+
+## 2. The bridge and the radio
 
 `status`. In this order: `radio_present`, `bootloader`, `connected`, `watchdog`,
 `last_activity`, `last_forwarded`, `nodes_seen`. A false at the top explains everything below
-it; report that one line and the physical action it needs.
+it; report that one line and the physical action it needs. On a `server` box `last_forwarded`
+is not a fault signal: there is nothing to forward to.
 
-## 2. Who is on the mesh, and how well
+## 3. Who is on the mesh, and how well
 
 `links`, which is `nodes` with the picture: `direct_snr` is the SNR of the last packet that
 came straight from that node, the only figure that describes its link to this radio; `history`
@@ -33,19 +43,24 @@ at `hops` two or three is at the edge; a tracker at five per cent `battery` is a
 Say which nodes are which, by id and name. `route` gives the last traceroute answer for a
 node, hop by hop with the SNR at each hop, `towards` and `back`.
 
-## 3. What they ride
+**Split off the ones that are not yours.** A node carrying `origin_name` came over a link from
+another site; this radio never heard it. Report those separately and say which site, because they
+are not evidence about your own air and nobody can walk out and find them. `mesh-join` has the
+rest.
+
+## 4. What they ride
 
 `channels` and `config`: the primary channel, the region, the modem preset. If the operator's
 brief (`mesh_context`) names a different region or channel, that is the finding.
 
-## 4. Ask the mesh, at propose or above
+## 5. Ask the mesh, at propose or above
 
 Only what changes nothing: `traceroute` to a node that should be there (the answer arrives as
 a route; read it with `route`), `request_position` from a tracker with no fix. Say what you
 are sending and why first. Watch `log` and `messages` for the answer, and wait a minute
 before reading silence as a fault.
 
-## 4a. What the fleet is, and what you may change on it
+## 6. What the fleet is, and what you may change on it
 
 `register`: every node the radio knows of joined with the box's register on radio id, the
 operator's `label` and `holder` beside the node's own name, and `managed`, which is true only
@@ -58,13 +73,23 @@ device's own answer matched; `unconfirmed` with a reason otherwise; a write over
 take a minute and silence is not failure. Region, slot 0 and reboot need `confirm` set to the
 device's own id, because afterwards it may be unreachable over the air.
 
-## 5. Hand over the decision
+## 7. Hand over the decision
 
 Anything that would change a device, a channel or a region is above the on-air line unless
 you hold `act`. Use
 `propose` with the exact action and arguments and a rationale in the operator's words, and
 say what changes if they say yes and what the way back is. A region change before travel needs
 two QRs: one for the destination and one for the way home; say so.
+
+## Alerts, and what acknowledging does not mean
+
+`alerts` is what is open. At `act` you can `alert_ack`, and it is worth being exact about what
+that does: it takes a row off the open list and stops it being raised again while the condition
+still holds. **It does not fix anything and it does not mean the condition is fine.** When the
+condition genuinely clears the acknowledgement is forgotten, so a recurrence alerts afresh.
+Acknowledge when the operator has decided they know, not to tidy a list you find untidy, and say
+which alerts you acknowledged. An alert that came over a link belongs to the site it came from
+and cannot be acknowledged here.
 
 ## Before the kit goes somewhere new
 
