@@ -1,0 +1,16 @@
+{
+  "name": "milux",
+  "owner": {
+    "name": "MilUX Ltd",
+    "url": "https://github.com/MilUX-Ltd"
+  },
+  "plugins": [
+    {
+      "name": "mesh-manager",
+      "displayName": "Mesh Manager",
+      "description": "Operate a Meshtastic mesh through a Mesh Manager box: the tools, the standing role and the skills, in one install.",
+      "version": "1.1.1",
+      "source": "./plugin"
+    }
+  ]
+}

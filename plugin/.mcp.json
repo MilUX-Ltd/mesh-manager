@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mesh-manager": {
+      "type": "http",
+      "url": "${user_config.box_url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.token}"
+      }
+    }
+  }
+}

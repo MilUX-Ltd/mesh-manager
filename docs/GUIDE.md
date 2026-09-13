@@ -443,6 +443,28 @@ tool rather than here, which is why this chapter exists.
 
 ![The role and the skills, on the Connections page](../assets/guide/agent-brief.png)
 
+### The quickest way in: the plugin
+
+One action, in a tool that takes plugins. The plugin carries the tools, the role and all four skills
+together, and it holds **no token**: your tool asks for the box address and a token when you enable it, and
+keeps the token in its own secure storage. Revoking that token on Connections still stops it working.
+
+In Claude Code:
+
+```
+claude plugin marketplace add MilUX-Ltd/mesh-manager
+claude plugin install mesh-manager@milux
+```
+
+In Cowork, Claude Desktop or claude.ai: Customize > Plugins, the **+** in Personal plugins, *Add marketplace*,
+then this product's repository address. Either way it asks for two things: where your box is, and a token
+from its Connections page.
+
+**The plugin's copy is a published one, so it can fall behind a box.** The downloads on the Connections page
+always come from the box that is serving them and cannot. If an agent ever seems to be working from an older
+brief, take the files from the box. The rest of this chapter is how to do that, and it is also the route for
+any tool that does not take plugins.
+
 ### The four steps
 
 1. **Mint a connection at the autonomy you mean.** On Connections, add one and choose observe, propose or act.

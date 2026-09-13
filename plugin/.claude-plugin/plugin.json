@@ -1,0 +1,34 @@
+{
+  "name": "mesh-manager",
+  "displayName": "Mesh Manager",
+  "version": "1.1.1",
+  "description": "Operate a Meshtastic mesh through a Mesh Manager box: the tools, the standing role and the skills, in one install. The box is the server; this carries no credential.",
+  "author": {
+    "name": "MilUX Ltd",
+    "url": "https://github.com/MilUX-Ltd"
+  },
+  "homepage": "https://github.com/MilUX-Ltd/mesh-manager",
+  "repository": "https://github.com/MilUX-Ltd/mesh-manager",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "meshtastic",
+    "mesh",
+    "tak",
+    "radio"
+  ],
+  "userConfig": {
+    "box_url": {
+      "type": "string",
+      "title": "Box address",
+      "description": "Where your Mesh Manager screen is, with no trailing slash, for example http://127.0.0.1:8093",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Connection token",
+      "description": "Minted on the box's Connections page, shown once. Revoke it there and this stops working.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}

@@ -453,6 +453,99 @@ def skill_zip(name):
     return _zip_of([(f"{name}/SKILL.md", src)], f"Mesh Manager {__version__}")
 
 
+# ---- Spec 089: the brief as resources, and the skills as prompts -------------------------------
+# The specification treats the two primitives differently and it decides what may be which. Prompts
+# are user-controlled: a person picks one. Resources are application-driven and a host may include
+# them automatically, so a resource can enter a context with nobody having decided.
+#
+# Therefore the brief is a resource and the mesh's data is not. The register as a tool is an agent
+# choosing to look, gated by the floor and audited as a decision; the register as a resource would
+# be a client hoovering, and the audit line would claim a decision nobody made.
+BRIEF_SCHEME = "mesh"
+
+
+def brief_resources(web):
+    """The role, the skills and the operator's standing brief. Nothing of the mesh's own."""
+    out = []
+    role = brief_role()
+    if role:
+        out.append({"uri": f"{BRIEF_SCHEME}://brief/agents/{os.path.basename(role)}",
+                    "name": os.path.basename(role), "title": "The Mesh Manager role",
+                    "description": "How to behave on a mesh: what to read, what to work out, and where to stop and hand back. Read this first.",
+                    "mimeType": "text/markdown", "_path": role,
+                    "annotations": {"audience": ["assistant"], "priority": 1.0}})
+    for n in brief_skills():
+        out.append({"uri": f"{BRIEF_SCHEME}://brief/skills/{n}/SKILL.md",
+                    "name": f"{n}/SKILL.md", "title": f"Skill: {n}",
+                    "description": f"The {n} skill, as this box is running it.",
+                    "mimeType": "text/markdown",
+                    "_path": os.path.join(BRIEF_DIR, "skills", n, "SKILL.md"),
+                    "annotations": {"audience": ["assistant"], "priority": 0.8}})
+    out.append({"uri": f"{BRIEF_SCHEME}://brief/context.md", "name": "context.md",
+                "title": "The operator's standing brief",
+                "description": "What this mesh is for, its region and channel policy, and the operator's standing orders. Written on the Settings page and read live, so an edit reaches you without reconnecting.",
+                "mimeType": "text/markdown",
+                "_path": os.path.join(web.etc_dir, "context.md"),
+                "annotations": {"audience": ["assistant"], "priority": 1.0}})
+    return out
+
+
+def brief_resource_text(web, uri):
+    """The bytes behind one resource, or None. Nothing outside the brief is reachable."""
+    for r in brief_resources(web):
+        if r["uri"] == uri:
+            try:
+                return open(r["_path"], encoding="utf-8").read()
+            except OSError:
+                # the standing brief may not have been written yet; the others are shipped
+                return "" if r["uri"].endswith("context.md") else None
+    return None
+
+
+def mcp_resources(web):
+    """What resources/list answers, without the private path."""
+    return [{k: v for k, v in r.items() if k != "_path"} for r in brief_resources(web)]
+
+
+# The skills are jobs an operator can pick, not documents to paste. Each prompt names the job and
+# carries the skill as an embedded resource, from the same file the resource serves: one source.
+PROMPT_JOBS = {
+    "mesh-operate": ("Triage this mesh",
+                     "Read the mesh as it is now, work out what is actually wrong, and carry the fix through at the autonomy you were given."),
+    "mesh-onboard": ("Onboard a device on the bench",
+                     "Bring a device on the cable onto the mesh and onto the register, so it is managed rather than merely present."),
+    "mesh-lessons": ("Which signals to believe",
+                     "Read the mesh's own signals against the mistakes already paid for on real meshes."),
+    "mesh-join": ("Join this box to another",
+                  "Join two boxes so two meshes are one picture, one chat and one set of waypoints."),
+}
+
+
+def mcp_prompts(web):
+    out = []
+    for n in brief_skills():
+        title, why = PROMPT_JOBS.get(n, (f"Skill: {n}", f"Work to the {n} skill."))
+        out.append({"name": n, "title": title, "description": why})
+    return out
+
+
+def mcp_prompt_get(web, name):
+    """One prompt: the job, then the skill itself, embedded rather than pasted."""
+    if name not in brief_skills():
+        return None
+    title, why = PROMPT_JOBS.get(name, (f"Skill: {name}", f"Work to the {name} skill."))
+    uri = f"{BRIEF_SCHEME}://brief/skills/{name}/SKILL.md"
+    text = brief_resource_text(web, uri)
+    if text is None:
+        return None
+    return {"description": why,
+            "messages": [
+                {"role": "user", "content": {"type": "text", "text": f"{why}\n\nWork to the skill below, and to the standing role. Ask the mesh what only the mesh can answer, and stop where your autonomy stops."}},
+                {"role": "user", "content": {"type": "resource",
+                                             "resource": {"uri": uri, "mimeType": "text/markdown", "text": text}}},
+            ]}
+
+
 def mcp_tools(autonomy):
     tools = []
     for a in C.visible(autonomy):
@@ -4002,10 +4095,10 @@ def connections_body(web, minted=None, msg=""):
 </script>"""
     return (f"{('<p class=bad>' + e(msg) + '</p>') if msg else ''}{shown}<div class='tablewrap'><table><thead><tr><th>Name</th><th>Autonomy</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{rows}</tbody></table></div><br>{form}"
             "<p class='meta'>The autonomy dial is yours: observe looks and reports; propose prepares and asks; act does deterministic work without asking each time. Every call is audited under the connection's name on the Activity page.</p>"
-            + brief_card() + f"{js}{WRITE_JS}")
+            + brief_card(web) + f"{js}{WRITE_JS}")
 
 
-def brief_card():
+def brief_card(web):
     """Spec 087: the step after the token, which the page used to leave unsaid.
 
     A token connects the tools. It does not tell the agent how to behave on a mesh: that is the
@@ -4014,7 +4107,21 @@ def brief_card():
     names = brief_skills()
     # named with the extension, because four bare words in a row do not read as four downloads
     per = ", ".join(f"<a href='/skill/{e(n)}.zip' download>{e(n)}.zip</a>" for n in names)
-    return ("<div class='card'><h2 style='margin-top:0'>The role and the skills</h2>"
+    mk = "claude plugin marketplace add MilUX-Ltd/mesh-manager"
+    both = mk + "\nclaude plugin install mesh-manager@milux"   # the button takes both, because one is no use alone
+    return ("<div class='card'><h2 style='margin-top:0'>Connect an agent in one action</h2>"
+            "<p class='meta'>The plugin carries the tools, the role and the skills together. It holds "
+            "<b>no token</b>: your tool asks for the box address and the token when you enable it, and "
+            "keeps the token in its own secure storage. Revoking it here still stops it.</p>"
+            f"<p><b>Claude Code:</b> <code>{e(mk)}</code> then <code>claude plugin install mesh-manager@milux</code>.</p>"
+            f"<div class='row-actions' style='margin:.5rem 0'><button type='button' class='line' data-copy='{e(both)}'>Copy both commands</button></div>"
+            "<p class='meta'><b>Cowork, Claude Desktop or claude.ai:</b> Customize &gt; Plugins, the + in "
+            "Personal plugins, Add marketplace, then the address of this product's repository.</p>"
+            f"<p class='meta'>It will ask for this box: <code>{e('http://' + str(web.bind[0]) + ':' + str(web.bind[1]))}</code>, "
+            "and for a token from the list above. Paste the token in; nothing writes it to a file.</p>"
+            "<p class='meta'>The plugin's copy of the role and the skills is a published one, so it can fall "
+            "behind a box. The downloads below always come from this box and cannot.</p></div>"
+            "<div class='card'><h2 style='margin-top:0'>Or take the files yourself</h2>"
             "<p class='meta'>A token connects the tools and nothing more. An agent also needs the "
             "<b>role</b>, which says how to behave on a mesh, and the <b>skills</b> it leans on. "
             "These are the copies this box is running, not a link to somewhere else.</p>"
@@ -4602,7 +4709,10 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 # The protocol says: agree on theirs if we have it, otherwise state ours and let
                 # them decide whether to go on.
                 agreed = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
-                result = {"protocolVersion": agreed, "capabilities": {"tools": {}},
+                # Spec 089: the brief travels with the connection. listChanged is not declared on
+                # either, because nothing here changes the list while a session is open.
+                result = {"protocolVersion": agreed,
+                          "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                           "serverInfo": {"name": "mesh-manager", "version": __version__},
                           "instructions": "Read mesh_context first, then status, nodes and channels. Your autonomy is " + conn["autonomy"] + "."}
             elif method == "notifications/initialized":
@@ -4611,6 +4721,34 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 result = {}
             elif method == "tools/list":
                 result = {"tools": mcp_tools(conn["autonomy"])}
+            elif method == "resources/list":
+                result = {"resources": mcp_resources(web)}
+            elif method == "resources/templates/list":
+                result = {"resourceTemplates": []}
+            elif method == "resources/read":
+                uri = str(params.get("uri", ""))
+                body = brief_resource_text(web, uri)
+                if body is None:
+                    K.audit(web.etc_dir, who=conn["name"], event="refused", resource=uri,
+                            error="no such resource", autonomy=conn["autonomy"])
+                    return self._json(200, {"jsonrpc": "2.0", "id": rid,
+                                            "error": {"code": -32002, "message": "no such resource", "data": {"uri": uri}}})
+                # Audited like everything else, and named for what it is. A resource read is the
+                # client taking context, not the agent choosing an action, and the record says so.
+                K.audit(web.etc_dir, who=conn["name"], event="resource-read", resource=uri,
+                        autonomy=conn["autonomy"])
+                result = {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": body}]}
+            elif method == "prompts/list":
+                result = {"prompts": mcp_prompts(web)}
+            elif method == "prompts/get":
+                pname = str(params.get("name", ""))
+                got = mcp_prompt_get(web, pname)
+                if got is None:
+                    return self._json(200, {"jsonrpc": "2.0", "id": rid,
+                                            "error": {"code": -32602, "message": f"no such prompt: {pname}"}})
+                K.audit(web.etc_dir, who=conn["name"], event="prompt", action=pname,
+                        autonomy=conn["autonomy"])
+                result = got
             elif method == "tools/call":
                 name = str(params.get("name", ""))
                 K.audit(web.etc_dir, who=conn["name"], event="call", action=name, arguments=C.redact_args(name, params.get("arguments") or {}), autonomy=conn["autonomy"])

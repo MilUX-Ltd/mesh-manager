@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 1.1.1 (13 September 2026)
+
+Two cards, both about the same thing: getting the agent's brief to the agent. 1.1.0 made the role and the
+skills true and documented how to install them by hand. This makes the hand unnecessary.
+
+**Connecting an agent is one action.** There is now a plugin carrying the tools, the role and all four skills
+together. In Claude Code, `claude plugin marketplace add MilUX-Ltd/mesh-manager` then
+`claude plugin install mesh-manager@milux`; in Cowork, Claude Desktop or claude.ai, Customize > Plugins, the
+plus in Personal plugins, Add marketplace, then this product's repository.
+
+**The plugin holds no token.** It asks your tool for the box address and a connection token when you enable it,
+and the token is marked sensitive, so your tool masks it and keeps it in its own secure storage. Nothing writes
+a credential into a file we hand out, and revoking the token on the Connections page still stops it working.
+The plugin's copy of the role and the skills is a published one and can fall behind a box; the downloads on the
+Connections page always come from the box serving them and cannot.
+
+**The box hands over its brief to any client that asks.** The endpoint now offers the role, the four skills and
+the operator's standing brief as resources, so a client that takes resources arrives already holding them, with
+nothing installed anywhere. Each skill is also a prompt: pick the job and the skill arrives with it. The
+standing brief is read live, so an edit on the Settings page reaches a connected agent without reconnecting.
+
+**Resources carry the brief and not the mesh, deliberately.** The protocol lets a client include a resource in
+its context automatically, with no person and no agent having chosen to. The register, the nodes, the channels
+and the exports therefore stay as tools, where the autonomy dial gates them and the audit records an agent that
+decided to look. Reads of the brief are audited too, under the connection's name, and recorded as what they
+are rather than dressed up as an action the agent chose.
+
 ## 1.1.0 (12 September 2026)
 
 Four cards, all of them the product meaning what it already said. Nothing here is new capability. A review of
