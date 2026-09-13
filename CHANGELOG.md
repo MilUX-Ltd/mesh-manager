@@ -4,8 +4,8 @@
 
 ## 1.2.0 (13 September 2026)
 
-Nine cards for release 6339, **running a fleet**: the day-to-day of keeping thirty radios configured, rotated
-and answering, rather than setting one up for the first time. UAT complete.
+Nine changes under one heading, **running a fleet**: the day-to-day of keeping thirty radios configured,
+rotated and answering, rather than setting one up for the first time.
 
 **Telling parts of a force apart on the map**
 
@@ -719,7 +719,7 @@ user guide with screenshots created for the public repo." Fifty-three suites gre
 
 ## 0.7.0 (5 September 2026)
 
-The UX pass and five features, one release. Four reviews (product manager, user
+The UX pass and five features, one. Four reviews (product manager, user
 researcher, content designer, interaction designer) read every rendered page and `web.py`; their
 ranked findings were built where they agreed, recorded on the card where they split. Fifty-one
 suites green; every one of the five features had its spec at Definition of Ready and its suite
@@ -781,7 +781,7 @@ committed failing first.
 ## 0.6.0 (5 September 2026)
 
 Nine features every tool in this class is expected to have, built one at a time in a single
-release, each with a spec at Definition of Ready and its acceptance tests committed
+each with a spec at Definition of Ready and its acceptance tests committed
 failing first. Forty-six suites green. Routes on the map, which was on the list, was already built
 and is not here.
 
