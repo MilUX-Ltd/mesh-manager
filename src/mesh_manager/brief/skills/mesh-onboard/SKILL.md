@@ -1,0 +1,1 @@
+../../../../../skills/mesh-onboard/SKILL.md

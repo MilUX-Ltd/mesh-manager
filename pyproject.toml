@@ -33,4 +33,5 @@ packages = ["mesh_manager"]
 version = {file = "VERSION"}
 
 [tool.setuptools.package-data]
-mesh_manager = ["PINS.json", "mesh-lessons.md", "static/leaflet/*", "static/leaflet/images/*.png"]
+mesh_manager = ["PINS.json", "mesh-lessons.md", "brief/agents/*.md", "brief/skills/*/SKILL.md",
+                "static/leaflet/*", "static/leaflet/images/*.png"]

@@ -8,7 +8,8 @@ g = read("docs/GUIDE.md")
 check_true("AC1 docs/GUIDE.md exists", g is not None)
 g = g or ""
 SECTIONS = ["Setting up", "The mesh and the map", "Nodes", "Messages", "Channels", "The radio", "Bench", "Register and groups",
-            "Health and alerts", "Joining meshes", "Settings", "Updates", "Connections and agents", "Help"]
+            "Health and alerts", "Joining meshes", "Settings", "Updates", "Connections and agents",
+            "Working with an agent", "Help"]
 heads = re.findall(r"^## (.+)$", g, re.M)
 check("AC1 every section is there", [s for s in SECTIONS if s not in heads], [])
 imgs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", g)

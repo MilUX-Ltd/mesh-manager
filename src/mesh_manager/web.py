@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import html
 import http.server
+import io
 import json
 import math
 import os
@@ -41,6 +42,9 @@ DEFAULT_ETC = "/etc/mesh-manager"
 SESSION_HOURS = 12
 THROTTLE_FAILS, THROTTLE_WINDOW = 5, 60
 STATUS_TICK = 15
+# Spec 086: the MCP versions this server speaks, newest first. initialize agrees on the client's
+# if it is one of these, otherwise answers with the first and lets the client decide.
+PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 # ---- the operator password ---------------------------------------------------------------------
 def write_password(path, password, iterations=200_000):
@@ -372,7 +376,7 @@ def run_action(web, aid, args, who):
         rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web))
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
     if action["risk"] != "read":
-        K.audit(web.etc_dir, who=who, event="run", action=aid, arguments=clean, outcome="error" if "error" in res else "ok")
+        K.audit(web.etc_dir, who=who, event="run", action=aid, arguments=C.redact_args(aid, clean), outcome="error" if "error" in res else "ok")
     code = 400 if "error" in res and action["risk"] != "read" else 200
     return code, res
 
@@ -385,15 +389,85 @@ def _silent_min(web):
         return 30
 
 
+# ---- Spec 087: the brief this box actually shipped with ----------------------------------------
+# Not a mirror of GitHub and not a copy the operator keeps in step by hand: the files linked into
+# the package, so what the screen hands over is what the running code came with. On edge at 1.0.2
+# the release tree's skills/ and agents/ were empty directories, which is why they are not read.
+BRIEF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brief")
+
+
+def brief_skills():
+    """The skills this box holds, by name."""
+    d = os.path.join(BRIEF_DIR, "skills")
+    try:
+        return sorted(n for n in os.listdir(d) if os.path.exists(os.path.join(d, n, "SKILL.md")))
+    except OSError:
+        return []
+
+
+def brief_role():
+    """The role file's path, or None on a box that shipped without one."""
+    d = os.path.join(BRIEF_DIR, "agents")
+    try:
+        names = sorted(n for n in os.listdir(d) if n.endswith(".md"))
+    except OSError:
+        return None
+    return os.path.join(d, names[0]) if names else None
+
+
+def _zip_of(entries, comment):
+    """A zip in memory. Entries are (name in the archive, path on disk)."""
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, src in entries:
+            if isinstance(src, bytes):
+                z.writestr(name, src)
+            else:
+                z.write(src, name)
+        z.comment = comment.encode("utf-8")
+    return buf.getvalue()
+
+
+def brief_zip():
+    """Everything, at the paths Claude Code reads, so it unzips straight into ~/.claude."""
+    entries, role = [], brief_role()
+    if role:
+        entries.append(("agents/" + os.path.basename(role), role))
+    for n in brief_skills():
+        entries.append((f"skills/{n}/SKILL.md", os.path.join(BRIEF_DIR, "skills", n, "SKILL.md")))
+    # The stamp: which box, which version. A tool holding an older one is the thing to notice.
+    # Named for us, because this unzips into the operator's own ~/.claude and a bare VERSION
+    # dropped in someone else's directory is litter at best.
+    entries.append(("mesh-manager-brief.txt",
+                    f"Mesh Manager {__version__}\nThe role and skills this box was running when you "
+                    f"downloaded them.\nIf the box now shows a later version, download them again.\n".encode()))
+    return _zip_of(entries, f"Mesh Manager {__version__}")
+
+
+def skill_zip(name):
+    """One skill, with its own folder as the archive's root, which is what the upload wants."""
+    src = os.path.join(BRIEF_DIR, "skills", name, "SKILL.md")
+    if name not in brief_skills() or not os.path.exists(src):
+        return None
+    return _zip_of([(f"{name}/SKILL.md", src)], f"Mesh Manager {__version__}")
+
+
 def mcp_tools(autonomy):
     tools = []
     for a in C.visible(autonomy):
-        tools.append({"name": a["id"], "description": a["description"] + (f" Risk: {a['risk']}." if a["risk"] != "read" else ""),
-                      "inputSchema": C.tool_schema(a)})
-    tools.append({"name": "mesh_context", "description": "The operator's standing brief for connected agents: what this mesh is for, its region and channel policy, standing orders. Read this first in a new session.",
+        # Spec 086: the catalogue already knows the human title and the risk. A tool that drops them
+        # makes the client read English to tell status from bench_flash.
+        tools.append({"name": a["id"], "title": a["title"],
+                      "description": a["description"] + (f" Risk: {a['risk']}." if a["risk"] != "read" else ""),
+                      "inputSchema": C.tool_schema(a), "annotations": dict(C.ANNOTATIONS[a["risk"]], title=a["title"])})
+    tools.append({"name": "mesh_context", "title": "The standing brief", "annotations": dict(C.ANNOTATIONS["read"], title="The standing brief"),
+                  "description": "The operator's standing brief for connected agents: what this mesh is for, its region and channel policy, standing orders. Read this first in a new session.",
                   "inputSchema": {"type": "object", "properties": {}}})
     if C.rank(autonomy) >= C.rank("propose"):
-        tools.append({"name": "propose", "description": "Queue any catalogue action for a person to confirm on the Activity page, with your rationale. Validated exactly as a direct call is. Use it for anything above your autonomy, and for anything you are not sure the operator wants.",
+        tools.append({"name": "propose", "title": "Propose an action for a person",
+                      "annotations": dict(C.ANNOTATIONS["change"], title="Propose an action for a person", destructiveHint=False),
+                      "description": "Queue any catalogue action for a person to confirm on the Activity page, with your rationale. Validated exactly as a direct call is. Use it for anything above your autonomy, and for anything you are not sure the operator wants.",
                       "inputSchema": {"type": "object", "properties": {"action": {"type": "string"}, "arguments": {"type": "object"}, "rationale": {"type": "string"}},
                                       "required": ["action", "rationale"]}})
     return tools
@@ -404,6 +478,10 @@ def mcp_call(web, conn, name, args):
     def text(obj, is_error=False):
         body = obj if isinstance(obj, str) else json.dumps(obj, indent=1, default=str)
         r = {"content": [{"type": "text", "text": body}]}
+        # Spec 086: structuredContent beside the text, so a client reads the object rather than
+        # re-parsing JSON out of a blob. No outputSchema is declared, which the protocol allows.
+        if isinstance(obj, dict):
+            r["structuredContent"] = obj
         if is_error:
             r["isError"] = True
         return r
@@ -737,8 +815,13 @@ def where_the_log_is():
 def audit_detail(row):
     """One line of detail for the audit table. A Python traceback is not a thing to put in front of an
     operator: it is thirty lines of our own plumbing under their name. Keep what failed, drop the rest."""
+    # Spec 085: a line written before the redaction shipped still holds the value it recorded, so the
+    # screen refuses on its own account rather than trusting what is on disk.
+    row = dict(row or {})
+    if isinstance(row.get("arguments"), dict):
+        row["arguments"] = C.redact_args(str(row.get("action") or ""), row["arguments"])
     out = []
-    for k, v in (row or {}).items():
+    for k, v in row.items():
         if k in ("ts", "who", "event", "action", "name"):
             continue
         t = str(v)
@@ -3745,6 +3828,7 @@ def mqtt_card(m, cfg=None):
             + "</span><input type='password' name='password' maxlength='120' autocomplete='new-password'></label>"
             f"<label>Root topic<input type='text' name='root' value='{e(str(m.get('root') or 'msh'))}' maxlength='60'></label>"
             f"<label class='check'><input type='checkbox' name='tls' value='on'{on('tls')}><span>TLS</span></label>"
+            "<input type='hidden' name='enabled' value='off'>"   # Spec 086: cleared must mean off
             "<label class='check'><input type='checkbox' name='enabled' value='on' checked><span>MQTT on (clear it to turn the radio's MQTT off)</span></label>"
             "<input type='hidden' name='confirm' value='yes'>"
             "<button type='submit'>Write to the radio</button><div class='res meta' role='status'></div></form>")
@@ -3790,6 +3874,14 @@ def proposal_form(pr):
         if i["type"] == "confirm":
             continue
         val = args.get(i["name"], "")
+        if i.get("secret"):
+            # Spec 085: the proposal holds the real value because it has to run; the form never shows
+            # it. Left blank, the run uses what was proposed; type something and that replaces it.
+            fields += (f"<label>{e(i['name'])}<input type='password' name='{e(i['name'])}' value='' "
+                       f"autocomplete='off' placeholder='held from the proposal, not shown'>"
+                       f"<span class='meta'>The value is held and not shown. Leave it blank to run it as "
+                       f"proposed, or type a new one to replace it.</span></label>")
+            continue
         if i["type"] == "enum":
             fields += (f"<label>{e(i['name'])}<select name='{e(i['name'])}'><option value=''>not set</option>"
                        + "".join(f"<option value='{e(str(x))}'{' selected' if str(x) == str(val) else ''}>{e(str(x))}</option>" for x in i.get("values", [])) + "</select></label>")
@@ -3910,7 +4002,33 @@ def connections_body(web, minted=None, msg=""):
 </script>"""
     return (f"{('<p class=bad>' + e(msg) + '</p>') if msg else ''}{shown}<div class='tablewrap'><table><thead><tr><th>Name</th><th>Autonomy</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{rows}</tbody></table></div><br>{form}"
             "<p class='meta'>The autonomy dial is yours: observe looks and reports; propose prepares and asks; act does deterministic work without asking each time. Every call is audited under the connection's name on the Activity page.</p>"
-            f"{js}{WRITE_JS}")
+            + brief_card() + f"{js}{WRITE_JS}")
+
+
+def brief_card():
+    """Spec 087: the step after the token, which the page used to leave unsaid.
+
+    A token connects the tools. It does not tell the agent how to behave on a mesh: that is the
+    role and the skills, and installing them happens in the operator's own tool, not here.
+    """
+    names = brief_skills()
+    # named with the extension, because four bare words in a row do not read as four downloads
+    per = ", ".join(f"<a href='/skill/{e(n)}.zip' download>{e(n)}.zip</a>" for n in names)
+    return ("<div class='card'><h2 style='margin-top:0'>The role and the skills</h2>"
+            "<p class='meta'>A token connects the tools and nothing more. An agent also needs the "
+            "<b>role</b>, which says how to behave on a mesh, and the <b>skills</b> it leans on. "
+            "These are the copies this box is running, not a link to somewhere else.</p>"
+            f"<p><b>Claude Code:</b> take the one file and unzip it into <code>~/.claude</code>.</p>"
+            f"<p><a href='/agent-brief.zip' download>Download the brief "
+            f"(the role and {len(names)} skills, {e(__version__)})</a></p>"
+            "<p><b>Cowork, Claude Desktop or claude.ai:</b> Customize &gt; Skills &gt; Add, one zip "
+            "per skill, because that is what the upload expects.</p>"
+            f"<p>{per}</p>"
+            f"<p class='meta'>Every file is stamped <code>product_version: {e(__version__)}</code>, "
+            "which is what this box is running. If the copy in your tool says an older version, it "
+            "has gone stale: download again and replace it. "
+            "<a class='plain' href='https://github.com/MilUX-Ltd/mesh-manager/blob/main/docs/GUIDE.md'>"
+            "Working with an agent</a>, in the guide, walks the whole thing.</p></div>")
 
 
 def settings_body(web, saved=""):
@@ -4101,6 +4219,21 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 return self._send(200, data, ctype, {"Cache-Control": "public, max-age=86400"})
             if path.startswith("/static/"):
                 return self._static(path)
+            # Spec 087: the role and the skills, as this box holds them. Behind the sign-in above,
+            # like every other page: the brief is not secret, but who may read this box is the gate.
+            if path == "/agent-brief.zip" or (path.startswith("/skill/") and path.endswith(".zip")):
+                if path == "/agent-brief.zip":
+                    data, fname = brief_zip(), f"mesh-manager-brief-{__version__}.zip"
+                else:
+                    name = path[len("/skill/"):-len(".zip")]
+                    data = skill_zip(name)
+                    if data is None:
+                        return self._send(404, "no such skill on this box", "text/plain")
+                    fname = f"{name}-{__version__}.zip"
+                self.send_response(200); self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(len(data))); self.end_headers()
+                self.wfile.write(data); return
             if path == "/export/inventory.csv":
                 import csv as _csv, io as _io
                 cols = ["id", "name", "hw", "firmware", "fingerprint", "key_since", "key_changed", "key_ack", "managed", "behind", "behind_reason", "confirmed", "heard"]
@@ -4374,8 +4507,18 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     if not pr:
                         return self._json(404, {"error": "no such proposal"})
                     if path.endswith("/run"):
-                        args = body.get("arguments") if isinstance(body.get("arguments"), dict) else (pr.get("arguments") or {})
-                        edited = args != (pr.get("arguments") or {})
+                        proposed = pr.get("arguments") or {}
+                        args = body.get("arguments") if isinstance(body.get("arguments"), dict) else dict(proposed)
+                        # Spec 085: the form never shows a secret, so it comes back blank. Blank means
+                        # "as proposed"; anything typed replaces it. Without this the operator would run
+                        # the proposal with an empty key and wonder why it failed.
+                        for _n in C.secret_inputs(pr["action"]):
+                            if not str(args.get(_n) or ""):
+                                if _n in proposed:
+                                    args[_n] = proposed[_n]
+                                else:
+                                    args.pop(_n, None)
+                        edited = args != proposed
                         code, res = run_action(web, pr["action"], args, "operator")
                         K.audit(web.etc_dir, who="operator", event="proposal-run", id=pid, proposed_by=pr.get("who"), action=pr["action"], edited=edited, outcome="ok" if code < 400 else "error")
                         return self._json(code, res)
@@ -4454,7 +4597,12 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             method = str(req.get("method", ""))
             params = req.get("params") or {}
             if method == "initialize":
-                result = {"protocolVersion": params.get("protocolVersion") or "2025-06-18", "capabilities": {"tools": {}},
+                asked = str(params.get("protocolVersion") or "")
+                # Spec 086: answer with a version this server speaks, not whatever the client sent.
+                # The protocol says: agree on theirs if we have it, otherwise state ours and let
+                # them decide whether to go on.
+                agreed = asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
+                result = {"protocolVersion": agreed, "capabilities": {"tools": {}},
                           "serverInfo": {"name": "mesh-manager", "version": __version__},
                           "instructions": "Read mesh_context first, then status, nodes and channels. Your autonomy is " + conn["autonomy"] + "."}
             elif method == "notifications/initialized":
@@ -4465,7 +4613,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 result = {"tools": mcp_tools(conn["autonomy"])}
             elif method == "tools/call":
                 name = str(params.get("name", ""))
-                K.audit(web.etc_dir, who=conn["name"], event="call", action=name, arguments=params.get("arguments") or {}, autonomy=conn["autonomy"])
+                K.audit(web.etc_dir, who=conn["name"], event="call", action=name, arguments=C.redact_args(name, params.get("arguments") or {}), autonomy=conn["autonomy"])
                 result = mcp_call(web, conn, name, params.get("arguments") or {})
             else:
                 return self._json(200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"method not found: {method}"}})

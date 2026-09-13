@@ -134,13 +134,17 @@ def audit_tail(etc, n=200):
 
 # ---- proposals ---------------------------------------------------------------------------------
 def propose(etc, who, action, args, rationale):
+    from .catalogue import redact_args   # late: catalogue imports nothing from here, this keeps it that way
     with _lock:
         props = _load(etc, "proposals.json", [])
         rec = {"id": secrets.token_hex(5), "who": who, "action": action, "arguments": args,
                "rationale": str(rationale or "")[:500], "created": _now()}
         props.append(rec)
         _save(etc, "proposals.json", props)
-    audit(etc, who=who, event="proposal", id=rec["id"], action=action, arguments=args, rationale=rec["rationale"])
+    # Spec 085: the proposal keeps the real value because it has to run later; what is written
+    # down is the redacted copy.
+    audit(etc, who=who, event="proposal", id=rec["id"], action=action,
+          arguments=redact_args(action, args), rationale=rec["rationale"])
     return rec
 
 

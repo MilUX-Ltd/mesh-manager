@@ -11,11 +11,19 @@ gate sits on the path where it does least and is absent from the path where peop
 import os, re, shutil, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read, skip  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "src"))
+from mesh_manager import catalogue as C  # noqa: E402
+
+# The autonomy table's rows name tools. Three of those are not catalogue actions: the two
+# standing tools, and the autonomy names that label the rows themselves.
+_TOOLS_NOT_ACTIONS = {"propose", "mesh_context", "observe", "act"}
 
 BRIEF = sorted(
     [os.path.join("skills", d, "SKILL.md") for d in sorted(os.listdir(os.path.join(ROOT, "skills")))
      if os.path.isdir(os.path.join(ROOT, "skills", d))]
-    + [os.path.join("agents", f) for f in sorted(os.listdir(os.path.join(ROOT, "agents"))) if f.endswith(".md")]
+    # README.md is Spec 087's explanation for a person, not a role: no audit verdict, not gated
+    + [os.path.join("agents", f) for f in sorted(os.listdir(os.path.join(ROOT, "agents")))
+       if f.endswith(".md") and f != "README.md"]
 )
 
 
@@ -128,8 +136,14 @@ check_true("AC11 and what to do without them",
 # ---- AC12 the three defects -------------------------------------------------------------------------
 check("AC12 the stray table separator is gone", role.count("|---|---|"), 1)
 check_true("AC12 audit_sha is no longer stale", front("agents/mesh-manager-agent.md").get("audit_sha") != "stale")
-check_true("AC12 and the role no longer claims MQTT actions the catalogue does not carry",
-           "gateway_mqtt_set" not in role and "node_mqtt_set" not in role)
+# Was: assert the two MQTT names are absent. They were absent because the catalogue did not carry
+# them, and Spec 086 put them in, so the literal check now fails on a fixed defect. What it was
+# protecting is the general rule: the role must not name an action that does not exist.
+_rows = [ln for ln in role.splitlines() if re.match(r"\|\s*`(observe|propose|act)`\s*\|", ln)]
+check_true("AC12 the autonomy table has its three rows to read", len(_rows) == 3, str(len(_rows)))
+_claimed = sorted({n for ln in _rows for n in re.findall(r"`([a-z][a-z0-9_]*)`", ln)})
+_ghosts = [n for n in _claimed if not C.by_id(n) and n not in _TOOLS_NOT_ACTIONS]
+check("AC12 and the role claims no action the catalogue does not carry", _ghosts, [])
 
 # ---- AC13 the existing controls still hold -----------------------------------------------------------
 sys.path.insert(0, os.path.join(ROOT, "src"))

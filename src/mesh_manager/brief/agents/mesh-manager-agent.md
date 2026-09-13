@@ -1,0 +1,1 @@
+../../../../agents/mesh-manager-agent.md

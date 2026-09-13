@@ -435,6 +435,62 @@ The role and skills that travel with the product tell an agent how to behave on 
 
 ![The Connections page](../assets/guide/connections.png)
 
+## Working with an agent
+
+A token connects an agent's tools to this box. It does not tell the agent how to behave on a mesh: that is the
+**role**, and the **skills** it leans on. Both travel with the product, and installing them happens in your own
+tool rather than here, which is why this chapter exists.
+
+![The role and the skills, on the Connections page](../assets/guide/agent-brief.png)
+
+### The four steps
+
+1. **Mint a connection at the autonomy you mean.** On Connections, add one and choose observe, propose or act.
+   The token is shown once.
+2. **Add the MCP server to your tool.** The page prints the `claude mcp add` line with the address and the
+   token in it.
+3. **Install the role and the skills.** Take them from the same page: they are the copies this box is running.
+4. **Know what the dial gave away.** Every call the agent makes is audited under the connection's name on
+   Activity, and anything above its autonomy arrives there as a proposal for you.
+
+### Claude Code
+
+Download the brief and unzip it into `~/.claude`. It lands as `~/.claude/agents/mesh-manager-agent.md` and
+`~/.claude/skills/<name>/SKILL.md`, one directory per skill, which is where Claude Code looks. There is no
+install command: the files are read when a session starts. Put them under a project's `.claude/` instead if you
+want them only there.
+
+### Cowork, Claude Desktop and claude.ai
+
+Customize > Skills > Add, uploading **one zip per skill**, because the upload expects a single skill folder as
+the archive's root. The Connections page serves them in exactly that shape, so download the four and add them
+one at a time. Your account needs code execution enabled.
+
+*Checked against each tool's own documentation on 12 September 2026. These move, so if a path here does not
+match what your tool says, believe your tool and tell us.*
+
+### Keeping them in step
+
+Every file is stamped with a `product_version` in its first few lines, and what the box serves is what the box
+is running. If the copy in your tool says an older version than the Connections page shows, it has gone stale:
+download it again and replace it. Nothing updates it for you, because the files live in your tool and not on
+the box.
+
+### What the dial actually does
+
+Say you ask it: *"the north gate repeater has been quiet since this morning, sort it out."*
+
+- At **observe** the agent reads the mesh and tells you: last heard, its battery at the last reading, whether
+  its neighbours still hear each other, and what it thinks is wrong. It changes nothing and asks nothing of
+  the air.
+- At **propose** it also asks the mesh what only the mesh can answer, a position or a telemetry request or a
+  traceroute, and then queues the change it wants to make, a reboot say, on Activity with its reasoning. It
+  waits for you.
+- At **act** it does the deterministic part itself, reboots the device over the air, and reports what it did.
+  It still cannot do what no autonomy covers, and every step is on Activity under its name.
+
+The same request, three different amounts of trust. Choose the dial before you mint the token, not after.
+
 ## Help
 
 The kit as it is: this radio, its region and channel, the fleet, the shelf, the lessons paid for on

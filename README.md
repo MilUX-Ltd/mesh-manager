@@ -86,7 +86,9 @@ version line stays 0.x until the interface settles; the
   the new one starts, and asks first unless you tell it not to. No server, no TAK, no systemd.
 - **An AI surface.** An MCP endpoint, an agent role and a set of skills, all derived from the
   same action catalogue the screen uses. Anything a person can do on the screen an agent can
-  do through a connector, at the autonomy you set, and nothing else.
+  do through a connector, at the autonomy you set, and nothing else. Installing the role and the
+  skills happens in your own tool rather than on the box, and the Connections page hands you the
+  copies it is running: [Working with an agent](docs/GUIDE.md#working-with-an-agent) walks it.
 
 ## The guide
 
@@ -218,8 +220,8 @@ or supported by either, and ships neither TAK Server nor device firmware: you su
 credentials: run it yourself against this repository if you want to confirm what you
 downloaded matches what is published. `CHANGELOG.md` is the record of what changed and why. `NOTICE` and `THIRD-PARTY.md` name the
 third-party work this stands on, with the licence texts under `LICENSES/`. `agents/` and
-`skills/` hold the agent role and the skills for the AI surface, and `install/` holds the
-installer and the systemd units. The design notes and the build record stay in the private
+`skills/` hold the agent role and the skills for the AI surface, each with a README saying where
+the files go, and `install/` holds the installer and the systemd units. The design notes and the build record stay in the private
 repository this is cut from: they are about the firm that builds it, not about running it.
 
 ---

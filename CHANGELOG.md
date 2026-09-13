@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 1.1.0 (12 September 2026)
+
+Four cards, all of them the product meaning what it already said. Nothing here is new capability. A review of
+the agent role and the skills on 12 September found the brief about twenty releases out of date, gated on the
+path where it did least, undocumented for the tools it is actually used in, and missing MQTT altogether.
+Reading the code for the last of those turned up a defect worth fixing on its own.
+
+**A channel key could be written into the box's audit log, and shown on the Activity page.** Adopting a
+channel from a join URL, or decoding one, recorded the whole URL as the argument of the call, and a join URL
+carries the channel's key. Four surfaces were writing or rendering it: the audit line for a run, the audit
+line for an agent's call, the detail a person opens on Activity, and the form a queued proposal renders. All
+four now go through one redaction step driven by the action catalogue, so an input marked secret is recorded
+as `<set, not recorded>` and everything else on the call is recorded as before. A queued proposal shows the
+secret field blank and says the value is held from the proposal rather than shown. If you have been adopting
+channels through the API or through an agent, treat the keys in those URLs as having been written down, and
+rotate them.
+
+**The MQTT card on the Radio page did nothing.** The operation was built into the bridge and never entered the
+action catalogue, so the form posted to the box and the box answered that there was no such action. It renders
+correctly, it confirmed nothing, and it wrote nothing. MQTT for the gateway radio, and MQTT written to a
+managed device over the air, are both in the catalogue now: typed as changes, confirmed before they run, with
+the broker password marked secret so it never reaches the record.
+
+Two checks came with it, and they matter more than the fix. The catalogue is now compared against what the
+bridge can actually do, and every write form on the screen is compared against the catalogue. The old parity
+check compared the catalogue with the API routes and the tool names, all three generated from the catalogue,
+so they agreed by construction and proved nothing. Either of the new ones would have caught this on the day.
+
+Clearing the MQTT checkbox also turned MQTT on, which is the opposite of what its label promised. Fixed, and
+the description an agent reads now says what leaving the setting out actually does.
+
+**The agent role and the skills are true again, audited, and gated on the path people take.** They had drifted
+about twenty releases behind the product, including one statement that was simply wrong on a box running as a
+server. All of it rewritten against the code as it is, re-audited, and a fourth skill added for joining two
+boxes. The audit gate that decides whether a skill ships now runs on both release paths from one definition
+rather than on the one where it did least.
+
+**The box hands you the role and the skills, and the guide says what to do with them.** A token connects an
+agent's tools; it does not tell the agent how to behave on a mesh. The Connections page now offers the copies
+the box is running: one download at the paths Claude Code reads, so it unzips straight into `~/.claude`, and
+one per skill shaped the way the Skills upload in Cowork, Claude Desktop and claude.ai expects. Both are
+stamped with the box's version, so a copy in your tool that says an older one has gone stale. A guide chapter,
+*Working with an agent*, walks the four steps and ends on one request put three ways, so you can see what
+observe, propose and act each do before you choose a dial.
+
+**The tool surface stops dropping what the catalogue already knows.** Every tool an agent sees now carries its
+human title and annotations derived from its risk, so a client can tell a read from a firmware flash without
+reading English. Results carry structured content beside the text. The MCP handshake negotiates to a version
+this server speaks instead of echoing back whatever the client asked for.
+
 ## 1.0.2 (10 September 2026)
 
 Nine slices, most of them Matt's list of what the map and the messages page still got wrong, and three

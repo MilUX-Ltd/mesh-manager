@@ -15,6 +15,17 @@ from .common import NODE_ICONS
 AUTONOMY = ("observe", "propose", "act")
 FLOOR = {"read": "observe", "air": "propose", "change": "act", "unreachable": "act", "flash": "act"}
 
+# Spec 086: the same risk tag, said in the words an MCP client understands, so a client can decide
+# what to put in front of a person without reading the English. openWorldHint is true where the
+# call leaves this box: over the air, or to a device that may not be listening.
+ANNOTATIONS = {
+    "read":        {"readOnlyHint": True,  "destructiveHint": False, "idempotentHint": True,  "openWorldHint": False},
+    "air":         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+    "change":      {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": True,  "openWorldHint": False},
+    "unreachable": {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": True,  "openWorldHint": True},
+    "flash":       {"readOnlyHint": False, "destructiveHint": True,  "idempotentHint": False, "openWorldHint": False},
+}
+
 NODE = re.compile(r"^![0-9a-f]{8}$")
 
 ACTIONS = [
@@ -322,7 +333,7 @@ ACTIONS = [
     {"id": "survey_status", "title": "Coverage survey status", "risk": "read", "op": "survey_status", "inputs": [],
      "description": "Whether a survey runs, for which node, how many asks so far and how many answers landed in the history since it started."},
     {"id": "channel_decode", "title": "Read a join URL", "risk": "read", "op": "channel_decode",
-     "inputs": [{"name": "url", "type": "text", "required": True, "max_bytes": 1024, "description": "a meshtastic.org join URL"}],
+     "inputs": [{"name": "url", "type": "text", "required": True, "max_bytes": 1024, "description": "a meshtastic.org join URL", "secret": True}],
      "description": "What a join URL carries: channel names, roles, the region and the preset. Never the key. Read this before adopting anything that arrived by export rather than by authorship."},
     {"id": "channel_create", "title": "Create a channel", "risk": "change", "op": "channel_create",
      "inputs": [{"name": "name", "type": "text", "required": True, "max_bytes": 11, "description": "the channel name, 11 bytes at most"},
@@ -335,7 +346,7 @@ ACTIONS = [
      "confirm": "Rotating the key on the primary channel drops every device that has not scanned the new QR. This radio is {own}.",
      "description": "Write a fresh key to a channel slot and read it back. On the primary channel (slot 0) every device that has not scanned the new QR drops off the mesh, so that one needs confirm = this radio's id."},
     {"id": "channel_adopt", "title": "Adopt a join URL", "risk": "unreachable", "op": "channel_adopt",
-     "inputs": [{"name": "url", "type": "text", "required": True, "max_bytes": 1024, "description": "a meshtastic.org join URL"},
+     "inputs": [{"name": "url", "type": "text", "required": True, "max_bytes": 1024, "description": "a meshtastic.org join URL", "secret": True},
                 {"name": "mode", "type": "enum", "values": ["add", "replace"], "required": True, "description": "add its channels to the free slots, or replace this radio's whole channel set and region from it"},
                 {"name": "confirm", "type": "confirm", "required": False, "description": "this radio's id, to confirm a replace"}],
      "confirm": "Replacing takes this radio's channels and region from the URL; devices on the old channels will not hear it. This radio is {own}.",
@@ -344,6 +355,30 @@ ACTIONS = [
      "inputs": [{"name": "index", "type": "int", "required": True, "min": 1, "max": 7, "description": "the slot, 1 to 7 (the primary cannot be deleted)"}],
      "confirm": "The slot goes back to disabled. Devices on that channel lose it.",
      "description": "Disable a secondary channel slot on this radio and read it back."},
+    # Spec 086: both were built in Specs 070 and 072 and never entered the catalogue, so the Radio
+    # page's own form 404'd and no agent could reach them. The password is marked secret, so Spec
+    # 085 keeps it out of the audit and off the Activity page.
+    {"id": "gateway_mqtt_set", "title": "Set this box's MQTT to a broker", "risk": "change", "op": "gateway_mqtt_set",
+     "inputs": [{"name": "address", "type": "text", "required": True, "description": "the broker, host or host:port; 8883 with TLS, 1883 without"},
+                {"name": "username", "type": "text", "required": False, "description": "the broker user, if it wants one"},
+                {"name": "password", "type": "text", "required": False, "secret": True, "description": "the broker password; write-only, never read back"},
+                {"name": "root", "type": "text", "required": False, "description": "the root topic the radio publishes under"},
+                {"name": "tls", "type": "text", "required": False, "description": "on for TLS, empty for none"},
+                {"name": "enabled", "type": "text", "required": False, "description": "on to turn MQTT on, off to turn it off; left out, it is turned on"},
+                {"name": "confirm", "type": "confirm", "required": True, "description": "yes, to confirm this box will carry the radio's traffic to a broker"}],
+     "confirm": "This writes MQTT to the gateway radio and this box carries its traffic to the broker. Anything else on that broker can see what the radio publishes.",
+     "description": "Point the gateway radio's MQTT at a broker and have this box carry it, or turn it off. The settings live on the radio, so a phone paired to it picks them up; the radio has no network of its own and never needs one. Read back from the radio before it counts."},
+    {"id": "node_mqtt_set", "title": "Set a device's MQTT to a broker, over the air", "risk": "change", "op": "node_mqtt_set",
+     "inputs": [{"name": "id", "type": "node", "required": True, "description": "the radio id, !hex"},
+                {"name": "address", "type": "text", "required": True, "description": "the broker, host or host:port; 8883 with TLS, 1883 without"},
+                {"name": "username", "type": "text", "required": False, "description": "the broker user, if it wants one"},
+                {"name": "password", "type": "text", "required": False, "secret": True, "description": "the broker password; write-only, never read back"},
+                {"name": "root", "type": "text", "required": False, "description": "the root topic the device publishes under"},
+                {"name": "tls", "type": "text", "required": False, "description": "on for TLS, empty for none"},
+                {"name": "enabled", "type": "text", "required": False, "description": "on to turn MQTT on, off to turn it off; left out, it is turned on"},
+                {"name": "confirm", "type": "confirm", "required": True, "description": "yes, to confirm this device will talk to a broker"}],
+     "confirm": "This writes MQTT to that device over the air. It reaches the broker through whatever network it has, and anything else on that broker can see what it publishes.",
+     "description": "Point a managed device's MQTT at a broker over the air, or turn it off. Only a managed device can be changed from here. Slow and lossy: unconfirmed until the device reads it back."},
     {"id": "radio_set", "title": "Set this radio's names, power and position settings", "risk": "change", "op": "radio_set",
      "inputs": [{"name": "long_name", "type": "text", "required": False, "max_bytes": 39, "description": "the long name"},
                 {"name": "short_name", "type": "text", "required": False, "max_bytes": 4, "description": "the short name, 4 bytes at most"},
@@ -476,3 +511,34 @@ KNOWN_WORDS = set(KNOWN_WORDS) | {"rotation", "rotated", "checklist", "expected"
 KNOWN_WORDS = set(KNOWN_WORDS) | {"profile", "drift", "drifted", "unread", "enforced", "unenforced", "fleet", "line", "preset", "pressed", "blank"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"atak", "xml", "template", "tiles", "tile", "zoom", "quadkey", "imagery", "folder", "browsers", "browser", "viewer", "layer", "sources", "source"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"mode", "server", "desktop", "origin", "origin_name"}   # Spec 084: the box shapes, and where a row came from
+
+
+# ---- Spec 085: no key in the record ----------------------------------------------------------
+# A meshtastic.org join URL carries the channel's pre-shared key, and channel_adopt takes one as a
+# plain text input. Every path that records what an action was asked to do stored the arguments
+# verbatim, so adopting a channel wrote a key into audit.log and onto Activity. One line carrying a
+# live channel's key was found on a running box on 12 September 2026.
+#
+# The catalogue says which inputs carry key material, because the catalogue is the one description
+# of every action. A word list would not have caught this: "url" contains neither "key" nor
+# "password", and the next one will be named something else again.
+SECRET_SHOWN_AS = "<set, not recorded>"
+
+
+def secret_inputs(action_id):
+    """The names of the inputs on this action that carry key material."""
+    a = by_id(action_id) or {}
+    return {i["name"] for i in a.get("inputs", []) if i.get("secret")}
+
+
+def redact_args(action_id, args):
+    """A copy of args fit to be written down. The entry still says a value was supplied, because a
+    redaction that empties the record makes the audit useless and invites somebody to switch it off;
+    what it does not say is the value. An action nobody knows is left alone rather than emptied: an
+    unknown action is a bug to investigate, and blanking its arguments would hide the evidence."""
+    if not isinstance(args, dict):
+        return args
+    secret = secret_inputs(action_id)
+    if not secret:
+        return args
+    return {k: (SECRET_SHOWN_AS if k in secret else v) for k, v in args.items()}
