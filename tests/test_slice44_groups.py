@@ -19,7 +19,7 @@ svg = getattr(W, "NODE_ICON_SVG", {})
 check("AC6 every icon name has an SVG", sorted(set(icons or []) - set(svg)), [])
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
 A, Bn, Cn = "!aa000001", "!bb000002", "!cc000003"
 for nid, name in ((A, "Tracker9"), (Bn, "Tracker2"), (Cn, "Spare")):
     br.meshtastic_devices[nid] = {"long_name": name, "meshtastic_id": nid}

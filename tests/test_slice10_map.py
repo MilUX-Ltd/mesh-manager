@@ -26,7 +26,7 @@ check("AC1 parity across routes, forms and tools holds", C.parity_problems(C.ACT
 
 # ---- the bridge half
 tmp = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": "", "MAP_LAT": "51.2", "MAP_LON": "-1.5"}, socket_path=os.path.join(tmp, "b.sock"), state_dir=tmp, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MAP_LAT": "51.2", "MAP_LON": "-1.5"}, socket_path=os.path.join(tmp, "b.sock"), state_dir=tmp, observe=True)
 events = []
 _orig_emit = br._emit
 br._emit = lambda kind, **f: (events.append((kind, f)), _orig_emit(kind, **f))[1]

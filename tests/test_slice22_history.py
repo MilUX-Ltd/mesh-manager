@@ -17,7 +17,7 @@ from mesh_manager import bridge as B, web as W  # noqa: E402
 from mesh_manager.history import History  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": "", "HISTORY_DAYS": 30}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "HISTORY_DAYS": 30}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 check_true("the store opens in the state directory", br.history.ok and os.path.exists(os.path.join(state, "history.db")))
 
 # AC1 one row per thing heard
@@ -40,7 +40,7 @@ check("AC1 a sent text is history too", br.op_history(kind="messages")["rows"][-
 
 # AC2 survives a restart
 br.history.close()
-br2 = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
+br2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
 check("AC2 a new bridge on the same state directory reads the rows back", (len(br2.op_history(kind="positions")["rows"]), len(br2.op_history(kind="messages")["rows"])), (2, 2))
 
 # AC3 filters and the summary

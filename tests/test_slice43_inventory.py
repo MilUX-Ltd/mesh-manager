@@ -15,7 +15,7 @@ check("AC1 key_accept is a change taking id", (k.get("risk"), [i["name"] for i i
 check("AC1 parity holds", C.parity_problems(C.ACTIONS, W.api_action_routes(), [t["name"] for t in W.mcp_tools("act")]), [])
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
 NID = "!aa000001"
 K1 = base64.b64encode(b"\x01" * 32).decode(); K2 = base64.b64encode(b"\x02" * 32).decode()
 br.meshtastic_devices[NID] = {"long_name": "Tracker9", "meshtastic_id": NID}

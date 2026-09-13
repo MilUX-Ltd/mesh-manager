@@ -12,6 +12,14 @@ see the word beside every glyph.
 
 ## Setting up
 
+**Before any of this, the box needs its radio.** Plug the gateway radio into a USB socket and run
+`ls /dev/serial/by-id/` on the box: each line is one thing plugged in, and the radio is usually the
+one naming its chip or its maker. Anything mentioning GPS or u-blox is a position receiver, not a
+radio. Install against the whole path, `/dev/serial/by-id/` followed by that name. Run the installer
+without `--serial` and it lists what it can see and prints the command to run next, so you need not
+read the list yourself. Those names survive a reboot and a change of socket, which is why the
+installer insists on them.
+
 Open the address of the box in a browser on the same network (the installer prints it). If sign-in is
 on, the operator password is the one set at install. The Help page opens with the six steps, each a
 link:
@@ -239,6 +247,29 @@ Joining boxes is under **Connections**, and carries the picture, messages, waypo
 with a sharing table for each. MQTT points the radio at a broker so its traffic reaches anything else on that
 broker, a phone running the Meshtastic application included. The box carries it on the radio's behalf over
 the box's own network, so the radio needs no wifi of its own.
+
+**The gateway radio** is the last card on the page: which radio this box is using, every radio plugged in
+that it could use instead, and one button that keeps a copy of the radio's configuration.
+
+Choosing a different radio restarts the bridge, so the mesh is down for a few seconds. Only a radio the box
+can see now can be chosen, because a box pointed at a radio that is not there is the fault this exists to
+prevent. A box that has never been given a radio says it is *watching for one* and lists what is plugged in.
+
+**If the gateway radio breaks or is needed elsewhere.** The key your whole mesh uses lives on that radio and
+nowhere else, so keep a copy while it still works: **Keep a copy of the gateway's configuration** writes its
+owner, settings and channels to the box, readable only by the box itself. Nothing is written to any radio.
+
+When the time comes, the drill is three steps:
+
+1. Plug the replacement radio in. It appears on the **Bench**, because it is not the gateway yet.
+2. **Restore** the kept copy onto it there. It now carries the same channel and key as the mesh.
+3. **Choose** it as the gateway on this page. The bridge restarts and the fleet appears again.
+
+One thing that copy cannot carry: **the radio's own identity**. A replacement is a different radio as far as
+your devices are concerned, and every device you manage holds the old radio's key as its admin key. So a
+replacement can see the mesh and talk on it, and cannot write to a device over the air until that device has
+been given the new radio's admin key. Doing that while the old radio still works is easier than doing it
+afterwards with a cable, and it is the one part of this the product does not yet do for you.
 
 ![The Radio page: the radio's settings, its MQTT, and its region](../assets/guide/radio.png)
 

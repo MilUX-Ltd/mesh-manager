@@ -47,8 +47,8 @@ check_true("AC2 every finding carries a status", len(findings) >= 4 and all(re.s
 # AC3: the never-list
 check("AC3 carries_never finds a listed key at depth", (P.carries_never({"class": "nodes", "data": [{"id": "!aa000001", "psk": "AQ=="}]}), P.carries_never({"data": {"settings": {"admin_key": "x"}}}), P.carries_never({"data": {"name": "psk", "text": "my url is here"}})), (True, True, False))
 hub_state = tempfile.mkdtemp(); site_state = tempfile.mkdtemp()
-hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
-site = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
+hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
+site = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
 hub_id, site_id = hub.op_status()["site"]["id"], site.op_status()["site"]["id"]
 inv = hub.op_peer_invite(); j = site.op_peer_join(invite=inv["invite"])
 check_true("setup: paired", j.get("joined") is True and wait_for(lambda: site_id in hub.peering.connected()), repr(j))

@@ -10,7 +10,7 @@ from mesh_manager import bridge as B, catalogue as C, web as W  # noqa: E402
 from mesh_manager.common import utc  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 br.interface.nodes["!aa000001"] = {"user": {"longName": "Half"}, "lastHeard": int(time.time())}
 br.interface.nodes["!bb000002"] = {"user": {"longName": "Quiet"}, "lastHeard": int(time.time())}
 now = time.time()

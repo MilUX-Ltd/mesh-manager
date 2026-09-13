@@ -18,7 +18,7 @@ from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 row = lambda nid: next((n for n in br.op_nodes()["nodes"] if n["id"] == nid), {})  # noqa: E731
 now = int(time.time())
 
@@ -35,7 +35,7 @@ emitted = []
 br._emit = lambda kind, **kw: emitted.append((kind, kw))
 br._battery_note("!aa000001", 64, 3.91)
 check_true("AC2 the battery is on disk", os.path.exists(os.path.join(state, "batteries.json")) and json.load(open(os.path.join(state, "batteries.json")))["!aa000001"]["level"] == 64)
-br2 = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
+br2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
 check("AC2 a new bridge on the same state directory starts with it", br2.batteries.get("!aa000001", {}).get("level"), 64)
 check("AC2 noting a battery emits a telemetry event", [k for k, _ in emitted if k != "log"], ["telemetry"])
 

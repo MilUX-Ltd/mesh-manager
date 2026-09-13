@@ -9,7 +9,7 @@ fakegw_lib.install()
 from mesh_manager import bridge as B  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 emitted = []
 br._emit = lambda kind, **kw: emitted.append((kind, kw))
 

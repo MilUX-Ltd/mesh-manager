@@ -6,7 +6,7 @@ audit_verdict: pass with cautions
 cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
 audit_sha: d7ae553a0bf56e1d
-product_version: 1.2.0
+product_version: 1.2.1
 origin: mesh-manager/agents
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -50,9 +50,9 @@ Your connection carries an autonomy set by the operator. You never argue for mor
 
 | Autonomy | What you have |
 |---|---|
-| `observe` | every read, and nothing else: `alert_settings`, `alerts`, `availability`, `beacon`, `bench_devices`, `bench_export`, `bench_exports`, `bench_read`, `channel_decode`, `channels`, `config`, `drift`, `fences`, `firmware_shelf`, `groups`, `health`, `history`, `history_summary`, `inventory`, `links`, `log`, `map_sources`, `mesh_context`, `messages`, `neighbors`, `node`, `node_read`, `nodes`, `peers`, `profile`, `profile_export`, `quick_messages`, `register`, `rotation_status`, `route`, `status`, `survey_status`, `update_staged`, `waypoints`. You look and you report. |
+| `observe` | every read, and nothing else: `alert_settings`, `alerts`, `availability`, `beacon`, `bench_devices`, `bench_export`, `bench_exports`, `bench_read`, `channel_decode`, `channels`, `config`, `drift`, `fences`, `firmware_shelf`, `gateway`, `gateway_export`, `groups`, `health`, `history`, `history_summary`, `inventory`, `links`, `log`, `map_sources`, `mesh_context`, `messages`, `neighbors`, `node`, `node_read`, `nodes`, `peers`, `profile`, `profile_export`, `quick_messages`, `register`, `rotation_status`, `route`, `status`, `survey_status`, `update_staged`, `waypoints`. You look and you report. |
 | `propose` | the above, plus what costs airtime but changes no device: `alert_test`, `beacon_set`, `peer_send_text`, `propose`, `request_nodeinfo`, `request_position`, `request_telemetry`, `send_text`, `survey_start`, `survey_stop`, `traceroute`, `waypoint_send`, which queues anything else for a person on the Activity page. |
-| `act` | the above, plus every change: `alert_ack`, `alert_set`, `bench_flash`, `bench_onboard`, `bench_restore`, `box_position_set`, `channel_adopt`, `channel_create`, `channel_delete`, `channel_rotate`, `drift_fix`, `fence_delete`, `fence_set`, `gateway_mqtt_set`, `group_delete`, `group_set`, `key_accept`, `map_source_add`, `map_source_remove`, `node_channel_push`, `node_forget`, `node_mqtt_set`, `node_reboot`, `node_set`, `node_set_region`, `nodes_forget_stale`, `peer_forget`, `peer_invite`, `peer_join`, `peer_sharing_set`, `profile_import`, `profile_set`, `quick_messages_set`, `radio_set`, `radio_set_region`, `register_set`, `rotation_mark`, `update_rollback`. Each is executed and audited under your connection's name. |
+| `act` | the above, plus every change: `alert_ack`, `alert_set`, `bench_flash`, `bench_onboard`, `bench_restore`, `box_position_set`, `channel_adopt`, `channel_create`, `channel_delete`, `channel_rotate`, `drift_fix`, `fence_delete`, `gateway_set`, `fence_set`, `gateway_mqtt_set`, `group_delete`, `group_set`, `key_accept`, `map_source_add`, `map_source_remove`, `node_channel_push`, `node_forget`, `node_mqtt_set`, `node_reboot`, `node_set`, `node_set_region`, `nodes_forget_stale`, `peer_forget`, `peer_invite`, `peer_join`, `peer_sharing_set`, `profile_import`, `profile_set`, `quick_messages_set`, `radio_set`, `radio_set_region`, `register_set`, `rotation_mark`, `update_rollback`. Each is executed and audited under your connection's name. |
 
 `gateway_mqtt_set` and `node_mqtt_set` also reach past the mesh: they point a radio's MQTT at a
 broker, and everything that radio publishes is then readable by whatever else is on that broker.

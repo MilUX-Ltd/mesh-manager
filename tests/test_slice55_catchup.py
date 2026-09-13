@@ -33,8 +33,8 @@ h2 = H.History(hd, days=30)   # the store opens again with the columns in place
 check("AC1 a store opened again still answers origin rows", len(h2.query("messages", origin="cd" * 32)), 1)
 
 hub_state = tempfile.mkdtemp(); site_state = tempfile.mkdtemp(); site2_state = tempfile.mkdtemp()
-hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
-site = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
+hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
+site = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
 hub_id, site_id = hub.op_status()["site"]["id"], site.op_status()["site"]["id"]
 inv = hub.op_peer_invite(); j = site.op_peer_join(invite=inv["invite"])
 check_true("setup: paired", j.get("joined") is True and wait_for(lambda: any(p["state"] == "connected" for p in hub.op_peers()["peers"])), repr(j))
@@ -69,7 +69,7 @@ hub.stop(); time.sleep(0.5)
 check_true("setup: the hub is down", wait_for(lambda: not site.peering.connected(), 5))
 for w in ("gap one", "gap two", "gap three"):
     hear_text(site, w); time.sleep(0.15)
-hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": hub_port, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b1.sock"), state_dir=hub_state)
+hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": hub_port, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b1.sock"), state_dir=hub_state)
 hub_events = queue.Queue(maxsize=2000); hub._subs.append(hub_events)
 def gap_rows():
     return [r for r in hub.op_history(kind="messages", limit=500).get("rows", []) if r.get("origin") == site_id and str(r.get("text", "")).startswith("gap ")]
@@ -82,7 +82,7 @@ check_true("AC3 and nothing arrives twice", len(got) == len(set(got)) and len(ga
 check_true("AC3 the site is back on the hub", wait_for(lambda: site_id in hub.peering.connected(), 5))
 
 # AC4: a third site catches up on what the hub holds from the first
-site2 = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Far"}, socket_path=os.path.join(site2_state, "b.sock"), state_dir=site2_state)
+site2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Far"}, socket_path=os.path.join(site2_state, "b.sock"), state_dir=site2_state)
 site2_id = site2.op_status()["site"]["id"]
 inv2 = hub.op_peer_invite(); j2 = site2.op_peer_join(invite=inv2["invite"])
 check_true("setup: a third site joined", j2.get("joined") is True and wait_for(lambda: site2_id in hub.peering.connected(), 10))
@@ -99,7 +99,7 @@ site._on_receive({"fromId": "!aa000001", "toId": "^all", "rxSnr": 7.0, "hopStart
 a = site._alerts_load(); site._raise_alert(a, "!aa000001", "battery", "Tracker9 battery 9%"); site._alerts_save(a)
 wait_for(lambda: any(w.get("wid") == 4242 for w in hub.op_waypoints()["waypoints"]))
 hub.stop(); time.sleep(0.5)
-hub_b = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": hub.peering.port, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b2.sock"), state_dir=hub_state)
+hub_b = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": hub.peering.port, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b2.sock"), state_dir=hub_state)
 ok = wait_for(lambda: any(w.get("wid") == 4242 and w.get("origin") == site_id for w in hub_b.op_waypoints()["waypoints"]) and any(o.get("origin") == site_id and o.get("kind") == "battery" for o in hub_b.op_alerts()["open"]), 20)
 check_true("AC5 a restarted hub holds the site's waypoint and open alert again", ok, repr((hub_b.op_waypoints()["waypoints"], hub_b.op_alerts()["open"])))
 check_true("AC5 and the remote chat survived the restart", any(r.get("origin") == site_id for r in hub_b.op_history(kind="messages", limit=50).get("rows", [])))

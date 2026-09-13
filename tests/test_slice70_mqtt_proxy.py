@@ -202,7 +202,7 @@ import tempfile  # noqa: E402
 from mesh_manager import bridge as B  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
 br.mqtt_client_factory = FakeClient
 out = br.op_gateway_mqtt_set(address="tak.milux.co.uk", username="matt", password="pw",
                              root="milux", tls="on", enabled="on", confirm="yes")

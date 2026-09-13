@@ -14,7 +14,7 @@ from mesh_manager import bridge as B, catalogue as C  # noqa: E402
 from mesh_manager.web import ICONS  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 br.interface.nodes["!aa000001"] = {"user": {"longName": "Old name", "shortName": "OLD", "hwModel": "TRACKER_T1000_E"}, "lastHeard": 1}
 emitted = []
 br._emit = lambda kind, **kw: emitted.append((kind, kw))

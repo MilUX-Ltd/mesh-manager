@@ -17,7 +17,7 @@ import fakebridge_lib as FB  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 br.op_register_set(id="!aa000001", label="Recce lead")
 n = next(x for x in br.op_nodes()["nodes"] if x["id"] == "!aa000001")
 check("AC1 nodes rows carry the label", (n.get("label"), n.get("name")), ("Recce lead", "Tracker9"))

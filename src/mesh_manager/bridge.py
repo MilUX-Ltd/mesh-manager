@@ -399,7 +399,9 @@ class Bridge(TAKMeshtasticGateway):
         threading.Thread(target=self._watchdog_loop, name="watchdog", daemon=True).start()
         threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True).start()
         threading.Thread(target=self._alert_loop, name="alerts", daemon=True).start()
-        radioless = self.box_mode == "hub" or (self.box_mode == "desktop" and not str(conf.get("SERIAL") or "").strip())
+        # Spec 100: any shape with no radio is a site watching for one. Spec 062 gave a laptop this
+        # and fenced it there, so a box that nobody had chosen a radio for refused to start at all.
+        radioless = self.box_mode == "hub" or not str(conf.get("SERIAL") or "").strip()
         if radioless:
             # Spec 052 and 062: a site with no radio, which a hub always is and a laptop is until one is
             # plugged in. No gateway, no serial device, no TAK, no mesh of its own; still a site that joins.
@@ -422,7 +424,7 @@ class Bridge(TAKMeshtasticGateway):
         self._redial_pinned()
         if radioless:
             self._touch(); sd_notify("READY=1")
-            shape = "a hub" if self.box_mode == "hub" else ("a laptop, watching for a radio" if self.box_mode == "desktop" else self.box_mode)
+            shape = "a hub" if self.box_mode == "hub" else (("a laptop" if self.box_mode == "desktop" else self.box_mode) + ", watching for a radio")
             self.logger.info(f"mesh-manager-bridge {__version__} as {shape}; site {self.peering.id[:12] if self.peering else '?'}; socket {socket_path}; state {state_dir}")
             return
         if self.box_mode in ("server", "desktop"):
@@ -2871,6 +2873,126 @@ class Bridge(TAKMeshtasticGateway):
     def _gateway_real(self):
         return os.path.realpath(self.conf["SERIAL"]) if self.conf.get("SERIAL") else ""
 
+    # ---- Spec 100: which radio is the gateway, and choosing a different one ----------------------
+    def _gateway_candidates(self):
+        """Every radio plugged in, the one in use included. bench_ports() hides the gateway because
+        the Bench is for other devices; the chooser has to show it, or the page cannot say which one
+        it is already using."""
+        rows = bench_ports(ports=getattr(self, "_ports_for_test", None), serial_dir=self.serial_dir,
+                           gateway="", gps=self.gps_path() or "")
+        out = []
+        for rec in rows:
+            rec = dict(rec)
+            rec.setdefault("kind", "radio")
+            out.append(rec)
+        return out
+
+    def _gateway_export_at(self):
+        """When the gateway's own configuration was last kept, or None. A box with no export is one
+        failure away from re-provisioning a fleet by hand, and it should be able to say so."""
+        own = (self._own() or {}).get("id") or ""
+        d = os.path.join(self._exports_dir(), str(own))
+        try:
+            names = sorted((n for n in os.listdir(d) if n.endswith(".json")), reverse=True)
+        except OSError:
+            return None
+        return names[0][:-5].replace("-", ":", 3).replace(":", "-", 2) if names else None
+
+    def op_gateway_export(self, **_):
+        """The gateway's own owner, configuration and channels, kept on the box.
+
+        bench_export cannot reach this radio: the Bench is for other devices and hides the gateway
+        on purpose. Without this, the one key the whole mesh uses exists nowhere but the radio, and
+        a dead radio takes the mesh with it.
+
+        Nothing is written to any radio, so this is a read. The file is the most sensitive thing the
+        box holds, so it goes where the bench exports go, at the same mode, and the answer names it
+        and never its contents."""
+        if self.interface is None:
+            return {"error": "no radio is attached, so there is nothing to export. Plug the gateway radio in and choose it first."}
+        try:
+            snap, raw = self._bench_snapshot(self.interface)
+            fn = self._export(snap, raw)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"the gateway could not be exported: {type(e).__name__}: {e}"}
+        self._emit("status", action="gateway_export", id=snap.get("id"))
+        return {"export": fn, "bytes": os.path.getsize(fn), "id": snap.get("id"),
+                "note": "restore this onto a replacement radio on the Bench, then choose it as the gateway. "
+                        "It does not carry this radio's own identity: a replacement is a different radio to the fleet, "
+                        "and cannot manage a device until it is given an admin key."}
+
+    def op_gateway(self, **_):
+        """The radio this box is using, whether it is actually there, and what else is plugged in."""
+        cur = str(self.conf.get("SERIAL") or "")
+        cands = self._gateway_candidates()
+        here = {os.path.realpath(c["path"]) for c in cands}
+        return {"serial": cur,
+                "present": bool(cur) and os.path.realpath(cur) in here,
+                "candidates": cands,
+                "watching": not cur,
+                "export_at": self._gateway_export_at()}   # Spec 101: what losing this radio would cost
+
+    def op_gateway_set(self, path=None, **_):
+        """Point this box at a radio and re-attach to it.
+
+        Only what the box can see: the failure this exists to fix is a box pointed at a radio that
+        is not there, and accepting a path typed from memory would rebuild it."""
+        want = str(path or "").strip()
+        if not want or not want.startswith("/") or "/.." in want or "\0" in want:
+            return {"error": "give the whole path of a radio this box can see"}
+        if re.fullmatch(r"/dev/tty[A-Za-z]*\d+|COM\d+", want):
+            return {"error": "that is a port number, and port numbers shuffle when the box reboots or the cable moves. "
+                             "Choose one of the by-id paths this box can see, which do not."}
+        cands = self._gateway_candidates()
+        radios = [c for c in cands if c.get("kind") != "gps"]
+        by_real = {os.path.realpath(c["path"]): c["path"] for c in cands}
+        if os.path.realpath(want) not in by_real:
+            seen = ", ".join(c["path"] for c in radios) or "nothing"
+            return {"error": f"this box cannot see {want}. Plugged in now: {seen}"}
+        cur = str(self.conf.get("SERIAL") or "")
+        if cur and os.path.realpath(cur) == os.path.realpath(want):
+            return {"serial": cur, "unchanged": True, "confirmed": True,
+                    "note": "that radio is already the gateway, so nothing changed"}
+        conf_path = str(self.conf.get("CONFIG_PATH") or "")
+        if not conf_path or not os.path.exists(conf_path):
+            return {"error": "this box has no config file to write, so the choice could not be kept"}
+        try:
+            self._write_conf_key(conf_path, "SERIAL", want)
+        except OSError as e:
+            return {"error": f"the choice could not be written: {type(e).__name__}: {e}"}
+        self.conf["SERIAL"] = want
+        self._emit("status", action="gateway_set", serial=want)
+        self._restart_for_radio()
+        return {"serial": want, "was": cur, "confirmed": True,
+                "note": "the bridge is restarting onto that radio: the mesh is down for a few seconds"}
+
+    @staticmethod
+    def _write_conf_key(path, key, value):
+        """One key, in place, with every other line of the file left exactly as it was."""
+        lines = open(path).read().splitlines()
+        out, done = [], False
+        for ln in lines:
+            if ln.strip().startswith(f"{key}="):
+                if not done:
+                    out.append(f"{key}={value}")
+                    done = True
+                continue
+            out.append(ln)
+        if not done:
+            out.append(f"{key}={value}")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp, path)
+
+    def _restart_for_radio(self):
+        """The unit is Restart=always, so stopping is how the bridge comes back on the new radio.
+        A live swap of the interface under the running gateway is more moving parts than a restart
+        that systemd already knows how to do, and the outage is the same few seconds the installer
+        already accepts for a new release."""
+        self.restarted = getattr(self, "restarted", 0) + 1
+        self._stop.set()
+
     def op_bench_devices(self, **_):
         """Spec 063: what is plugged in and ready for the bench, on a box or on a laptop."""
         rows = bench_ports(ports=getattr(self, "_ports_for_test", None), serial_dir=self.serial_dir,
@@ -5030,11 +5152,8 @@ def main(argv=None):
     conf = read_config(a.config)
     if a.serial:
         conf["SERIAL"] = a.serial
-    if not conf.get("SERIAL") and conf.get("MODE") not in ("hub", "desktop"):
-        # Spec 062: a laptop with nothing plugged in is a site watching for a radio, not an error; a box with a
-        # radio in its config that is simply unplugged waits too. Only a server shape with no radio is a mistake.
-        print("ERR no SERIAL in the config and no --serial given (a site with no radio is MODE=hub, a laptop is MODE=desktop)", file=sys.stderr)
-        return 2
+    # Spec 100: a box with no radio starts as a site watching for one, the way a laptop already did.
+    # Refusing to start was the reason "install now, choose the radio on the screen" was impossible.
     b = Bridge(conf, socket_path=a.socket, state_dir=a.state_dir, observe=a.observe, silence_limit=a.silence_limit)
     try:
         b.serve_forever()

@@ -170,13 +170,70 @@ if [[ ( -z "$SERIAL" || -z "$FILTER_GROUP" ) && -f "$OLDCONF" ]]; then
     [[ -n "$EXTRA_ARGS" ]]   || EXTRA_ARGS="${OLD_EXTRA_ARGS:-}"
     for k in SERIAL REGION CHANNEL FILTER_GROUP EXTRA_ARGS; do printf '  %s=%s\n' "$k" "${!k}"; done
 fi
+
+# ---- Spec 099: a refusal that knows the answer must say it ------------------------------------
+# The installer runs on the box with the radio plugged into it. It must not guess which of several
+# radios is the gateway, so it still refuses without --serial; it refuses with the list in its hand.
+# No jargon: an operator meeting this has plugged a thing into a socket, and that is all we assume.
+radio_kind() {   # what a by-id name looks like it is
+    case "$1" in
+        *[Gg][Pp][Ss]*|*[Gg][Nn][Ss][Ss]*|*u-blox*|*u_blox*) echo "a GPS receiver, not a radio" ;;
+        *Bluetooth*|*debug-console*)                         echo "not a radio" ;;
+        *)                                                   echo "looks like a radio" ;;
+    esac
+}
+name_the_radios() {   # prints the list; returns 0 when exactly one candidate looks like a radio
+    local dir="$ROOT/dev/serial/by-id" n=0 only="" kind
+    echo "" >&2
+    if [[ ! -d "$dir" ]]; then
+        echo "This box has nothing plugged in by USB: $ROOT/dev/serial/by-id does not exist." >&2
+        echo "Plug the radio into a USB socket, give it a moment, and run this again." >&2
+        return 1
+    fi
+    local entries=()
+    while IFS= read -r nm; do [[ -n "$nm" ]] && entries+=("$nm"); done < <(ls -1 "$dir" 2>/dev/null | sort)
+    if (( ${#entries[@]} == 0 )); then
+        echo "Nothing is plugged in that this box can see." >&2
+        echo "Plug the radio into a USB socket, give it a moment, and run this again. If it is" >&2
+        echo "already plugged in, try a different cable: some USB cables carry power and no data." >&2
+        return 1
+    fi
+    echo "The devices this box can see, plugged in by USB:" >&2
+    for nm in "${entries[@]}"; do
+        kind=$(radio_kind "$nm")
+        printf '  /dev/serial/by-id/%s
+      %s
+' "$nm" "$kind" >&2
+        if [[ "$kind" == "looks like a radio" ]]; then n=$((n+1)); only="$nm"; fi
+    done
+    echo "" >&2
+    if (( n == 1 )); then
+        echo "Run this, which is the same command with the radio filled in:" >&2
+        echo "" >&2
+        printf '  sudo ./install.sh %s --serial /dev/serial/by-id/%s%s
+' \
+               "$(basename "$TARBALL")" "$only" "$([[ "$MODE" == server ]] && echo ' --mode server' || echo " --filter-group <your TAK group>")" >&2
+        return 0
+    fi
+    if (( n == 0 )); then
+        echo "None of those looks like a radio. Plug the gateway radio in and run this again." >&2
+    else
+        echo "More than one of those looks like a radio, so you have to say which is the gateway:" >&2
+        echo "add --serial followed by one of the paths above." >&2
+    fi
+    return 1
+}
+
 if [[ "$MODE" == hub ]]; then
     :   # a hub has no radio and no filter group
 elif [[ "$MODE" == server ]]; then
-    [[ -n "$SERIAL" ]] || die "give --serial </dev/serial/by-id/...> (a box without TAK Server needs no filter group)"
+    [[ -n "$SERIAL" ]] || { name_the_radios || true; die "nothing was installed: give --serial </dev/serial/by-id/...>"; }
 else
-    [[ -n "$SERIAL" && -n "$FILTER_GROUP" ]] \
-        || die "this box carries no mesh config to adopt: give --serial </dev/serial/by-id/...> and --filter-group <group>"
+    if [[ -z "$SERIAL" ]]; then
+        name_the_radios || true
+        die "nothing was installed: give --serial </dev/serial/by-id/...> and --filter-group <your TAK group>"
+    fi
+    [[ -n "$FILTER_GROUP" ]] || die "give --filter-group <your TAK group> (the group the TAK Server puts this mesh in)"
 fi
 [[ "$MODE" == hub && -z "$SERIAL" ]] || [[ "$SERIAL" =~ ^/dev/serial/by-id/[A-Za-z0-9._:+=-]{4,180}$ ]] || die "serial must be a /dev/serial/by-id/ path (ports shuffle; by-id does not)"
 [[ "$MODE" != tak-server && -z "$FILTER_GROUP" ]] || [[ "$FILTER_GROUP" =~ ^[A-Za-z0-9_-]{1,40}$ ]] || die "bad filter group"

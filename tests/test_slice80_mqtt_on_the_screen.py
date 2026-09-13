@@ -53,7 +53,10 @@ check_true("AC5 and points at Connections for joining boxes", "/connections" in 
 # AC6 it is on the Radio page, and reachable from anywhere
 web = read("src/mesh_manager/web.py") or ""
 check_true("AC6 the Radio page renders it", "{mqtt_card(mqtt, cfg)}" in web)
-check_true("AC6 the route hands it the state", 'radio_body(self._ask("config"), own, st.get("mqtt"))' in web)
+import re as _re
+_call = _re.search(r'radio_body\(self\._ask\("config"\)[^)]*\)', web)
+check_true("AC6 the route hands it the state",
+           _call is not None and 'st.get("mqtt")' in _call.group(0), _call.group(0) if _call else "no radio_body call")
 check_true("AC6 the state strip carries it, linked to Radio", "This box carries the radio&#39;s MQTT" in web)
 
 # AC7 a box with no proxy is not made to look faulty in the strip

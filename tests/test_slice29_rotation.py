@@ -16,7 +16,7 @@ from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 events = []
 br._emit = lambda kind, **kw: events.append((kind, kw)) if kind != "log" else None
 def pkt(fr):

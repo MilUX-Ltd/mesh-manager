@@ -34,7 +34,7 @@ check("AC4 the image lands in the volume, whole", (os.path.exists(dst), os.path.
 
 # AC5: the order of the steps is the same on both
 steps = []
-br = B.Bridge({"SERIAL": "", "MODE": "desktop"}, socket_path=os.path.join(tempfile.mkdtemp(), "b.sock"), state_dir=tempfile.mkdtemp())
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "desktop"}, socket_path=os.path.join(tempfile.mkdtemp(), "b.sock"), state_dir=tempfile.mkdtemp())
 br.wait_volume = lambda label, timeout: (steps.append(("wait_volume", label)) or found)
 br.mount = lambda dev: (steps.append(("mount", dev)) or found)
 br.copy = lambda s_, m: steps.append(("copy", os.path.basename(s_)))

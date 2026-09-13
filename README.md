@@ -135,7 +135,24 @@ Python and every library inside them.
 ## Install
 
 Take the release tarball and its `install.sh` from the
-[releases page](../../releases), then, as root on the box:
+[releases page](../../releases).
+
+**First, find the radio.** Plug the gateway radio into a USB socket and ask the box what it can see:
+
+```bash
+ls /dev/serial/by-id/
+```
+
+Each line is one thing plugged in. The radio is usually the one naming its chip or its maker, for
+example `usb-Espressif_USB_JTAG_serial_debug_unit_...`; anything mentioning GPS or u-blox is a
+position receiver rather than a radio. The whole path is `/dev/serial/by-id/` followed by the name.
+These names stay the same when the box reboots or the cable moves socket, which is why they are used
+rather than `/dev/ttyACM0`.
+
+If you would rather not read the list yourself, run the installer without `--serial` and it prints
+what it can see, and the command to run next.
+
+**Then install**, as root on the box:
 
 ```bash
 ./install.sh mesh-manager-<version>-amd64.tgz \

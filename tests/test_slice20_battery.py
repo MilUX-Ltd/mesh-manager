@@ -17,7 +17,7 @@ import fakebridge_lib as FB  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 
 
 def telem(fr, level, volts):
@@ -46,7 +46,7 @@ check("AC2 links rows carry the same", (L.get("charging"), L.get("battery")), (T
 # AC3 no stored radio position
 br.interface.position = {"latitude": 54.1, "longitude": -0.3, "locationSource": "LOC_MANUAL"}
 br.meshtastic_devices["!aa000001"]["last_lat"] = 0; br.meshtastic_devices["!aa000001"]["last_lon"] = 0
-br.conf = {"SERIAL": ""}
+br.conf = {"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}
 check("AC3 a stored radio position is not a source", br.own_position(), None)
 br.interface.position = {"latitude": 51.4, "longitude": -1.3, "locationSource": "LOC_INTERNAL", "time": int(time.time()) - 30}
 check("AC3 the radio's own fresh GPS fix still is", (br.own_position() or {}).get("source"), "radio_gps")

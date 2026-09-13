@@ -819,8 +819,10 @@ def state_strip(st):
     elif st.get("bootloader"):
         lamp, word = "bad", "Radio in bootloader"
     elif not st.get("radio_present"):
-        # Spec 062: a laptop with nothing plugged in yet is not a fault, it is waiting
-        lamp, word = ("warn", "Watching for a radio") if st.get("mode") == "desktop" else ("bad", "Radio missing")
+        # Spec 062 for a laptop, Spec 100 for every other shape: nothing chosen yet is waiting, and
+        # a radio that was chosen and is now gone is a fault. They must not read the same.
+        lamp, word = (("warn", "Watching for a radio") if st.get("mode") == "desktop" or not st.get("radio")
+                      else ("bad", "Radio missing"))
     elif not st.get("connected"):
         lamp, word = "warn", "Radio not connected"
     elif st.get("tak") == "off":
@@ -1044,7 +1046,13 @@ def overview_cards(st):
     heard, db = int(st.get("nodes_seen") or 0), st.get("nodes_db")
     face = "".join([
         (card("Radio", "none: this site is a hub<div class='meta'>peers join it by an invite; their pictures show here</div>", "ok") if st.get("mode") == "hub"
-         else card("Radio", f"{e(radio_txt)}<div class='meta'>{e(radio)}</div>", radio_cls)),
+         else card("Radio", ("watching for a radio<div class='meta'>none chosen yet. "
+                             "<a href='/radio'>Plug one in and choose it</a>, and this box is on the air.</div>")
+                   if not st.get("radio") else
+                   (f"{e(radio_txt)}<div class='meta'>{e(radio)}"
+                    + ("<br><a href='/radio'>Choose a different radio</a>" if not present else "")
+                    + "</div>"),
+                   "warn" if not st.get("radio") else radio_cls)),
         card("Channel utilisation", (f"<a href='/health'>{float(st['chutil']):.1f}% <span class='pill'>{e(st.get('verdict') or '')}</span></a>" if st.get("chutil") is not None else "<a href='/health'>no reading yet</a>")
              + "<div class='meta'>how busy the channel is · now, from this radio</div>",
              {"quiet": "ok", "normal": "ok", "busy": "warn", "saturated": "bad"}.get(st.get("verdict") or "", "")),
@@ -4184,9 +4192,71 @@ def mqtt_card(m, cfg=None):
               "<a class='plain' href='/connections'>Connections</a>.</p></div>")
 
 
-def radio_body(cfg, own_id="?", mqtt=None):
+def gateway_card(gw):
+    """Spec 100: which radio this box uses, and every radio it could use instead.
+
+    It is shown whether or not a radio is working, because the case that matters most is a box that
+    has none: the chooser is then the only thing on the page worth looking at."""
+    gw = gw or {}
+    act = _act("gateway_set")
+    cur = str(gw.get("serial") or "")
+    cands = [c for c in (gw.get("candidates") or []) if isinstance(c, dict) and c.get("path")]
+    if gw.get("watching"):
+        head = ("<p class='meta'>This box has no radio yet, so it is <b>watching for one</b>. "
+                "Plug the gateway radio into a USB socket and choose it below; nothing else needs doing.</p>")
+    elif not gw.get("present"):
+        head = (f"<p class='bad'>The radio this box is set to use is not plugged in.</p>"
+                f"<p class='meta'>It is set to <code>{e(cur)}</code>. Either plug that one back in, or choose "
+                "one of the radios below and the box will use that instead.</p>")
+    else:
+        head = (f"<p class='meta'>This box is using <code>{e(cur)}</code>. "
+                "Choose a different one only if you are changing the radio: the mesh is down while the bridge restarts.</p>")
+    if not cands:
+        rows = ("<p class='meta'>No radio is plugged in that this box can see. Plug one into a USB socket and "
+                "this list fills in. If it is already plugged in, try a different cable: some carry power and no data.</p>")
+    else:
+        rows = "<div class='tablewrap'><table><thead><tr><th>Radio</th><th></th></tr></thead><tbody>"
+        for c in cands:
+            path = str(c.get("path") or "")
+            using = cur and os.path.realpath(path) == os.path.realpath(cur)
+            what = " ".join(x for x in (str(c.get("vendor") or ""), str(c.get("product") or "")) if x) or os.path.basename(path)
+            rows += (f"<tr><td><b>{e(what)}</b><div class='sub'><code>{e(path)}</code></div></td><td>"
+                     + ("<span class='pill'>in use</span>" if using else
+                        f"<form data-action='gateway_set' data-risk='change' data-confirm=\"{e(act.get('confirm') or '')}\">"
+                        f"<input type='hidden' name='path' value='{e(path)}'>"
+                        "<button type='submit' class='line'>Use this radio</button>"
+                        "<div class='res meta' role='status'></div></form>")
+                     + "</td></tr>")
+        rows += "</tbody></table></div>"
+    # Spec 101: what it would cost to lose this radio right now, and the one action that changes it.
+    kept = gw.get("export_at")
+    ex = _act("gateway_export")
+    keep = (f"<form data-action='gateway_export' style='margin-top:var(--s2)'>"
+            f"<button type='submit' class='line'>{e(ex['title'])}</button>"
+            "<div class='res meta' role='status'></div></form>")
+    if kept:
+        saved = (f"<p class='meta'>A copy of this radio's configuration and channels was kept on the box "
+                 f"<time datetime='{e(str(kept))}' data-age>{e(age(str(kept)))}</time>. Restore it onto a "
+                 "replacement on the <a href='/bench'>Bench</a>, then choose that radio here.</p>")
+    else:
+        saved = ("<p class='bad'>No copy of this radio's configuration has been kept.</p>"
+                 "<p class='meta'>The key your whole mesh uses exists only on this radio. If it is lost or "
+                 "broken, no replacement can join the same mesh and every device has to be set up again by "
+                 "cable. Keeping a copy takes a moment and nothing is written to any radio.</p>")
+    return (f"<section class='card' style='max-width:860px;margin-top:var(--s3)'><h2 style='margin-top:0'>{e(_act('gateway')['title'])}</h2>{head}{rows}"
+            "<p class='meta'>A radio is named by a path that survives a reboot and a change of socket. "
+            "Changing the radio does not carry the mesh across: a different radio is a different identity, "
+            "so a replacement can be given the same channel but <b>cannot manage the fleet</b> until each "
+            "device has been given its admin key.</p>"
+            f"<h3 style='margin-bottom:var(--s1)'>If this radio is lost</h3>{saved}{keep}</section>")
+
+
+def radio_body(cfg, own_id="?", mqtt=None, gw=None):
     if not cfg or "long_name" not in cfg:
-        return "<p class='warn'>The radio's settings are not readable yet. The bridge reads them when the radio connects; if the strip above says the radio is missing, check the USB cable.</p>"
+        # the chooser comes first here on purpose: a page that says "not readable yet" and offers
+        # nothing is what this card exists to stop.
+        return (gateway_card(gw) +
+                "<p class='warn'>The radio's settings are not readable yet. The bridge reads them when the radio connects; if the strip above says the radio is missing, check the USB cable.</p>")
     v = lambda k: e(str(cfg.get(k) if cfg.get(k) is not None else ""))
     rs, rr = _act("radio_set"), _act("radio_set_region")
     settings = (f"<form class='card' data-action='radio_set' data-risk='change' data-confirm=\"{e(rs['confirm'])}\">"
@@ -4206,7 +4276,12 @@ def radio_body(cfg, own_id="?", mqtt=None):
               f"<label>Role{sel('role', ins['role']['values'], cfg.get('role'))}</label>"
               f"<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand: changing the region or preset moves this radio to another band; a fleet on the old setting will not hear it, and the radio reboots. This radio is {e(own_id)}.</span></label>"
               "<button type='submit' class='danger'>Write and reboot the radio</button><div class='res meta' role='status'></div></form>")
-    return f"{read_line(cfg, '/radio')}<div class='cards' id='radio-cards'>{settings}{mqtt_card(mqtt, cfg)}{region}</div>{WRITE_JS}"
+    # the chooser is on the page whether or not the radio is readable: changing a working radio is
+    # the case that sent this card to the board, and a card you can only reach once the radio has
+    # already failed is no use for that.
+    # below the grid, not inside it: the other cards hold short form fields and this one holds a
+    # table of by-id paths, which a third of the page's width turns into a column of broken words.
+    return f"{read_line(cfg, '/radio')}<div class='cards' id='radio-cards'>{settings}{mqtt_card(mqtt, cfg)}{region}</div>{gateway_card(gw)}{WRITE_JS}"
 
 
 def proposal_form(pr):
@@ -4707,7 +4782,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/radio":
                 st = self._ask("status")
                 own = (st.get("own") or {}).get("id") or "?"
-                return self._send(200, self._page("This radio", radio_body(self._ask("config"), own, st.get("mqtt")), "/radio", own=own, st=st))
+                return self._send(200, self._page("This radio", radio_body(self._ask("config"), own, st.get("mqtt"), gw=self._ask("gateway")), "/radio", own=own, st=st))
             if path == "/node":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 nid = (q.get("id", [""])[0] or "").strip()

@@ -28,20 +28,20 @@ def wait_for(pred, secs=6.0):
     return False
 
 hub_state = tempfile.mkdtemp()
-hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
+hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
 st = hub.op_status()
 check("AC2 a hub has no radio and no TAK", (st.get("mode"), st.get("radio"), st.get("tak")), ("hub", None, "off"))
 check_true("AC2 status carries the site id and name", re.fullmatch(r"[0-9a-f]{64}", str((st.get("site") or {}).get("id"))) is not None and (st.get("site") or {}).get("name") == "Hub", repr(st.get("site")))
 check_true("AC2 the listener is bound and its port reported", isinstance(st.get("peer_port"), int) and st.get("peer_port") > 0, repr(st.get("peer_port")))
 check_true("AC2 the identity files exist, the key private", os.path.exists(os.path.join(hub_state, "site.crt")) and (os.stat(os.path.join(hub_state, "site.key")).st_mode & 0o777) == 0o600)
-hub2 = B.Bridge({"SERIAL": "", "MODE": "hub", "SITE_NAME": "Hub"}, socket_path=os.path.join(hub_state, "b2.sock"), state_dir=hub_state)
+hub2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "SITE_NAME": "Hub"}, socket_path=os.path.join(hub_state, "b2.sock"), state_dir=hub_state)
 check("AC2 a second start reads the same id back", hub2.op_status().get("site", {}).get("id"), st["site"]["id"])
 check("AC2 no listener without PEER_BIND", hub2.op_status().get("peer_port"), None)
 
 inv = hub.op_peer_invite()
 check_true("AC3 an invite: code, expiry, text", bool(inv.get("code")) and bool(inv.get("expires")) and str(inv.get("invite", "")).startswith("127.0.0.1:") and inv.get("invite", "").count("/") == 2, repr(inv))
 site_state = tempfile.mkdtemp()
-site = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
+site = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
 site_id = site.op_status().get("site", {}).get("id")
 j = site.op_peer_join(invite=inv["invite"])
 check_true("AC3 join answers the hub's identity", j.get("joined") is True and j.get("site") == st["site"]["id"] and j.get("name") == "Hub", repr(j))
@@ -56,7 +56,7 @@ check_true("AC4 the site's nodes appear on the hub, marked remote with their ori
 check("AC4 the hub has no nodes of its own", [n["id"] for n in hub.op_nodes().get("nodes", []) if not n.get("remote")], [])
 
 bad_state = tempfile.mkdtemp()
-bad = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Stranger"}, socket_path=os.path.join(bad_state, "b.sock"), state_dir=bad_state)
+bad = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Stranger"}, socket_path=os.path.join(bad_state, "b.sock"), state_dir=bad_state)
 host, port, code, fp = re.match(r"([^:]+):(\d+)/([^/]+)/([0-9a-f]+)", inv["invite"]).groups()
 r = bad.op_peer_join(invite=f"{host}:{port}/WRONGCODE/{fp}")
 check_true("AC5 a wrong code is refused in words", "error" in r and "code" in str(r["error"]).lower(), repr(r))

@@ -344,7 +344,10 @@ def serve_one(c):
     _nodes = [dict(n, group=DEMO_MEMBERS.get(n["id"], ""),
                    group_colour=(DEMO_GROUPS.get(DEMO_MEMBERS.get(n["id"], "")) or {}).get("colour", ""))
               for n in NODES]
-    rep = {"status": STATUS, "nodes": {"nodes": _nodes, "count": len(_nodes), "grouped": bool(DEMO_GROUPS)},
+    # DEMO_NO_RADIO shows the shape a box has before anybody has chosen a radio (Spec 100), which is
+    # the state the screen most needs to be looked at in and the hardest one to reach by accident.
+    _st = dict(STATUS, radio="", radio_present=False, connected=False) if os.environ.get("DEMO_NO_RADIO") else STATUS
+    rep = {"status": _st, "nodes": {"nodes": _nodes, "count": len(_nodes), "grouped": bool(DEMO_GROUPS)},
            "groups": {"groups": [{"id": DEMO_GROUPS[k]["id"], "name": k, "icon": DEMO_GROUPS[k]["icon"], "colour": DEMO_GROUPS[k]["colour"],
                                   "count": sum(1 for g in DEMO_MEMBERS.values() if g == k), "declared": True}
                                  for k in sorted(DEMO_GROUPS)],
@@ -368,6 +371,17 @@ def serve_one(c):
            "peer_join": {"joined": True, "site": "ef" * 32, "name": "Far hub", "confirmed": True}, "peer_forget": {"forgotten": True, "site": req.get("site")},
            "peer_sharing_set": {"written": {"out": True, "in": True}, "site": req.get("site"), "cls": req.get("cls"), "confirmed": True},
            "peer_send_text": {"sent": True, "mid": 8181, "site": req.get("site"), "channel": int(req.get("channel") or 0)},
+           # Spec 100: the demo answers the chooser too, with the gateway in use and one spare, or
+           # the Radio page would draw a card with nothing behind it.
+           "gateway": {"serial": "" if os.environ.get("DEMO_NO_RADIO") else STATUS["radio"],
+                       "present": not os.environ.get("DEMO_NO_RADIO"), "watching": bool(os.environ.get("DEMO_NO_RADIO")),
+                       "export_at": None if os.environ.get("DEMO_NO_EXPORT") else "2026-09-12T21:14:00Z",
+                       "candidates": [{"path": STATUS["radio"], "kind": "radio", "vendor": "Espressif", "product": "USB JTAG serial debug unit"},
+                                      {"path": "/dev/serial/by-id/usb-1a86_USB_Single_Serial_58A3097418-if00", "kind": "radio", "vendor": "1a86", "product": "USB Single Serial"}]},
+           "gateway_export": {"export": "/var/lib/vantage-mesh/exports/!ee000001/2026-09-13T21-00-00Z.json", "bytes": 2143, "id": "!ee000001",
+                              "note": "restore this onto a replacement radio on the Bench, then choose it as the gateway."},
+           "gateway_set": {"serial": req.get("path"), "was": STATUS["radio"], "confirmed": True,
+                           "note": "the bridge is restarting onto that radio: the mesh is down for a few seconds"},
            "bench_devices": {"gateway": STATUS["radio"], "devices": [
                {"path": "/dev/serial/by-id/usb-Seeed_T1000-E_9F3A-if00", "tty": "ttyACM3", "bootloader": False},
                {"path": "/dev/serial/by-id/usb-RAKwireless_WisCore_RAK4631_Board_BOOT-if00", "tty": "ttyACM4", "bootloader": True,

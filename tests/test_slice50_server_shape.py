@@ -17,7 +17,7 @@ open(os.path.join(d, "config"), "w").write("SERIAL=\nMODE=server\n")
 check("AC1 MODE=server is read back", CM.read_config(os.path.join(d, "config")).get("MODE"), "server")
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": "", "MODE": "server"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=False)
 st = br.op_status()
 check("AC2 status carries the mode and tak off", (st.get("mode"), st.get("tak")), ("server", "off"))
 check("AC2 the socket is a null socket", type(getattr(br, "socket_client", None)).__name__, "NullSocket")
@@ -29,7 +29,7 @@ check_true("AC2 to_tak cannot be turned on", "TAK" in str(r.get("error", "")), r
 check("AC2 to_tak reads off", br.op_alert_settings().get("to_tak"), False)
 
 state2 = tempfile.mkdtemp()
-br2 = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state2, "b.sock"), state_dir=state2, observe=True)
+br2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state2, "b.sock"), state_dir=state2, observe=True)
 st2 = br2.op_status()
 check("AC3 the default mode reports tak-server and tak on", (st2.get("mode"), st2.get("tak")), ("tak-server", "on"))
 check_true("AC3 observe still counts, it is not the null socket", type(getattr(br2, "socket_client", None)).__name__ != "NullSocket")

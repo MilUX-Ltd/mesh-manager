@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 1.2.1 (13 September 2026)
+
+**A radio can be chosen, changed and replaced from the box.** Until now the gateway radio was named once on
+the command line, before anybody had seen the screen, and could not be changed from the product at all. A box
+given no radio refused to start; a box pointed at a radio that was not there said so in red and offered
+nothing.
+
+- **The installer says what it can see.** Run it without naming a radio and it lists what is plugged in, says
+  which look like a radio and which are a position receiver, and where one is obvious prints the whole command
+  to run next with the path filled in. It still refuses, because it must not guess which of several radios is
+  the gateway, but it refuses with the list in its hand. With nothing plugged in it says so, and mentions the
+  cable that carries power and no data.
+- **A box with no radio is watching for one**, not broken, and says so. It starts, the screen runs, and
+  everything that does not need a radio works.
+- **The Radio page chooses the radio.** Every radio plugged in is listed, the one in use is marked, and
+  choosing another writes it down and restarts the bridge onto it, which takes the mesh down for a few
+  seconds. Only a radio the box can see may be chosen.
+- **A copy of the gateway's own settings can be kept**, channels and keys included, readable only by the box.
+  Restore it onto a replacement radio and that radio joins the same mesh. The page says plainly when no copy
+  has been kept, and what that would cost.
+- **What a copy cannot carry, said out loud.** A radio's own identity cannot be written, so a replacement is a
+  different radio to the devices you manage: it can see the mesh and talk on it, and cannot write to a device
+  over the air until that device has been given its key.
+
+The README and the guide now begin where an operator begins: plug the radio in, find it, install against it.
+
 ## 1.2.0 (13 September 2026)
 
 Nine changes under one heading, **running a fleet**: the day-to-day of keeping thirty radios configured,

@@ -22,7 +22,7 @@ from mesh_manager import bridge as B, catalogue as C, web as W  # noqa: E402
 from meshtastic.protobuf import portnums_pb2, mesh_pb2  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 br.READBACK_S = 2
 events = []
 _orig = br._emit
@@ -78,7 +78,7 @@ class FakeGpsd(threading.Thread):
 g = FakeGpsd(); g.start()
 opened = []
 br.gps_port_factory = lambda path: opened.append(path) or fakegw_lib.FakeBenchIface(path)
-br.conf = {"SERIAL": "", "MAP_GPS": f"gpsd://127.0.0.1:{g.port}"}
+br.conf = {"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MAP_GPS": f"gpsd://127.0.0.1:{g.port}"}
 fix = br.read_gps(timeout=3)
 check("AC3 the fix from gpsd", (round((fix or {}).get("lat", 0), 4), round((fix or {}).get("lon", 0), 4), (fix or {}).get("sats"), (fix or {}).get("time")), (51.2128, -1.5056, 9, "2026-09-03T10:40:00Z"))
 check_true("AC3 gpsd was asked to WATCH in JSON and the port never opened", g.watched and b"?WATCH" in g.watched[0] and b"json" in g.watched[0] and not opened)
@@ -98,13 +98,13 @@ class NoFixGpsd(threading.Thread):
 nf = NoFixGpsd(); nf.start()
 byid = tempfile.mkdtemp(); GPS = os.path.join(byid, "usb-u-blox_AG_GPS_GNSS_Receiver-if00"); open(GPS, "w").close()
 br.serial_dir = byid
-br.conf = {"SERIAL": ""}
+br.conf = {"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}
 br.gpsd_address = ("127.0.0.1", nf.port)
 opened.clear()
 fix = br.read_gps(timeout=2)
 check("AC3 gpsd reachable but no fix: no fix, the port never opened, the sky recorded", (fix, opened, (br.gps_state or {}).get("reachable"), (br.gps_state or {}).get("fix"), (br.gps_state or {}).get("seen"), (br.gps_state or {}).get("used")), (None, [], True, False, 14, 0))
 br.serial_dir = byid
-br.conf = {"SERIAL": ""}
+br.conf = {"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}
 br.gpsd_address = ("127.0.0.1", 9)     # nothing there: fall through to the port
 br.gps_port_factory = lambda path: opened.append(path) or type("P", (), {"readline": lambda s_: b"$GPGGA,073542.00,5112.76800,N,00130.33720,W,1,08,1.02,84.3,M,47.2,M,,*5C\r\n", "close": lambda s_: None})()
 fix = br.read_gps(timeout=2)

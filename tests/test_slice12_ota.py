@@ -23,7 +23,7 @@ check_true("AC1 each takes a node id", all(any(i["type"] == "node" and i["name"]
 check("AC1 parity holds", C.parity_problems(C.ACTIONS, W.api_action_routes(), [t["name"] for t in W.mcp_tools("act")]), [])
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
 OURS = b"\x07" * 32
 br.interface.localNode.localConfig.security.public_key = OURS
 br.READBACK_S = 2

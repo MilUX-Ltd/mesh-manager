@@ -35,5 +35,9 @@ if cut is None:
 else:
     check_true("AC5 the cut copies the guide", "docs/GUIDE.md" in cut)
 check_true("AC6 no radio id outside the demo block", all(re.fullmatch(r"!(ee0000[0-9]{2}|aa000001|bb000002|cc000003|dd000004|00000001|ffffffff)", x) for x in re.findall(r"![0-9a-f]{8}", g)), str(re.findall(r"![0-9a-f]{8}", g)[:5]))
-check_true("AC6 no serial path or port", "/dev/serial/by-id/" not in g and "ttyACM" not in g)
+# Narrowed 13 September 2026: the guide has to name the directory to teach an operator how to find
+# their radio (Spec 099), and a bare /dev/serial/by-id/ discloses nothing. What must never appear is
+# a path naming an actual device, which is what this check was written to keep out.
+_named = [x for x in re.findall(r"/dev/serial/by-id/\S+", g) if x.rstrip("`.,)") != "/dev/serial/by-id/"]
+check("AC6 no serial path naming a device, and no port", _named + re.findall(r"ttyACM\S*", g), [])
 finish()

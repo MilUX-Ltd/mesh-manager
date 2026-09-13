@@ -22,7 +22,7 @@ def strip(gps):
 from mesh_manager.bridge import Bridge  # noqa: E402  (fakegw_lib.install() above supplies the gateway)
 
 b = Bridge.__new__(Bridge)               # no radio, no threads: only op_status is under test
-b.conf, b.started, b.observe = {"SERIAL": ""}, 0.0, False
+b.conf, b.started, b.observe = {"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, 0.0, False
 b.last_activity = b.last_forwarded = None
 b.interface = None
 b.state_dir, b.socket_path, b.watchdog_state = "/tmp", "/tmp/s.sock", "pinging"

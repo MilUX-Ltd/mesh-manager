@@ -22,8 +22,8 @@ def wait_for(pred, secs=6.0):
     return False
 
 hub_state = tempfile.mkdtemp(); site_state = tempfile.mkdtemp()
-hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
-site = B.Bridge({"SERIAL": "", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
+hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "Hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_state, "b.sock"), state_dir=hub_state)
+site = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
 hub_id, site_id = hub.op_status()["site"]["id"], site.op_status()["site"]["id"]
 inv = hub.op_peer_invite(); j = site.op_peer_join(invite=inv["invite"])
 check_true("setup: paired", j.get("joined") is True and wait_for(lambda: any(p["state"] == "connected" for p in hub.op_peers()["peers"])), repr(j))

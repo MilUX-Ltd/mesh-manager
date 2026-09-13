@@ -24,7 +24,7 @@ check("AC1 70 m away is inside a 100 m circle", inc(51.0, -1.0, 51.0, -1.001, 10
 check("AC1 and outside a 50 m one", inc(51.0, -1.0, 51.0, -1.001, 50) if inc else "missing", False)
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
 r = br.op_fence_set(name="Compound", kind="polygon", points=json.dumps(SQ), rule="both") if hasattr(br, "op_fence_set") else {}
 fid = r.get("id")
 check_true("AC2 a polygon fence is stored and returns an id", bool(fid) and r.get("confirmed") is True, repr(r))

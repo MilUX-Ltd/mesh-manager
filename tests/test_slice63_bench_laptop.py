@@ -43,7 +43,7 @@ check("AC4 a silent device is still listed, by its path", (len(plain), plain[0][
 
 # AC5: the operation and the page
 st = tempfile.mkdtemp()
-b = B.Bridge({"SERIAL": "", "MODE": "desktop"}, socket_path=os.path.join(st, "b.sock"), state_dir=st)
+b = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "desktop"}, socket_path=os.path.join(st, "b.sock"), state_dir=st)
 b._ports_for_test = MAC
 d = b.op_bench_devices()
 check_true("AC5 the operation answers from the ports", isinstance(d.get("devices"), list) and "gateway" in d)

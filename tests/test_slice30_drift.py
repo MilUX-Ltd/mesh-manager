@@ -16,7 +16,7 @@ from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": ""}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 br._emit = lambda kind, **kw: None
 r = br.op_profile_set(tx_power=20, position_broadcast_secs=900, region="eu_868")
 check("AC1 the profile keeps its fields, region upper-cased, unset fields unenforced", (r["written"]["tx_power"], r["written"]["region"], br.op_profile()["role"]), (20, "EU_868", None))

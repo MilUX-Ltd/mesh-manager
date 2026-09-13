@@ -16,7 +16,7 @@ from fakebridge_lib import start_fake_bridge  # noqa: E402
 from mesh_manager import bridge as B, web as W  # noqa: E402
 
 state = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": "", "MAP_LAT": "51.2128", "MAP_LON": "-1.5056"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
+br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MAP_LAT": "51.2128", "MAP_LON": "-1.5056"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True, gps_reader=False)
 events = []
 br._emit = lambda kind, **kw: events.append((kind, kw)) if kind != "log" else None
 sock = br.socket_client
@@ -44,7 +44,7 @@ br.meshtastic_devices["!cc000003"] = {"long_name": "Stranger", "meshtastic_id": 
 br._mesh_radio["!cc000003"] = {"heard": B.utc(time.time()), "snr": 3.0, "hops": 0}
 events.clear(); br._judge_alerts()
 check("AC1 an unregistered node raises unknown once", [kw.get("what") for k, kw in events if k == "alert" and kw.get("state") == "open"], ["unknown"])
-br2 = B.Bridge({"SERIAL": "", "MAP_LAT": "51.2128", "MAP_LON": "-1.5056"}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
+br2 = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MAP_LAT": "51.2128", "MAP_LON": "-1.5056"}, socket_path=os.path.join(state, "b2.sock"), state_dir=state, observe=True, gps_reader=False)
 ev2 = []; br2._emit = lambda kind, **kw: ev2.append((kind, kw)) if kind != "log" else None
 br2.meshtastic_devices["!cc000003"] = dict(br.meshtastic_devices["!cc000003"])
 br2._mesh_radio["!cc000003"] = {"heard": B.utc(time.time()), "snr": 3.0, "hops": 0}
