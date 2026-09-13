@@ -91,21 +91,31 @@ check_true("AC6 the text colour is still left alone",
 # AC7 both layers, and playback by node. Named rather than counted: Spec 083 folded the two live call
 # sites into one drawNodes, and a count would have failed on a change that kept the guarantee.
 calls = [l.strip() for l in web.splitlines() if "nodeIcon(" in l and "function nodeIcon(" not in l]
-# each call passes a third argument, and the colour reaching it comes from nodeColour, whether inline
-# or through a variable the same block assigned from it
+# Each call passes a third argument, and the colour reaching it is derived from the node. Spec 090
+# put one decider in front of nodeColour, groupColour, which returns the group's colour, the fixed
+# grey, or the identity colour. Naming nodeColour here pinned the check to the mechanism instead of
+# the guarantee, and it failed on a change that kept the guarantee exactly.
+COLOURERS = ("groupColour(", "nodeColour(")
+
+
 def coloured(line):
     arg = line.split("nodeIcon(", 1)[1]
     third = arg.split(",", 2)[2] if arg.count(",") >= 2 else ""
-    return "nodeColour(" in third or re.search(r"\bcol\b", third) is not None
+    return any(c in third for c in COLOURERS) or re.search(r"\bcol\b", third) is not None
+
+
 check_true("AC7 every marker is drawn with a colour", bool(calls) and all(coloured(c) for c in calls))
-check_true("AC7 and that colour is the node's own", re.search(r"\bcol\s*=\s*nodeColour\(", web) is not None)
+check_true("AC7 and that colour is the node's own",
+           re.search(r"\bcol\s*=\s*(group|node)Colour\(", web) is not None)
 live = [c for c in calls if "'play'" not in c]
 play = [c for c in calls if "'play'" in c]
 check_true("AC7 the live layer is covered, through the one draw both maps use",
            len(live) == 1 and "function drawNodes(" in web)
 check_true("AC7 and the playback layer with it", len(play) == 1)
+# the point being played carries no identity; the colour must come from the node it belongs to
 check_true("AC7 playback colours by the node being played, not by the point",
-           len(play) == 1 and "nodeColour(tr.id)" in play[0])
+           len(play) == 1 and re.search(r"(group|node)Colour\((nn|tr)\b", play[0]) is not None,
+           (play or ["none"])[0][-90:])
 
 # AC8 the icon was already per-node and stays that way
 check_true("AC8 the icon still comes from the node", "nodeIcon(n.icon," in web and "nodeIcon(nn.icon," in web)

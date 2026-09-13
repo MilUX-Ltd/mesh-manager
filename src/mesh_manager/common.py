@@ -10,6 +10,11 @@ DEFAULT_STATE = "/var/lib/vantage-mesh"          # the health contract keeps its
 # Spec 044: the map icons a node or a group may carry. The screen draws them; the bridge validates against
 # this list, so the two cannot disagree. radio is the default.
 NODE_ICONS = ("radio", "person", "vehicle", "router", "repeater", "base", "drone", "boat", "bike", "dog", "box", "medic", "flag", "star")
+# Spec 090: a group's colour, from Spec 081's eight identity colours and no others. Green, amber
+# and red mean signal band and alert state on the same map, so a group wearing one would make a
+# node's colour mean two things at once. Here beside the icons because the bridge, the catalogue
+# and the screen all need the same list.
+GROUP_COLOURS = ("node-1", "node-2", "node-3", "node-4", "node-5", "node-6", "node-7", "node-8")
 
 
 def utc(ts=None):

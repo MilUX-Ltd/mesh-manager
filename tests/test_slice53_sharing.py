@@ -39,7 +39,8 @@ def drain(kind=None):
             out.append(ev)
 
 sh = next(p for p in site.op_peers()["peers"] if p["id"] == hub_id)["sharing"]
-check("AC1 a new peer's defaults", {k: (v.get("out"), v.get("in")) for k, v in sh.items()}, {"nodes": (True, True), "messages": (False, True), "waypoints": (True, True), "alerts": (True, True)})
+check("AC1 a new peer's defaults", {k: (v.get("out"), v.get("in")) for k, v in sh.items()}, {"nodes": (True, True), "messages": (False, True), "waypoints": (True, True), "alerts": (True, True),
+       "groups": (True, True)})   # Spec 096 added groups; the check names every class on purpose
 check("AC1 messages carry a channel list", sh["messages"].get("channels"), [])
 r = site.op_peer_sharing_set(site=hub_id, cls="messages", out="on", **{"in": "on"}, channels="0")
 check_true("AC1 one class written and answered", r.get("written", {}).get("out") is True and r.get("written", {}).get("channels") == [0], repr(r))

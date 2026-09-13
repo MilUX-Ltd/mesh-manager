@@ -270,8 +270,24 @@ keys; **Over the air** on a managed row reads and writes it through the mesh. **
 node from the radio's database and the lists; it comes back if heard again.
 
 **Groups** is a fold below the table: a group is a word you give devices (a section, a vehicle, the
-routers) with a map icon its devices carry unless one has its own. **Fleet profile** and **Drift**
-below compare every device's last read-back against the settings the fleet should carry.
+routers) with a map icon its devices carry unless one has its own, and a map colour. Type over the
+name and press **Save the group** to rename it: the devices stay in it, and a joined box that also
+holds the group takes the new name. A group made on one box reaches every box it is joined to,
+along with who is in it, and removing it there removes it here. Two boxes can rename it on one and
+recolour it on the other, and both stand. **Fleet profile** and **Drift** below compare every
+device's last read-back against the settings the fleet should carry.
+
+**Carry this profile between boxes** is a fold under Fleet profile. It writes the five fields in the shape
+`meshtastic --export-config` writes them, so the CLI can apply them and another box can read them, and it
+reads a file the CLI wrote. Both spellings the CLI uses are understood.
+
+It is a **fleet profile, not a device backup**, and the difference matters before you send one to anybody.
+A real `--export-config` file carries the radio's private key, its admin keys and the channel URL, which is
+the channel key. This export carries none of them, and no owner and no location either: it is how a radio
+should behave, never who it is. Reading works the same way round. The five fields are taken; the owner, the
+location, the channel URL, the module settings and any keys are named back to you and left exactly where they
+were. Nothing from a file you paste is written to any radio, and a value out of range refuses the whole file
+rather than applying half of it.
 
 ![The Register page with the inventory columns](../assets/guide/register.png)
 
@@ -282,6 +298,25 @@ threshold, a node not in the register, a node outside the fence around the box, 
 changed key. Each is shown here and sent to All Chat Rooms on the TAK Server when To TAK chat is on.
 **Thresholds** is a fold: minutes of silence, the battery percentage, the radius round the box,
 and two switches.
+
+**Beacon** is a fold below them, and it is off until you turn it on. Every other proof the box holds that the
+mesh is alive is passive: something was heard, a message someone typed got a tick. On a quiet mesh nothing
+arrives for hours and nothing is wrong, which looks exactly like everything being wrong. The beacon is a
+message the box sends on its own, on a timer, so the two stop looking the same. It never appears in Messages.
+
+What it proves depends on what you aim it at, and the page says so rather than letting you assume.
+
+- **At a radio** (`!ee000011`) it is a round trip: the answer is that device's own acknowledgement, so an
+  answer means that device received it. Its alert names the device: *Tracker 4 has not answered 3 beacons*.
+- **At a channel** (`channel:0`) there is no such answer. The radio reports an acknowledgement when it hears
+  its own packet repeated by a neighbour, so an answer means something within one hop rebroadcast it, and
+  nothing about any named device. Its alert says *nothing repeated the last 3 beacons*, and never that the
+  mesh is down, because the box cannot know that.
+
+Set how often, and how many unanswered in a row raise the alert; an answer anywhere in the run resets the
+count. The floor is five minutes because every beacon is airtime on a shared channel that nobody asked for,
+and a beacon aimed at a channel is seen by every handset on it. If the radio is not there the beacon is not
+sent and nothing counts against the device, because that is the box's fault and not the device's.
 
 **Acknowledge** on a row says you know about it, and takes it off the open list without it coming straight
 back on the next pass. It is not a way of saying the condition is fine: when the condition genuinely clears
@@ -318,10 +353,11 @@ the screen, and what it said stays in the history as your record.
 
 ### What gets shared where
 
-Each peer's row opens *Sharing*: four classes, the picture (nodes, positions, battery, signal), messages,
-waypoints and alerts, each with Out (this leaves your site for that peer) and In (this shows here from that
-peer). Messages also take the channel indexes whose broadcasts leave; empty means every channel. Out of the
-box the picture, waypoints and alerts flow both ways and messages stay home. A channel that arrives from a
+Each peer's row opens *Sharing*: five classes, the picture (nodes, positions, battery, signal), messages,
+waypoints, alerts and groups, each with Out (this leaves your site for that peer) and In (this shows here from
+that peer). Messages also take the channel indexes whose broadcasts leave; empty means every channel. Out of
+the box the picture, waypoints, alerts and groups flow both ways and messages stay home. Groups carry the
+group itself and who is in it; turn its In off and this box keeps the scheme it has. A channel that arrives from a
 peer shows in Messages as its own chat, *MILUX-TAK via edge*; typing there sends your words to that site
 over the link.
 

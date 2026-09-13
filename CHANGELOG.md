@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 1.2.0 (13 September 2026)
+
+Nine cards for release 6339, **running a fleet**: the day-to-day of keeping thirty radios configured, rotated
+and answering, rather than setting one up for the first time. UAT complete.
+
+**Telling parts of a force apart on the map**
+
+- **A group has a colour** (Spec 090). Eight identity colours, none of them a green, an amber or a red, because
+  those already mean signal band and alert state on the same map. Two groups may share one. A node with no
+  group keeps the colour its id gives it until a group exists, so no box's map turns monochrome overnight.
+- **Filter the map by group** (Spec 091), many at once, with the ungrouped as a category of their own rather
+  than an empty name. The filter is per screen and is kept in the browser: it never crosses to a joined box,
+  and one screen filtering does not disturb another.
+- **Groups cross the peer link** (Spec 096). A group made on one box reaches every box joined to it, with its
+  colour and who is in it, and deleting it there removes it here. A group now has a stable id and the name is
+  an ordinary field, so a rename on one box and a recolour on the other both stand, and a delete leaves a
+  tombstone rather than being sent straight back. An older box gains ids on its first read and nobody loses
+  their group. The Groups fold gains a rename.
+
+**Keeping the fleet current**
+
+- **The checklist after a new channel** (Spec 094), not only after a rotation. A device counts back when its
+  own read-back carried the new channel, not merely when it was heard, because a device can talk on the
+  primary all day without ever being given the new slot.
+- **A rotation's waiting count in the state strip** (Spec 092), so how many radios are still to take a key is
+  on whatever page you are on.
+- **Over the air moves to the node's own page** (Spec 095), off the register row where it never fitted.
+- **Heard percentage on the node row** (Spec 093), where you are already looking.
+- **A beacon on a timer** (Spec 097), off by default. A message the box sends on its own so that a quiet mesh
+  and a dead one stop looking the same, with an alert after a run of unanswered ones. It says what its answer
+  proves: aimed at a radio it is a round trip and names the device; aimed at a channel it only proves a
+  neighbour repeated it, and its alert never claims the mesh is down. It is not a chat message and never
+  appears in Messages.
+- **Profiles in the Meshtastic CLI's YAML** (Spec 098). The fleet profile is written in the shape
+  `meshtastic --export-config` produces and read back from one, in both the spellings the CLI emits. It is a
+  fleet profile and not a device backup: no owner, no location, no keys and no channel URL go out, and
+  nothing that arrives in a file writes a key anywhere.
+
 ## 1.1.1 (13 September 2026)
 
 Two cards, both about the same thing: getting the agent's brief to the agent. 1.1.0 made the role and the

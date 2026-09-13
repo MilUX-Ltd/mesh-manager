@@ -102,10 +102,21 @@ def req(method, path, body=None, ctype="application/json"):
 st, page = req("GET", "/register")
 row_m = page[page.index("data-id='!aa000001'"):page.index("data-id='!bb000002'")]
 row_u = page[page.index("data-id='!bb000002'"):page.index("data-id='!cc000003'")]
-check_true("AC7 a managed row carries the Manage forms", "data-action='node_set'" in row_m and "data-action='node_set_region'" in row_m and "data-action='node_channel_push'" in row_m and "data-action='node_reboot'" in row_m)
-check_true("AC7 ...with the confirm tick naming the device", "!aa000001" in row_m and "confirm_tick" in row_m)
-check_true("AC7 ...and a Read over the air control", "data-action='node_read'" in row_m)
-check_true("AC7 an unmanaged row carries the bench hint and no remote form", "bring it to the bench" in row_u and "data-action='node_set'" not in row_u)
+# Spec 095 moved the over-the-air forms off the register row and onto the node's own page: four
+# forms and three tick boxes in one table cell were unusable on a phone. These checks named the
+# register row, which was where the forms happened to live, rather than the guarantee, which is
+# that a managed device has them and an unmanaged one is told why. Re-pointed at the node page.
+st_m, node_m = req("GET", "/node?id=!aa000001")
+st_u, node_u = req("GET", "/node?id=!bb000002")
+check_true("AC7 a managed device's page carries the Manage forms",
+           all(f"data-action='{a}'" in node_m for a in ("node_set", "node_set_region", "node_channel_push", "node_reboot")),
+           f"HTTP {st_m}")
+check_true("AC7 ...with the confirm tick naming the device", "!aa000001" in node_m and "confirm_tick" in node_m)
+check_true("AC7 ...and a Read over the air control", "data-action='node_read'" in node_m)
+check_true("AC7 an unmanaged device is told why, and gets no remote form",
+           "not managed" in node_u.lower() and "data-action='node_set'" not in node_u, f"HTTP {st_u}")
+check_true("AC7 and the register row points at the page rather than carrying the forms",
+           "/node?id=" in row_m and "data-action='node_set'" not in row_m)
 check_true("AC7 no key material, no reload", "psk" not in page.lower() and "location.reload(" not in page)
 st, j = req("GET", "/api/node_read?id=!aa000001")
 check("AC8 the fake bridge answers node_read", (st, json.loads(j).get("managed")), (200, True))

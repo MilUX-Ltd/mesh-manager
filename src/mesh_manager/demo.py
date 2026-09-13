@@ -19,6 +19,15 @@ import time
 from mesh_manager import channel as CH
 
 PATH = sys.argv[1] if len(sys.argv) > 1 else "/tmp/fake-bridge.sock"
+# Spec 090: the demo answers groups too. It said it answered every action the real bridge does and
+# it did not answer this one, so the groups on the Register page and the colours on the map had
+# nothing behind them. The names are the demo's own and mean nothing to the product.
+# Spec 096: a group is keyed by an id and the name is a field, so the demo carries ids too, or the
+# screen would draw every demo group as one nobody declared and the rename box would never appear.
+DEMO_GROUPS = {"Recce": {"id": "a1b2c3d4e5f6", "icon": "person", "colour": "node-3", "created": "2026-09-01T08:00:00Z"},
+               "Vehicles": {"id": "f6e5d4c3b2a1", "icon": "vehicle", "colour": "node-4", "created": "2026-09-01T08:00:00Z"}}
+DEMO_MEMBERS = {"!ee000004": "Recce", "!ee000002": "Recce", "!ee000006": "Vehicles"}
+
 NODES = [
     {"id": "!ee000004", "name": "Tracker 4", "battery": 81, "lat": 51.500000, "lon": -0.120000, "heard": "2026-09-03T01:23:55Z", "snr": 13.0, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR4"},
     {"id": "!ee000002", "name": "Tracker 2", "battery": 9, "lat": 51.500180, "lon": -0.119700, "heard": "2026-09-03T01:20:11Z", "snr": 9.5, "hops": 0, "heard_here": True, "hw": "TRACKER_T1000_E", "short": "TR2"},
@@ -72,7 +81,12 @@ def register():
 
 
 def links():
-    nodes = [dict(n, direct_snr=(n.get("snr") if n.get("hops") == 0 else None), history=HISTORY.get(n["id"], [])) for n in NODES]
+    # Spec 090/091: the map reads its nodes from here, so the group and its colour travel with them
+    # or the colours and the filter have nothing to work from.
+    nodes = [dict(n, direct_snr=(n.get("snr") if n.get("hops") == 0 else None), history=HISTORY.get(n["id"], []),
+                  group=DEMO_MEMBERS.get(n["id"], ""),
+                  group_colour=(DEMO_GROUPS.get(DEMO_MEMBERS.get(n["id"], "")) or {}).get("colour", ""))
+             for n in NODES]
     return {"own": {"id": "!ee000001", "name": "Gateway", "lat": 51.5000, "lon": -0.1200, "position_source": "config"}, "nodes": nodes, "routes": ROUTES}
 
 
@@ -167,9 +181,20 @@ def serve_one(c):
         c.sendall((json.dumps({"hours": 24, "region": "EU_868", "budget_pct": 10.0, "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "verdict": "normal", "air_share": round(tel[-1]["airutil"] / 10 * 100, 1), "packets": len(DEMO_HISTORY["packets"]), "packets_per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "nodes_heard": 1,
                                "nodes": [{"id": "!ee000004", "name": "Tracker 4", "packets": len(DEMO_HISTORY["packets"]), "per_hour": round(len(DEMO_HISTORY["packets"]) / 24, 1), "chutil": tel[-1]["chutil"], "airutil": tel[-1]["airutil"], "battery": tel[-1]["level"], "last_telemetry": tel[-1]["ts"], "own": False}],
                                "hourly": [{"hour": k + ":00Z", "chutil": round(sum(v) / len(v), 1)} for k, v in sorted(hourly.items())]}) + "\n").encode()); c.close(); return
-    if op in ("profile", "profile_set", "drift", "drift_fix"):
+    if op in ("profile", "profile_set", "drift", "drift_fix", "profile_export", "profile_import"):
         prof = {"role": "TRACKER", "tx_power": 20, "position_broadcast_secs": 900, "region": "EU_868", "modem_preset": "SHORT_FAST"}
         rep = {"profile": prof, "profile_set": {"written": {k: req.get(k) for k in prof}, "confirmed": True},
+               # Spec 098: the demo answers both, and the export it shows carries no key, because a
+               # demo that showed one would teach the wrong thing about what this file is.
+               "profile_export": {"yaml": "# Mesh Manager fleet profile, in the Meshtastic CLI's shape.\n"
+                                          "# How a radio should behave, not who it is: no owner, no location, no keys and no\n"
+                                          "# channel URL. This is not a device backup and cannot restore one.\n"
+                                          "config:\n  device:\n    role: TRACKER\n"
+                                          "  lora:\n    region: EU_868\n    modemPreset: SHORT_FAST\n    txPower: 20\n"
+                                          "  position:\n    positionBroadcastSecs: 900\n",
+                                  "fields": prof},
+               "profile_import": {"written": prof, "ignored": ["channel_url", "location", "module_config", "owner", "security"],
+                                  "was": prof, "confirmed": True},
                "drift": {"profile": prof, "enforced": list(prof), "counts": {"in_line": 1, "drifted": 1, "unread": 2},
                          "devices": [{"id": "!ee000004", "name": "Tracker 4", "state": "in line", "diffs": [], "read_at": "2026-09-03T10:00:00Z", "managed": True},
                                      {"id": "!ee000002", "name": "Tracker 2", "state": "drifted", "diffs": [{"field": "tx_power", "is": 27, "should": 20}, {"field": "position_broadcast_secs", "is": 300, "should": 900}], "read_at": "2026-09-03T10:05:00Z", "managed": True},
@@ -316,7 +341,26 @@ def serve_one(c):
                              "state": "a fix"}}
                if op == "bench_read" else {"export": "/var/lib/vantage-mesh/exports/!ee000005/2026-09-03T04-00-00Z.json", "bytes": 1840, "id": "!ee000005"})
         c.sendall((json.dumps(rep) + "\n").encode()); c.close(); return
-    rep = {"status": STATUS, "nodes": {"nodes": NODES, "count": len(NODES)}, "channels": CHANNELS, "links": links(), "register": register(),
+    _nodes = [dict(n, group=DEMO_MEMBERS.get(n["id"], ""),
+                   group_colour=(DEMO_GROUPS.get(DEMO_MEMBERS.get(n["id"], "")) or {}).get("colour", ""))
+              for n in NODES]
+    rep = {"status": STATUS, "nodes": {"nodes": _nodes, "count": len(_nodes), "grouped": bool(DEMO_GROUPS)},
+           "groups": {"groups": [{"id": DEMO_GROUPS[k]["id"], "name": k, "icon": DEMO_GROUPS[k]["icon"], "colour": DEMO_GROUPS[k]["colour"],
+                                  "count": sum(1 for g in DEMO_MEMBERS.values() if g == k), "declared": True}
+                                 for k in sorted(DEMO_GROUPS)],
+                      "icons": [], "colours": []},
+           "group_set": {"group": {"id": req.get("id") or "0123456789ab", "name": req.get("name"), "icon": req.get("icon") or "radio",
+                                   "colour": req.get("colour") or ""}, "confirmed": True},
+           "group_delete": {"removed": req.get("name") or req.get("id"), "id": req.get("id"), "cleared": 0, "confirmed": True}, # Spec 097: the demo answers the beacon too, or the Health page draws the fold with no
+           # state behind it and it reads as though nothing were ever configured.
+           "beacon": {"enabled": True, "target": "!ee000004", "every_min": 30, "misses": 1, "threshold": 3,
+                      "sent": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600)),
+                      "answered": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2400)),
+                      "proves": "that device answered"},
+           "beacon_set": {"written": {"enabled": True, "target": req.get("target") or "!ee000004",
+                                      "every_min": int(req.get("every_min") or 30), "misses": int(req.get("misses") or 3)},
+                          "confirmed": True},
+           "channels": CHANNELS, "links": links(), "register": register(),
            "peers": {"site": {"id": "ee" * 32, "short": "eeeeeeeeeeee", "name": "Demo box", "address": "demo.example", "listening": True, "port": 8094},
                      "peers": [{"id": "ed" * 32, "name": "Edge laptop", "state": "connected", "direction": "in", "since": "2026-09-05T09:00:00Z", "last_seen": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "added": "2026-09-05T08:00:00Z", "nodes": 1, "sharing": {"nodes": {"out": True, "in": True}, "messages": {"out": True, "in": True, "channels": [0], "air": True, "air_channel": 0}, "waypoints": {"out": True, "in": True, "air": False}, "alerts": {"out": True, "in": True}}, "aired": {"count": 3, "last": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, "note": None}],
                      "invites": [], "pictures": [{"origin": "ed" * 32, "name": "Edge laptop", "nodes": 1, "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}]},

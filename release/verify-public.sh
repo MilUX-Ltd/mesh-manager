@@ -133,10 +133,20 @@ PY
     [[ -z "$missing" ]] && ok "every path the README names exists in the tree" \
                         || { bad "the README names paths that are not there"; echo "$missing" | sed 's/^/          /'; }
 
-    # A version in the tree that disagrees with the release it came from means a stale cut.
+    # A version in the tree that disagrees with the newest release is two different situations and
+    # only one of them is broken (12 September 2026, when the brief shipped ahead of its release).
+    #   tree BEHIND the newest release: the cut was never pushed, so a stranger clones source older
+    #   than the thing they are told to download. That is the fault this check was written for.
+    #   tree AHEAD of it: main has moved on mid-release, which is ordinary and self-clearing. Said
+    #   out loud so nobody has to wonder, but not counted as something a stranger would hit.
     tv=$(tr -d ' \n' < "$WORK/repo/VERSION" 2>/dev/null || echo "?")
-    [[ "$tv" == "$VER" ]] && ok "the tree's VERSION ($tv) is the newest release" \
-                          || bad "the tree says $tv but the newest release is $VER: the cut is behind"
+    if [[ "$tv" == "$VER" ]]; then
+        ok "the tree's VERSION ($tv) is the newest release"
+    elif [[ "$(printf '%s\n%s\n' "$tv" "$VER" | sort -V | tail -1)" == "$tv" ]]; then
+        ok "the tree is at $tv, ahead of the newest release ($VER): a release in flight, not a stale cut"
+    else
+        bad "the tree says $tv but the newest release is $VER: the cut is behind and was never pushed"
+    fi
 
     for f in LICENSE SECURITY.md NOTICE THIRD-PARTY.md tests/run.sh .github/workflows/tests.yml; do
         [[ -f "$WORK/repo/$f" ]] && ok "$f is present" || bad "$f is missing"

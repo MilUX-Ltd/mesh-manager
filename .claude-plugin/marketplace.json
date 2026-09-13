@@ -9,7 +9,7 @@
       "name": "mesh-manager",
       "displayName": "Mesh Manager",
       "description": "Operate a Meshtastic mesh through a Mesh Manager box: the tools, the standing role and the skills, in one install.",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "source": "./plugin"
     }
   ]

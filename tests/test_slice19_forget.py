@@ -116,7 +116,19 @@ srv = W.make_server(bind="127.0.0.1", port=0, socket_path=fb.path, etc_dir=tempf
 port = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
 c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", "/register"); reg = c.getresponse().read().decode(); c.close()
-check_true("AC4 a Forget control on the Register row", "data-action='node_forget'" in reg and "name='id'" in reg)
+# Spec 095 moved Forget to the node's own page: on the register row it sat one press from the
+# node's name, which is the worst place on the page for the most destructive thing on it. The
+# guarantee is that Forget exists and names the device, not which page it is on.
+# the fake bridge's own managed device, taken from the register the server actually serves rather
+# than an id guessed from another suite
+import re as _re  # noqa: E402
+_ids = _re.findall(r"data-id='(![0-9a-f]{8})'", reg)
+_nid = _ids[0] if _ids else "!bb000002"
+c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", f"/node?id={_nid}"); _np = c.getresponse().read().decode(); c.close()
+check_true("AC4 a Forget control, on the node's own page",
+           "data-action='node_forget'" in _np and "name='id'" in _np, _np[:0] or "not on the node page")
+check_true("AC4 and it is no longer a press from the name on the register",
+           "data-action='node_forget'" not in reg)
 c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", "/nodes"); nodes = c.getresponse().read().decode(); c.close()
 check_true("AC4 a press says asking at once and position events are handled", "asking" in nodes and "mmPosition" in nodes and "'position'" in nodes)
 srv.shutdown()

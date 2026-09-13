@@ -10,7 +10,7 @@ risk:  read         reads local state, nothing leaves the box
 floor: the lowest autonomy a connection needs to call it directly."""
 import re
 
-from .common import NODE_ICONS
+from .common import GROUP_COLOURS, NODE_ICONS
 
 AUTONOMY = ("observe", "propose", "act")
 FLOOR = {"read": "observe", "air": "propose", "change": "act", "unreachable": "act", "flash": "act"}
@@ -27,6 +27,7 @@ ANNOTATIONS = {
 }
 
 NODE = re.compile(r"^![0-9a-f]{8}$")
+
 
 ACTIONS = [
     {"id": "status", "title": "Mesh status", "risk": "read", "op": "status", "inputs": [],
@@ -60,14 +61,17 @@ ACTIONS = [
      "confirm": "",
      "description": "Write the operator's label, holder, note, group, tags and map icon for a device into the box's register. Changes nothing on any radio."},
     {"id": "groups", "title": "Groups", "risk": "read", "op": "groups", "inputs": [],
-     "description": "Every group the register knows: its name, its map icon, how many devices are in it. A group is a word the operator gives devices (a section, a vehicle, the routers); the map, the lists, the alerts and the exports filter by it."},
-    {"id": "group_set", "title": "Create a group or set its icon", "risk": "change", "op": "group_set",
-     "inputs": [{"name": "name", "type": "text", "required": True, "max_bytes": 40, "description": "the group's name"},
-                {"name": "icon", "type": "enum", "values": list(NODE_ICONS), "required": False, "description": "the map icon its devices carry unless one has its own"}],
-     "confirm": "The group and its icon change on this box now; devices in it redraw on the map. Nothing is written to any radio.",
-     "description": "Create a group with a map icon, or change an existing group's icon. Kept on the box."},
+     "description": "Every group the register knows: its name, its map icon, its colour, how many devices are in it. A group is a word the operator gives devices (a section, a vehicle, the routers); the map, the lists, the alerts and the exports filter by it."},
+    {"id": "group_set", "title": "Create a group, rename it, or set its icon", "risk": "change", "op": "group_set",
+     "inputs": [{"name": "id", "type": "text", "required": False, "max_bytes": 40, "description": "the group's id, from groups; give it to change a group that exists, leave it out to create one"},
+                {"name": "name", "type": "text", "required": False, "max_bytes": 40, "description": "the group's name; required when creating, and a new name here renames the group the id names"},
+                {"name": "icon", "type": "enum", "values": list(NODE_ICONS), "required": False, "description": "the map icon its devices carry unless one has its own"},
+                {"name": "colour", "type": "enum", "values": list(GROUP_COLOURS), "required": False, "description": "the colour its devices draw in on the map; one of eight, none of them a green, an amber or a red"}],
+     "confirm": "The group, its name, its icon and its colour change on this box now; devices in it redraw on the map. Nothing is written to any radio.",
+     "description": "Create a group with a map icon and a colour, or rename, recolour or re-icon one that exists. A group keeps its identity through a rename, so its devices stay in it and a joined box merges the change. Two groups may share a colour. Kept on the box."},
     {"id": "group_delete", "title": "Remove a group", "risk": "change", "op": "group_delete",
-     "inputs": [{"name": "name", "type": "text", "required": True, "max_bytes": 40, "description": "the group's name"}],
+     "inputs": [{"name": "id", "type": "text", "required": False, "max_bytes": 40, "description": "the group's id, from groups"},
+                {"name": "name", "type": "text", "required": False, "max_bytes": 40, "description": "the group's name, where you have no id"}],
      "confirm": "The group goes; its devices keep everything else and simply belong to no group. Nothing is written to any radio.",
      "description": "Remove a group from the box; its members lose the group and nothing else."},
     {"id": "bench_devices", "title": "Devices on the bench", "risk": "read", "op": "bench_devices", "inputs": [],
@@ -264,6 +268,21 @@ ACTIONS = [
                 {"name": "to_tak", "type": "enum", "values": ["on", "off"], "required": False, "description": "send each alert to All Chat Rooms on the TAK Server"}],
      "confirm": "The thresholds change on this box now; alerts already open stay open until their condition clears.",
      "description": "Change what the box alerts on. Kept on the box; the screen and the MCP read the same settings."},
+    {"id": "beacon", "title": "The beacon", "risk": "read", "op": "beacon", "inputs": [],
+     "description": "Whether the beacon is on, what it is aimed at, how often it goes out, how many have gone unanswered in a row and how many raise an alert, when the last one went and when one was last answered, and what an answer from that target actually proves."},
+    {"id": "beacon_set", "title": "Set the beacon", "risk": "air", "op": "beacon_set",
+     "inputs": [{"name": "enabled", "type": "enum", "values": ["on", "off"], "required": False, "description": "whether the box sends a beacon at all; off is the default"},
+                {"name": "target", "type": "text", "required": False, "max_bytes": 12, "description": "a radio id (!hex) for a round trip that proves that device answered, or channel:0 to channel:7 for a broadcast that only proves a neighbour repeated it"},
+                {"name": "every_min", "type": "int", "required": False, "min": 5, "max": 1440, "description": "minutes between beacons; the floor is 5 because every beacon is airtime on a shared channel"},
+                {"name": "misses", "type": "int", "required": False, "min": 1, "max": 20, "description": "how many unanswered in a row raise an alert; an answer anywhere in the run resets the count"}],
+     "confirm": "The box will transmit on its own from now on, one beacon per interval, until you turn it off. Every beacon is airtime on the shared channel and a beacon to a channel is seen by every handset on it.",
+     "description": "Turn the beacon on or off and set what it is aimed at, how often, and how many unanswered ones raise an alert. A beacon is not a chat message: it never appears in Messages and is not written to the conversation."},
+    {"id": "profile_export", "title": "Export the fleet profile", "risk": "read", "op": "profile_export", "inputs": [],
+     "description": "The fleet profile written in the shape the Meshtastic CLI's --export-config produces, so it can be applied with the CLI or carried to another box. It is how a radio should behave and not who it is: no owner, no location, no keys and no channel URL, so it is not a device backup and cannot restore one."},
+    {"id": "profile_import", "title": "Import a fleet profile", "risk": "change", "op": "profile_import",
+     "inputs": [{"name": "yaml", "type": "text", "required": True, "max_bytes": 20000, "description": "the contents of a Meshtastic configure yaml, as the CLI's --export-config writes it"}],
+     "confirm": "The fleet profile on this box changes now, and the drift check compares every device against the new one. Nothing is written to any radio.",
+     "description": "Read a Meshtastic configure yaml and take the five fields a fleet profile holds: role, region, modem preset, transmit power and position interval. Both spellings the CLI emits are read. Everything else in the file, the owner, the location, the channel URL, the module settings and the keys, is named in the answer and left where it was; no key is ever taken from a file or repeated back. A value out of range refuses the whole file rather than applying half of it."},
     {"id": "fences", "title": "Fences", "risk": "read", "op": "fences", "inputs": [],
      "description": "The areas drawn on the map: id, name, polygon points or a circle's centre and radius, whether a crossing in (enter), out (leave) or either alerts, the group it applies to (or everyone), and whether it is on."},
     {"id": "fence_set", "title": "Draw or change a fence", "risk": "change", "op": "fence_set",

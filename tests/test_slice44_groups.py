@@ -65,7 +65,14 @@ check("AC4 a group with no members has no rows", (st, json.loads(body).get("rows
 st, body = get("/export/positions.csv?group=Nobody")
 check_true("AC4 exports take the group filter", st == 200 and len(body.splitlines()) == 1, str(st))
 st, body = get("/map")
-check_true("AC6 the map draws icons in divIcon markers and has a group select", st == 200 and "L.divIcon(" in body and "id='group-filter'" in body)
+# Spec 091 replaced the COP's single select with a multi-select that can also ask for the
+# ungrouped alone. Naming the old element pinned this to the control rather than the guarantee,
+# which is that the map draws node icons and can be narrowed to a group.
+check_true("AC6 the map draws icons in divIcon markers",
+           st == 200 and "L.divIcon(" in body, str(st))
+check_true("AC6 and the map can be narrowed to a group",
+           st == 200 and ("id='gfilter'" in body or "id='group-filter'" in body),
+           "no group filter on the map")
 st, body = get("/nodes")
 check_true("AC6 the node row offers group, tags and an icon picker", "name='group'" in body and "name='tags'" in body and "name='icon'" in body and "<datalist id='groups'>" in body)
 st, body = get("/register")

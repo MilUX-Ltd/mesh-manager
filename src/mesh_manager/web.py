@@ -27,7 +27,7 @@ import urllib.parse
 import zlib
 
 from . import __version__
-from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, NODE_ICONS, read_config
+from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, GROUP_COLOURS, NODE_ICONS, read_config
 from . import catalogue as C
 from . import mgrs as MG
 from . import channel as CH
@@ -373,12 +373,35 @@ def run_action(web, aid, args, who):
     if aid == "channels":
         res = {k: v for k, v in res.items() if k != "url"}
     if aid in ("nodes", "links"):
-        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web))
+        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web),
+                                                availability=_availability(web) if aid == "nodes" else None)
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
     if action["risk"] != "read":
         K.audit(web.etc_dir, who=who, event="run", action=aid, arguments=C.redact_args(aid, clean), outcome="error" if "error" in res else "ok")
     code = 400 if "error" in res and action["risk"] != "read" else 200
     return code, res
+
+
+_AV_CACHE = {"at": 0.0, "by_id": {}}
+
+
+def _availability(web):
+    """Spec 093: the heard percentages the node rows show, by node id.
+
+    Cached for a minute. The rows redraw on every packet, throttled to about a second, and a
+    window measured in hourly buckets does not move inside a minute: asking the history each time
+    would put a bucket query on the hottest path in the product for an answer that cannot have
+    changed. An empty answer is empty, never zeroes, because nobody asked is not never heard."""
+    now = time.time()
+    if now - _AV_CACHE["at"] < 60 and _AV_CACHE["by_id"]:
+        return _AV_CACHE["by_id"]
+    try:
+        rows = (web.client.ask("availability", timeout=4) or {}).get("nodes") or []
+        by_id = {str(r.get("id")): r for r in rows if r.get("id")}
+    except (BridgeDown, AttributeError, TypeError, ValueError):
+        return _AV_CACHE["by_id"]
+    _AV_CACHE.update({"at": now, "by_id": by_id})
+    return by_id
 
 
 def _silent_min(web):
@@ -634,9 +657,9 @@ def qr_png(url, scale=6, quiet=4):
 # Spec 007: one token block, a dark theme on the same tokens, the state strip on every page, and
 # nothing that reloads under the operator's finger.
 CSS = """
-:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--edge:#586F7C;--node-1:#586F7C;--node-2:#4A6FA5;--node-3:#6A5D8F;--node-4:#2F6F6A;--node-5:#3F5E7A;--node-6:#7A5C99;--node-7:#356B78;--node-8:#5C6E9B;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace}
-[data-theme=dark]{--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6}}
+:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--edge:#586F7C;--node-1:#586F7C;--node-2:#4A6FA5;--node-3:#6A5D8F;--node-4:#2F6F6A;--node-5:#3F5E7A;--node-6:#7A5C99;--node-7:#356B78;--node-8:#5C6E9B;--node-none:#8A8F93;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace}
+[data-theme=dark]{--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6;--node-none:#9AA0A4}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6;--node-none:#9AA0A4}}
 *{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);font:14px/1.45 Manrope,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 input,select,textarea,button{font:inherit}
 header{background:var(--accent);color:var(--accent-ink);padding:0 var(--s4);display:flex;align-items:center;gap:var(--s4);min-height:var(--tap);position:relative;z-index:1100}
@@ -668,7 +691,7 @@ form.card{max-width:560px}form.login{max-width:360px;margin:3rem auto}form.card.
 details.fold{margin-top:var(--s4)}details.fold summary{cursor:pointer;min-height:var(--tap);display:flex;align-items:center;gap:var(--s2);color:var(--ink-muted-strong)}details.fold.ctl summary{display:inline-flex;white-space:nowrap;padding:0 var(--s3);font-size:.9rem;border:1px solid var(--edge);border-radius:6px;color:var(--ink);list-style:none}details.fold.ctl summary::-webkit-details-marker{display:none}details.fold.ctl summary::after{content:' ▸';margin-left:var(--s1)}details.fold.ctl[open] summary::after{content:' ▾'}
 .sheet{position:fixed;inset:0;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s4);z-index:1300;padding:var(--s4);text-align:center;overflow:auto}.sheet .close{position:absolute;top:var(--s3);right:var(--s3)}.sheet[hidden]{display:none}.sheet img{max-width:min(90vw,70vh);height:auto}
 .newlines{position:sticky;bottom:var(--s2);float:right}code{font-family:var(--mono);font-size:.9em}
-.pill.upd{background:var(--gold);color:var(--accent);border-color:var(--gold);text-decoration:none;margin-left:var(--s2)}.proposal.done{opacity:.6}.regform{display:grid;grid-template-columns:1fr 1fr auto;gap:var(--s1);align-items:start;min-width:220px}.regform input{margin:0}.regform .res{grid-column:1/-1}.manage{display:grid;gap:var(--s3);min-width:280px;margin-top:var(--s2)}.manage form{background:var(--surface-sunken);border:1px solid var(--line);border-radius:var(--r);padding:var(--s3)}.manage form.danger{border-color:var(--bad)}footer{padding:var(--s4);color:var(--ink-muted);font-size:.85rem;text-align:center}
+.pill.upd{background:var(--gold);color:var(--accent);border-color:var(--gold);text-decoration:none;margin-left:var(--s2)}.proposal.done{opacity:.6}.regform{display:grid;grid-template-columns:1fr 1fr auto;gap:var(--s1);align-items:start;min-width:220px}.regform input{margin:0}.gform{display:grid;gap:var(--s1);justify-items:start;min-width:300px}.gform input[type=text]{margin:0;width:100%;max-width:320px}.gform .iconpick{margin:0}.gform .res{margin:0}.regform .res{grid-column:1/-1}.manage{display:grid;gap:var(--s3);min-width:280px;margin-top:var(--s2)}.manage form{background:var(--surface-sunken);border:1px solid var(--line);border-radius:var(--r);padding:var(--s3)}.manage form.danger{border-color:var(--bad)}footer{padding:var(--s4);color:var(--ink-muted);font-size:.85rem;text-align:center}
 .map{width:100%;max-height:72vh;display:block;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r)}
 .map .ring{fill:none;stroke:var(--line);stroke-dasharray:2 4}.map text{fill:var(--ink-muted);font-size:11px}
 .map .node{fill:var(--surface-raised);stroke:var(--edge);stroke-width:2}.map .node.nopos{stroke-dasharray:3 3}.map .own{fill:var(--edge);stroke:var(--gold);stroke-width:2}
@@ -690,7 +713,7 @@ details.more nav .k{font-size:.72rem;color:var(--ink-muted);text-transform:upper
 .seg{display:inline-flex;border:1px solid var(--edge);border-radius:6px;overflow:hidden;vertical-align:middle;margin:var(--s1) 0 var(--s3)}.seg label{display:inline-flex;margin:0;cursor:pointer}.seg input{position:absolute;opacity:0;width:0;height:0;margin:0}.seg span{display:inline-flex;align-items:center;min-height:var(--tap);padding:0 var(--s3);border-left:1px solid var(--edge);color:var(--ink);font-size:.9rem;white-space:nowrap}.seg label:first-child span{border-left:0}.seg input:checked+span{background:var(--accent);color:var(--accent-ink)}.seg.danger input:checked+span{background:var(--bad)}.seg input:disabled+span{opacity:.45}.seg input:focus-visible+span{outline:3px solid var(--gold);outline-offset:-3px}
 .confirm{background:var(--surface-sunken);border:1px solid var(--edge);border-left:4px solid var(--warn);border-radius:var(--r);padding:var(--s2) var(--s3);margin-top:var(--s2)}.confirm .row-actions{margin-top:var(--s2)}
 .filters{display:flex;gap:var(--s2);flex-wrap:wrap;align-items:center;margin-bottom:var(--s2)}.filters input[type=search]{width:auto;min-width:180px;margin:0;padding:var(--s1) var(--s2);min-height:var(--tap);border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);font:inherit}.chip{display:inline-flex;align-items:center;gap:var(--s1);min-height:var(--tap);padding:0 var(--s3);border-radius:999px;border:1px solid var(--edge);background:var(--surface-raised);color:var(--ink);cursor:pointer;font-size:.85rem}.chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.chip b{font-weight:600}
-.verdict{display:inline-block;margin-left:var(--s1);font-size:.75rem;font-weight:600}details.fold.ctl.primary summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}details.fold.ctl.bad summary{border-color:var(--bad);color:var(--bad)}.controls label.check{min-height:var(--tap);margin:0;align-items:center}.controls label.check input{width:24px;height:24px;margin:0}.fleet-out{white-space:pre-line}.chat{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:var(--s3);align-items:start}.chat-side{background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;max-height:76vh;display:flex;flex-direction:column;min-height:0}.chat-list{overflow-y:auto;min-height:0}.chat-tools{display:flex;flex-wrap:wrap;gap:var(--s1);align-items:center;padding:var(--s2);border-bottom:1px solid var(--line)}.chat-tools .chat-total{font-size:.75rem;color:var(--ink-muted);margin-left:auto}.chat-tools input[type=search]{flex:1 1 100%;min-width:0;margin:0;min-height:var(--tap)}.chat-tools #chat-hidden{font-size:.8rem;min-height:32px}.chat-side.picking>.chat-tools,.chat-side.picking>.chat-list{display:none}.chat-picker{display:flex;flex-direction:column;min-height:0}.chat-picker input[type=search]{margin:var(--s2) var(--s3)}.chat-picks{overflow-y:auto;min-height:0}.chat-menu{position:relative;margin:0}.chat-menu summary{list-style:none;display:inline-flex;cursor:pointer;min-width:var(--tap);min-height:var(--tap);align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);padding:0}.chat-menu summary:hover{background:var(--surface-sunken)}.chat-menu summary svg{width:16px;height:16px}.chat-menu[open] summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.chat-menu summary::-webkit-details-marker{display:none}.menu-list{position:absolute;right:0;top:100%;z-index:6;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 6px 18px rgba(0,0,0,.18);display:flex;flex-direction:column;min-width:190px;padding:var(--s1) 0}.menu-list button{text-align:left;border:0;border-radius:0;background:transparent;color:var(--ink);padding:var(--s2) var(--s3);min-height:var(--tap);white-space:nowrap}.menu-list button:hover{background:var(--surface-sunken);filter:none}.menu-list.ctx{position:fixed;top:auto;right:auto}.chat-row .nm .mk{display:inline-flex;width:14px;height:14px;vertical-align:-2px;margin-right:4px;color:var(--gold)}.chat-row .nm .mk svg{width:14px;height:14px}.chat-row .mark{display:inline-flex;width:16px;height:16px;color:var(--ink-muted)}.chat-row .mark svg{width:16px;height:16px}.chat-row.hid{opacity:.6}.bubble .act{display:none;border:0;background:transparent;color:inherit;font-size:.72rem;padding:0 4px;min-height:0;text-decoration:underline;cursor:pointer;filter:none}.bubble:hover .act,.bubble:focus-within .act{display:inline}.chat-day.new{color:var(--bad);font-weight:600;width:100%;text-align:center;border-top:1px solid var(--bad);padding-top:2px}.chat-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:var(--s2);align-items:center;width:100%;text-align:left;padding:var(--s2) var(--s3);background:transparent;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;min-height:56px;cursor:pointer}.chat-row:hover{background:var(--surface-sunken);filter:none}.chat-row.on{background:var(--surface-sunken);box-shadow:inset 4px 0 0 var(--accent)}.chat-row .nodeicon{margin:0;width:28px;height:28px}.chat-row .nodeicon svg{width:20px;height:20px}.chat-row .nm{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .last{display:block;font-size:.8rem;color:var(--ink-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .when{font-size:.72rem;color:var(--ink-muted);text-align:right}.chat-row .unread{display:inline-block;min-width:20px;text-align:center;border-radius:999px;background:var(--bad);color:#fff;font-size:.72rem;font-weight:600;padding:0 6px;margin-top:2px}.chat-panes{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:var(--s3)}.chat-panes:empty::before{content:'Choose a chat on the left. Up to three open side by side.';color:var(--ink-muted);font-size:.9rem;display:block;padding:var(--s4)}.chat-win{display:flex;flex-direction:column;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);height:76vh;min-height:360px;min-width:0}.chat-head{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3);border-bottom:1px solid var(--line)}.chat-head .nm{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-head .sub{font-size:.75rem;color:var(--ink-muted)}.chat-head button.back{display:none}.chat-msgs{flex:1;overflow-y:auto;padding:var(--s2) var(--s3);display:flex;flex-direction:column}.bubble{max-width:86%;margin:var(--s1) 0;padding:var(--s1) var(--s3);border-radius:12px;background:var(--surface-sunken);border:1px solid var(--line);overflow-wrap:anywhere}.bubble.me{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.bubble .who{font-size:.72rem;opacity:.8}.bubble .meta{font-size:.72rem;opacity:.85;margin-top:2px;display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}.bubble .meta .pill{font-size:.68rem;padding:0 6px}.bubble.me .meta .pill{background:rgba(255,255,255,.15);color:var(--accent-ink);border-color:rgba(255,255,255,.35)}.chat-day{align-self:center;font-size:.72rem;color:var(--ink-muted);margin:var(--s2) 0}.chat-compose{border-top:1px solid var(--line);padding:var(--s2) var(--s3)}.chat-compose .quick{display:flex;flex-wrap:wrap;gap:var(--s1);margin-bottom:var(--s1)}.chat-compose .quick button{min-height:28px;font-size:.8rem;padding:0 var(--s2)}.chat-compose form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s2);align-items:center}.chat-compose input[type=text]{margin:0}.chat-compose .res{grid-column:1/-1;margin:0}.chat-compose .note{grid-column:1/-1;font-size:.75rem;color:var(--ink-muted)}@media (max-width:700px){.chat{display:block}.chat.open .chat-side{display:none}.chat-panes{grid-auto-flow:row}.chat-win{height:calc(100vh - 190px)}.chat-head button.back{display:inline-flex}}#play-rev.on{background:var(--accent);color:var(--accent-ink)}.iconpick{display:flex;flex-wrap:wrap;gap:var(--s1);margin:var(--s1) 0}.iconpick label{margin:0}.iconpick input{position:absolute;opacity:0;width:0;height:0}.iconpick span{display:inline-flex;width:40px;height:40px;align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;color:var(--ink);background:var(--surface-raised)}.iconpick input:checked+span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.iconpick input:focus-visible+span{outline:3px solid var(--gold)}.iconpick svg{width:20px;height:20px}body.mm-solo>header nav.primary,body.mm-solo>header details.more,body.mm-solo>header .upd,body.mm-solo>.state,body.mm-solo>footer,body.mm-solo main>h1,body.mm-solo main>p.meta,body.mm-solo .chat-side,body.mm-solo .chat-head .back{display:none}body.mm-solo main{padding:var(--s2)}body.mm-solo .chat{display:block}body.mm-solo .chat-win{height:calc(100vh - 84px)}.chat-head[draggable=true]{cursor:grab}.chat-head[draggable=true]:active{cursor:grabbing}.chat-win.dragging{opacity:.55}.mm-pin{background:transparent;border:0}.mm-pin-in{display:flex;width:30px;height:30px;border-radius:50%;background:var(--surface-raised);border:2px solid var(--accent);align-items:center;justify-content:center;color:var(--accent)}.mm-pin-in svg{width:18px;height:18px}.mm-pin.play .mm-pin-in{background:var(--gold)}.mm-pin.stale .mm-pin-in{background:transparent;border-style:dashed}.mm-cl .mm-pin-in{width:34px;height:34px;font-weight:600;font-size:.85rem;border-color:var(--edge);color:var(--edge)}.mm-cl-list{display:flex;flex-direction:column;min-width:190px}.mm-cl-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:var(--s2);align-items:center;text-align:left;background:transparent;color:var(--ink);border:0;border-radius:0;padding:var(--s1) var(--s2);min-height:var(--tap);cursor:pointer}.mm-cl-row:hover{background:var(--surface-sunken);filter:none}.mm-cl-row i{width:12px;height:12px;border-radius:50%;display:inline-block}.mm-cl-row .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mm-cl-row .age{font-size:.75rem;color:var(--ink-muted);white-space:nowrap}.mm-cl-row.stale .nm{font-style:italic}.nodeicon{display:inline-flex;width:20px;height:20px;vertical-align:-5px;margin-right:var(--s1);color:var(--accent)}.nodeicon svg{width:18px;height:18px}.controls>details.fold.ctl{margin-top:0}.controls>details.fold.ctl[open]{flex-basis:100%}.filters label{display:inline-flex;align-items:center;gap:var(--s1);margin:0}.filters select{width:auto;margin:0}ol.steps{margin:var(--s1) 0 0 var(--s4);padding:0}ol.steps li{margin:2px 0}.views>button svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}details.fold.ctl summary svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}
+.verdict{display:inline-block;margin-left:var(--s1);font-size:.75rem;font-weight:600}details.fold.ctl.primary summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}details.fold.ctl.bad summary{border-color:var(--bad);color:var(--bad)}.controls label.check{min-height:var(--tap);margin:0;align-items:center}.controls label.check input{width:24px;height:24px;margin:0}.fleet-out{white-space:pre-line}.chat{display:grid;grid-template-columns:minmax(220px,300px) minmax(0,1fr);gap:var(--s3);align-items:start}.chat-side{background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;max-height:76vh;display:flex;flex-direction:column;min-height:0}.chat-list{overflow-y:auto;min-height:0}.chat-tools{display:flex;flex-wrap:wrap;gap:var(--s1);align-items:center;padding:var(--s2);border-bottom:1px solid var(--line)}.chat-tools .chat-total{font-size:.75rem;color:var(--ink-muted);margin-left:auto}.chat-tools input[type=search]{flex:1 1 100%;min-width:0;margin:0;min-height:var(--tap)}.chat-tools #chat-hidden{font-size:.8rem;min-height:32px}.chat-side.picking>.chat-tools,.chat-side.picking>.chat-list{display:none}.chat-picker{display:flex;flex-direction:column;min-height:0}.chat-picker input[type=search]{margin:var(--s2) var(--s3)}.chat-picks{overflow-y:auto;min-height:0}.chat-menu{position:relative;margin:0}.chat-menu summary{list-style:none;display:inline-flex;cursor:pointer;min-width:var(--tap);min-height:var(--tap);align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;background:var(--surface-raised);color:var(--ink);padding:0}.chat-menu summary:hover{background:var(--surface-sunken)}.chat-menu summary svg{width:16px;height:16px}.chat-menu[open] summary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.chat-menu summary::-webkit-details-marker{display:none}.menu-list{position:absolute;right:0;top:100%;z-index:6;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 6px 18px rgba(0,0,0,.18);display:flex;flex-direction:column;min-width:190px;padding:var(--s1) 0}.menu-list button{text-align:left;border:0;border-radius:0;background:transparent;color:var(--ink);padding:var(--s2) var(--s3);min-height:var(--tap);white-space:nowrap}.menu-list button:hover{background:var(--surface-sunken);filter:none}.menu-list.ctx{position:fixed;top:auto;right:auto}.chat-row .nm .mk{display:inline-flex;width:14px;height:14px;vertical-align:-2px;margin-right:4px;color:var(--gold)}.chat-row .nm .mk svg{width:14px;height:14px}.chat-row .mark{display:inline-flex;width:16px;height:16px;color:var(--ink-muted)}.chat-row .mark svg{width:16px;height:16px}.chat-row.hid{opacity:.6}.bubble .act{display:none;border:0;background:transparent;color:inherit;font-size:.72rem;padding:0 4px;min-height:0;text-decoration:underline;cursor:pointer;filter:none}.bubble:hover .act,.bubble:focus-within .act{display:inline}.chat-day.new{color:var(--bad);font-weight:600;width:100%;text-align:center;border-top:1px solid var(--bad);padding-top:2px}.chat-row{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:var(--s2);align-items:center;width:100%;text-align:left;padding:var(--s2) var(--s3);background:transparent;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;min-height:56px;cursor:pointer}.chat-row:hover{background:var(--surface-sunken);filter:none}.chat-row.on{background:var(--surface-sunken);box-shadow:inset 4px 0 0 var(--accent)}.chat-row .nodeicon{margin:0;width:28px;height:28px}.chat-row .nodeicon svg{width:20px;height:20px}.chat-row .nm{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .last{display:block;font-size:.8rem;color:var(--ink-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-row .when{font-size:.72rem;color:var(--ink-muted);text-align:right}.chat-row .unread{display:inline-block;min-width:20px;text-align:center;border-radius:999px;background:var(--bad);color:#fff;font-size:.72rem;font-weight:600;padding:0 6px;margin-top:2px}.chat-panes{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:var(--s3)}.chat-panes:empty::before{content:'Choose a chat on the left. Up to three open side by side.';color:var(--ink-muted);font-size:.9rem;display:block;padding:var(--s4)}.chat-win{display:flex;flex-direction:column;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r);height:76vh;min-height:360px;min-width:0}.chat-head{display:flex;align-items:center;gap:var(--s2);padding:var(--s2) var(--s3);border-bottom:1px solid var(--line)}.chat-head .nm{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.chat-head .sub{font-size:.75rem;color:var(--ink-muted)}.chat-head button.back{display:none}.chat-msgs{flex:1;overflow-y:auto;padding:var(--s2) var(--s3);display:flex;flex-direction:column}.bubble{max-width:86%;margin:var(--s1) 0;padding:var(--s1) var(--s3);border-radius:12px;background:var(--surface-sunken);border:1px solid var(--line);overflow-wrap:anywhere}.bubble.me{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.bubble .who{font-size:.72rem;opacity:.8}.bubble .meta{font-size:.72rem;opacity:.85;margin-top:2px;display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}.bubble .meta .pill{font-size:.68rem;padding:0 6px}.bubble.me .meta .pill{background:rgba(255,255,255,.15);color:var(--accent-ink);border-color:rgba(255,255,255,.35)}.chat-day{align-self:center;font-size:.72rem;color:var(--ink-muted);margin:var(--s2) 0}.chat-compose{border-top:1px solid var(--line);padding:var(--s2) var(--s3)}.chat-compose .quick{display:flex;flex-wrap:wrap;gap:var(--s1);margin-bottom:var(--s1)}.chat-compose .quick button{min-height:28px;font-size:.8rem;padding:0 var(--s2)}.chat-compose form{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:var(--s2);align-items:center}.chat-compose input[type=text]{margin:0}.chat-compose .res{grid-column:1/-1;margin:0}.chat-compose .note{grid-column:1/-1;font-size:.75rem;color:var(--ink-muted)}@media (max-width:700px){.chat{display:block}.chat.open .chat-side{display:none}.chat-panes{grid-auto-flow:row}.chat-win{height:calc(100vh - 190px)}.chat-head button.back{display:inline-flex}}#play-rev.on{background:var(--accent);color:var(--accent-ink)}.iconpick{display:flex;flex-wrap:wrap;gap:var(--s1);margin:var(--s1) 0}.colpick{display:inline-flex;gap:var(--s1);flex-wrap:wrap;align-items:center}.colpick input{position:absolute;opacity:0;pointer-events:none}.colpick label{cursor:pointer;line-height:0;border:2px solid transparent;border-radius:50%;padding:1px}.colpick label:has(input:checked){border-color:var(--ink)}.colpick label:has(input:focus-visible){outline:2px solid var(--ink);outline-offset:1px}.swatch{display:inline-block;width:14px;height:14px;border-radius:50%;border:1px solid var(--line);vertical-align:middle;margin-right:var(--s1)}.iconpick label{margin:0}.iconpick input{position:absolute;opacity:0;width:0;height:0}.iconpick span{display:inline-flex;width:40px;height:40px;align-items:center;justify-content:center;border:1px solid var(--edge);border-radius:6px;color:var(--ink);background:var(--surface-raised)}.iconpick input:checked+span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.iconpick input:focus-visible+span{outline:3px solid var(--gold)}.iconpick svg{width:20px;height:20px}body.mm-solo>header nav.primary,body.mm-solo>header details.more,body.mm-solo>header .upd,body.mm-solo>.state,body.mm-solo>footer,body.mm-solo main>h1,body.mm-solo main>p.meta,body.mm-solo .chat-side,body.mm-solo .chat-head .back{display:none}body.mm-solo main{padding:var(--s2)}body.mm-solo .chat{display:block}body.mm-solo .chat-win{height:calc(100vh - 84px)}.chat-head[draggable=true]{cursor:grab}.chat-head[draggable=true]:active{cursor:grabbing}.chat-win.dragging{opacity:.55}.mm-pin{background:transparent;border:0}.mm-pin-in{display:flex;width:30px;height:30px;border-radius:50%;background:var(--surface-raised);border:2px solid var(--accent);align-items:center;justify-content:center;color:var(--accent)}.mm-pin-in svg{width:18px;height:18px}.mm-pin.play .mm-pin-in{background:var(--gold)}.mm-pin.stale .mm-pin-in{background:transparent;border-style:dashed}.mm-cl .mm-pin-in{width:34px;height:34px;font-weight:600;font-size:.85rem;border-color:var(--edge);color:var(--edge)}.mm-cl-list{display:flex;flex-direction:column;min-width:190px}.mm-cl-row{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:var(--s2);align-items:center;text-align:left;background:transparent;color:var(--ink);border:0;border-radius:0;padding:var(--s1) var(--s2);min-height:var(--tap);cursor:pointer}.mm-cl-row:hover{background:var(--surface-sunken);filter:none}.mm-cl-row i{width:12px;height:12px;border-radius:50%;display:inline-block}.mm-cl-row .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mm-cl-row .age{font-size:.75rem;color:var(--ink-muted);white-space:nowrap}.mm-cl-row.stale .nm{font-style:italic}.nodeicon{display:inline-flex;width:20px;height:20px;vertical-align:-5px;margin-right:var(--s1);color:var(--accent)}.nodeicon svg{width:18px;height:18px}.controls>details.fold.ctl{margin-top:0}.controls>details.fold.ctl[open]{flex-basis:100%}.filters label{display:inline-flex;align-items:center;gap:var(--s1);margin:0}.filters select{width:auto;margin:0}ol.steps{margin:var(--s1) 0 0 var(--s4);padding:0}ol.steps li{margin:2px 0}.views>button svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}details.fold.ctl summary svg{width:16px;height:16px;vertical-align:-3px;margin-right:var(--s1)}
 @media (pointer:coarse){button.icon,details.fold.ctl.icon summary{width:40px;height:40px;min-height:40px}.row-actions{gap:var(--s2)}.mm-centre button{width:40px;height:40px}}
 @media (max-width:700px){:root{--tap:44px}header nav.primary{position:fixed;bottom:0;left:0;right:calc(var(--tap) + var(--s2));background:var(--accent);justify-content:space-around;z-index:1100;border-top:1px solid var(--live)}header nav.primary a{padding:0 var(--s2);font-size:.8rem}main{padding-bottom:calc(var(--tap) + var(--s6))}.hide-narrow{display:none}.state .live{margin-left:0}
 details.more{position:fixed;bottom:0;right:0;z-index:1101;margin:0;background:var(--accent);border-top:1px solid var(--live)}details.more summary{width:calc(var(--tap) + var(--s2));justify-content:center;padding:0}details.more summary .word{display:none}details.more nav{position:fixed;bottom:var(--tap);top:auto;right:0;left:0;max-height:70vh;overflow:auto;border-radius:var(--r) var(--r) 0 0}
@@ -850,12 +873,22 @@ def state_strip(st):
                      f"<i class='lamp lamp--{'ok' if ok_ else 'bad'}'></i>"
                      f"{e('MQTT ' + (broker.split(':')[0] if ok_ and broker else 'not connected'))}</a>")
 
+    # Spec 092: work outstanding, not a fault. The alerts pill is the red one and stays the red one;
+    # a rotation with devices still out is normal and resolves itself as they come back, so it is
+    # painted in the product's gold and there is nothing to acknowledge.
+    waiting = ""
+    if st.get("rotation_waiting"):
+        w = int(st["rotation_waiting"])
+        waiting = (f"<a href='/register#rotation' class='pill' style='background:var(--gold);color:var(--ink);border-color:var(--gold)'"
+                   f" data-tip='A rotation is open'>{w} waiting</a>" if w != 1 else
+                   "<a href='/register#rotation' class='pill' style='background:var(--gold);color:var(--ink);border-color:var(--gold)'"
+                   " data-tip='A rotation is open'>1 waiting</a>")
     alerts = ""
     if st.get("alerts_open"):
         n = int(st["alerts_open"])
         alerts = f"<a href='/health#alerts' class='pill' style='background:var(--bad);color:#fff;border-color:var(--bad)'>{n} alert{'s' if n != 1 else ''}</a>"
     # on a phone the standing facts fold behind a chevron; the lamp, the alerts and the live counter stay
-    return (parts[0] + alerts + "<span class='state-rest'>" + "".join(parts[1:]) + "</span>"
+    return (parts[0] + alerts + waiting + "<span class='state-rest'>" + "".join(parts[1:]) + "</span>"
             + icon_button("chevron", "Show the rest of the status", "The rest of the status", "Nodes, region, preset, channel and receiver", cls="line icon strip", attrs="aria-expanded='false'"))
 
 
@@ -1497,7 +1530,7 @@ OVERLAY_JS = r"""<script>
   function trailHours(){var el=document.getElementById('trail-hours');var v=el?el.value:'3';try{if(!el){v=localStorage.getItem('mm-trails')||'3';}}catch(e){}return v;}
   var lastRows=[];
   function drawTrails(rows){lastRows=rows||[];trails_.clearLayers();var hrs=parseFloat(trailHours());if(!(hrs>0)||!rows||!rows.length)return;var now=Date.now(),win=hrs*3600*1000;
-    var g=groupChosen();var byNode={};rows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(g&&(groups_[r.node]||'')!==g)return;(byNode[r.node]=byNode[r.node]||[]).push(r);});
+    var byNode={};rows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(!shownHere(groups_[r.node]||''))return;(byNode[r.node]=byNode[r.node]||[]).push(r);});
     var names={};(lastJ&&lastJ.nodes||[]).forEach(function(n){names[n.id]=n.label||n.name||n.id;});
     Object.keys(byNode).forEach(function(id,idx){var pts=byNode[id];pts.sort(function(a,b){return a.ts<b.ts?-1:1;});var stride=Math.max(1,Math.floor(pts.length/600));var col=tok(TRAIL_COLOURS[idx%TRAIL_COLOURS.length]);
       for(var i=stride;i<pts.length;i+=stride){var a=pts[i-stride],b=pts[i];var age=now-Date.parse(b.ts);if(age>win)continue;var d=map.distance([a.lat,a.lon],[b.lat,b.lon]);if(d>2000)continue;
@@ -1674,8 +1707,8 @@ OVERLAY_JS = r"""<script>
   function band(v){if(v===null||v===undefined)return 0;return v>=10?4:v>=5?3:v>=-7?2:v>=-12?1:0;}
   function bandTok(b){return b>=3?'--ok':b===2?'--warn':'--bad';}
   function dist(m){return m>=1000?(m/1000).toFixed(m>=10000?0:1)+' km':Math.round(m)+' m';}
-  function draw(J){lastJ=J;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);drawWithoutOwn(J);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
-    var g=groupChosen();var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(n.heard_here===false)return;if(g&&(n.group||'')!==g)return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
+  function draw(J){lastJ=J;GROUPED=!!J.grouped;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);drawWithoutOwn(J);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
+    var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(n.heard_here===false)return;if(!shownHere(n.group||''))return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
     centre=c;rings();
     pts.forEach(function(n){var ll=[n.lat,n.lon],ds=n.direct_snr;
       if(ds!==null&&ds!==undefined){L.polyline([c,ll],{color:tok(bandTok(band(ds))),weight:3}).bindTooltip(ds+' dB',{permanent:true,direction:'center',className:'mm-link'}).addTo(overlay);}
@@ -1771,7 +1804,36 @@ OVERLAY_JS = r"""<script>
   var SPEEDS=[1,10,60,300,1000],speedSel=document.getElementById('play-speed'),tl=document.getElementById('timeline'),tctx=tl?tl.getContext('2d'):null;
   var T=null,playing=false,dir=1,lastFrame=null,hidden_={},scrubbing=false,tlLabelW=110,tlHead=16,tlRows=[],tlRowH=12;
   var names_={},groups_={};
-  function groupChosen(){var el=document.getElementById('group-filter');return el?el.value:'';}
+  // Spec 091: the filter is a set of group names, plus one key for the ungrouped, and it lives in
+  // this browser and nowhere else. Group definitions are shared state; the view of them is not, so
+  // two people on one box filter independently and neither disturbs the other.
+  //
+  // Show all is the state where nothing is selected. The ungrouped are a category of node with a
+  // key of their own. They are not the same thing: conflate them and nobody can ask for "only the
+  // ones nobody has grouped yet", and a cleared filter becomes indistinguishable from that.
+  var UNGROUPED_KEY='__ungrouped__';
+  var SEL={};
+  try{var st_=JSON.parse(localStorage.getItem('mm-group-filter')||'[]');
+      if(st_&&st_.length){st_.forEach(function(k){SEL[k]=true;});}}catch(x){}
+  function selKeys(){return Object.keys(SEL).filter(function(k){return SEL[k];});}
+  function selSave(){try{localStorage.setItem('mm-group-filter',JSON.stringify(selKeys()));}catch(x){}}
+  // the one decision. Nothing selected means show all, which is why the empty case answers true
+  // before the ungrouped key is ever consulted.
+  function shownHere(group){
+    var keys=selKeys();
+    if(!keys.length)return true;                       // show all: none selected
+    var g=String(group||'');
+    return g?(SEL[g]===true):(SEL[UNGROUPED_KEY]===true);
+  }
+  function gfWord(){
+    var keys=selKeys();
+    if(!keys.length)return 'everyone';
+    var named=keys.filter(function(k){return k!==UNGROUPED_KEY;});
+    var bits=named.slice(0,2);
+    if(named.length>2)bits.push('+'+(named.length-2));
+    if(SEL[UNGROUPED_KEY])bits.push('ungrouped');
+    return bits.join(', ');
+  }
   // Spec 081: a colour per node, so two points are told apart at a glance. Deliberately none of
   // these is green, amber or red: those mean signal band and alert state on this same map, and an
   // identity colour that could be read as a state is worse than no colour at all. The set is built
@@ -1779,6 +1841,20 @@ OVERLAY_JS = r"""<script>
   var NODE_COLOURS=['var(--node-1)','var(--node-2)','var(--node-3)','var(--node-4)','var(--node-5)','var(--node-6)','var(--node-7)','var(--node-8)'];
   function nodeColour(id){var h=0,t=String(id||'');for(var i=0;i<t.length;i++){h=(h*31+t.charCodeAt(i))>>>0;}
     return NODE_COLOURS[h%NODE_COLOURS.length];}
+  // Spec 090: one place decides what colour a node draws in.
+  //  - in a group with a colour: the group's, which is the point of groups.
+  //  - ungrouped, on a box that has groups: the fixed grey, because ungrouped is a state.
+  //  - ungrouped, on a box with no group at all: its own identity colour, unchanged.
+  // The last case is why an existing box does not go monochrome the moment it upgrades.
+  var GROUPED=false;          // set from the nodes payload; false until the box says otherwise
+  var UNGROUPED='var(--node-none)';   // the fixed grey; not one of the eight, and not settable
+  function groupColour(n){
+    if(!n)return nodeColour('');
+    var gc=n.group_colour||'';
+    if(gc)return 'var(--'+gc+')';        // its group's colour
+    if(GROUPED)return UNGROUPED;         // ungrouped, or a group with no colour, on a box that groups
+    var id=n.id;return nodeColour(id);   // no group anywhere on this box: its own identity colour
+  }
   function nodeIcon(kind,extra,col){var svg=(window.mmNodeIcons||{})[kind]||(window.mmNodeIcons||{}).radio||'';
     var st=col?(" style=\"border-color:"+col+";color:"+col+"\""):'';
     return L.divIcon({className:'mm-pin '+(extra||''),html:"<span class='mm-pin-in'"+st+">"+svg+"</span>",iconSize:[30,30],iconAnchor:[15,15],tooltipAnchor:[0,15]});}
@@ -1798,7 +1874,7 @@ OVERLAY_JS = r"""<script>
   function clusterList(c){var now=Date.now();
     return "<div class='mm-cl-list'>"+c.members.map(function(n){var st=staleNow(n),t=Date.parse(n.heard||'')||0;
       return "<button type='button' class='mm-cl-row"+(st?' stale':'')+"' data-id='"+escH(n.id)+"'>"
-        +"<i style='background:"+nodeColour(n.id)+"'></i><span class='nm'>"+escH(names_[n.id]||n.label||n.name||n.id)+"</span>"
+        +"<i style='background:"+groupColour(n)+"'></i><span class='nm'>"+escH(names_[n.id]||n.label||n.name||n.id)+"</span>"
         +"<span class='age'>"+(t?escH(fmtAge(now-t))+(st?' · not heard lately':''):'never heard')+"</span></button>";}).join('')+"</div>";}
   function soloCluster(n){var st=staleNow(n);
     return {group:String(n.group||''),members:[n],count:1,fresh:st?0:1,stale:st?1:0,allStale:st,lat:n.lat,lon:n.lon};}
@@ -1806,7 +1882,7 @@ OVERLAY_JS = r"""<script>
     var cs=combineOn()?clusterNodes(pts,function(la,lo){return map.latLngToLayerPoint([la,lo]);},CL_RADIUS,staleNow)
                       :(pts||[]).map(soloCluster);
     cs.forEach(function(c){
-      if(c.count===1){var n=c.members[0],col=nodeColour(n.id);
+      if(c.count===1){var n=c.members[0],col=groupColour(n);
         var one=L.marker([n.lat,n.lon],{icon:nodeIcon(n.icon,c.allStale?'stale':'',col),keyboard:false})
           .bindTooltip((n.label||n.name||n.id)+(c.allStale?' · not heard lately':''),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(layer);
         tintLabel(one,col);return;}
@@ -1829,10 +1905,17 @@ OVERLAY_JS = r"""<script>
   // and has to be worked out again. Debounced, because a zoom fires a run of these.
   var zoomT=null;map.on('zoomend',function(){if(zoomT)clearTimeout(zoomT);
     zoomT=setTimeout(function(){zoomT=null;if(lastJ&&combineOn())draw(lastJ);},120);});
-  var gsel_=document.getElementById('group-filter');if(gsel_){gsel_.addEventListener('change',function(){if(lastJ)draw(lastJ);drawTrails(lastRows);renderPlay();});}
+  function gfRedraw(){selSave();var w=document.getElementById('gf-word');if(w){w.textContent=gfWord();}
+    if(lastJ)draw(lastJ);drawTrails(lastRows);renderPlay();}
+  document.querySelectorAll('#gfilter .gf').forEach(function(cb){
+    cb.checked=SEL[cb.value]===true;
+    cb.addEventListener('change',function(){if(cb.checked){SEL[cb.value]=true;}else{delete SEL[cb.value];}gfRedraw();});});
+  var gfAll=document.getElementById('gf-all');
+  if(gfAll){gfAll.addEventListener('click',function(){SEL={};document.querySelectorAll('#gfilter .gf').forEach(function(c){c.checked=false;});gfRedraw();});}
+  (function(){var w=document.getElementById('gf-word');if(w){w.textContent=gfWord();}})();
   function playRange(){var hrs=parseFloat(trailHours());if(!(hrs>0))hrs=3;var now=Date.now();return [now-hrs*3600*1000,now];}
   function speed(){return SPEEDS[speedSel?parseInt(speedSel.value,10):0]||1;}
-  function tracks(){var g=groupChosen();var by={};lastRows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(g&&(groups_[r.node]||'')!==g)return;(by[r.node]=by[r.node]||[]).push(r);});
+  function tracks(){var by={};lastRows.forEach(function(r){if(r.lat===null||r.lon===null)return;if(!shownHere(groups_[r.node]||''))return;(by[r.node]=by[r.node]||[]).push(r);});
     return Object.keys(by).sort(function(a,b){return (names_[a]||a).toLowerCase()<(names_[b]||b).toLowerCase()?-1:1;}).map(function(id){var pts=by[id].slice().sort(function(a,b){return a.ts<b.ts?-1:1;});var times=pts.map(function(r){return Date.parse(r.ts);});return {id:id,pts:pts,times:times,gap:gapFor(times)};});}
   function atEnd(){return liveState(T,playRange()).live;}
   // Spec 066: the button that comes back, and the clock that comes back on its own
@@ -1854,7 +1937,7 @@ OVERLAY_JS = r"""<script>
       var run=[];for(var i=tr.pts.length-1;i>=0;i--){var ts=tr.times[i];if(ts>T)continue;if(run.length&&(Date.parse(run[0].ts)-ts)>tr.gap)break;run.unshift(tr.pts[i]);}
       if(run.length>1)L.polyline(run.map(function(r){return [r.lat,r.lon];}),{color:tok('--gold'),weight:4,opacity:.8}).addTo(play_);
       var nn=(lastJ&&lastJ.nodes||[]).filter(function(x){return x.id===tr.id;})[0]||{};
-      L.marker([p.lat,p.lon],{icon:nodeIcon(nn.icon,'play'+(stale?' stale':''),nodeColour(tr.id)),keyboard:false}).bindTooltip((names_[tr.id]||tr.id)+(stale?' · '+fmtAge(T-Date.parse(p.ts))+' old':''),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});
+      L.marker([p.lat,p.lon],{icon:nodeIcon(nn.icon,'play'+(stale?' stale':''),groupColour(nn||tr)),keyboard:false}).bindTooltip((names_[tr.id]||tr.id)+(stale?' · '+fmtAge(T-Date.parse(p.ts))+' old':''),{permanent:true,direction:'bottom',className:'mm-node'}).addTo(play_);});
     dimNodes();drawTimeline();}
   function tlLayout(){if(!tl)return null;var r=tl.getBoundingClientRect(),dpr=window.devicePixelRatio||1;var w=Math.max(200,Math.floor(r.width)),h=Math.max(40,Math.floor(r.height));if(tl.width!==Math.round(w*dpr)||tl.height!==Math.round(h*dpr)){tl.width=Math.round(w*dpr);tl.height=Math.round(h*dpr);}tctx.setTransform(dpr,0,0,dpr,0,0);return [w,h];}
   function drawTimeline(){if(!tctx)return;tlRows=tracks();var want=Math.max(60,tlHead+Math.max(1,tlRows.length)*14+6);if(Math.abs(tl.clientHeight-want)>2){tl.style.height=want+'px';}
@@ -1921,7 +2004,20 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
     attr = json.dumps(tiles).replace("&", "&amp;").replace("'", "&#39;").replace('"', "&quot;")
     why = "" if has else "<p class='meta'>No position for this box, so the map view is off and the plan view places nodes by hops. Give the box its position on <a href='/settings#position'>Settings</a>, or plug in a GPS receiver.</p>"
     groups = sorted({str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
-    gsel = ("<label class='meta' data-tip='Group' data-tip-more='Only this group&#39;s devices on the map, the trails and the playback'>Group <select id='group-filter'><option value=''>everyone</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>") if groups else "<select id='group-filter' hidden aria-hidden='true'><option value=''></option></select>"
+    gcolour = {str(n.get("group")): str(n.get("group_colour") or "")
+               for n in (L.get("nodes") or []) if n.get("group")}
+    # Spec 091: many at once, and the ungrouped as a category of their own. The summary says what is
+    # on without opening it, because a filtered map that looks like an empty one is a trap.
+    gsel = ("<details class='fold ctl' id='gfilter' style='margin-top:0'>"
+            "<summary data-tip='Groups shown' data-tip-more='Any combination, and the ungrouped in their own right. This screen only: nothing is sent to the box and nobody else&#39;s view changes'>"
+            "Groups: <b id='gf-word'>everyone</b></summary><div class='controls' style='margin:var(--s2) 0 0'>"
+            + "".join(f"<label class='meta check'><input type='checkbox' class='gf' value='{e(g)}'> "
+                      f"<span class='swatch' style='background:var(--{e(gcolour.get(g) or 'node-none')})'></span>{e(g)}</label>"
+                      for g in groups)
+            + "<label class='meta check'><input type='checkbox' class='gf' value='__ungrouped__'> "
+              "<span class='swatch' style='background:var(--node-none)'></span>ungrouped</label>"
+              "<button type='button' class='line' id='gf-all'>Show all</button>"
+              "</div></details>") if groups else ""
     layers = ("<details class='fold ctl' id='layers' style='margin-top:0'><summary data-tip='Layers, trails, rings and grid' data-tip-more='What the map draws besides the nodes'>" + ICONS["layers"] + "Map layers</summary><div class='controls' style='margin:var(--s2) 0 0'>" + gsel +
               "<label class='meta' for='map-dim' data-tip='Dim the overlay' data-tip-more='The range rings, the node markers and the tracks together, from solid to invisible, so you can see the map underneath'>Dim <input type='range' id='map-dim' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:120px;margin:0'></label><span class='meta' id='ring-step'></span><label class='meta' for='map-label-dim' data-tip='Fade the name boxes' data-tip-more='The box behind each name only, never the name itself, so a crowded map stays readable'>Names <input type='range' id='map-label-dim' min='0' max='100' step='5' value='100' style='vertical-align:middle;width:120px;margin:0'></label>"
               "<label class='meta' for='trail-hours' data-tip='Trails' data-tip-more='Each node&#39;s track over the window, fading with age'>Trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option><option value='72'>3 d</option></select></label>"
@@ -2236,6 +2332,20 @@ NODE_ICON_SVG = {
 assert set(NODE_ICON_SVG) >= set(NODE_ICONS)
 
 
+def colour_picker(field, current):
+    """Spec 090: a group's colour, from the eight. None of them is a green, an amber or a red,
+    because those mean signal band and alert state on the same map. Two groups may share one."""
+    out = "<span class='colpick' role='radiogroup' aria-label='Map colour'>"
+    out += (f"<label data-tip='No colour'><input type='radio' name='{e(field)}' value=''"
+            f"{' checked' if not current else ''} aria-label='No colour'>"
+            "<span class='swatch' style='background:var(--node-none)'></span></label>")
+    for v in GROUP_COLOURS:
+        out += (f"<label data-tip='{e(v)}'><input type='radio' name='{e(field)}' value='{e(v)}'"
+                f"{' checked' if v == current else ''} aria-label='{e(v)}'>"
+                f"<span class='swatch' style='background:var(--{e(v)})'></span></label>")
+    return out + "</span>"
+
+
 def icon_picker(field, current, inherit=True):
     """The map icon chooser: a row of the drawings, one chosen, each with its word in the tip."""
     opts = ([("inherit", "From the group")] if inherit else []) + [(k, k) for k in NODE_ICONS]
@@ -2270,7 +2380,7 @@ ASK_MORE = {"traceroute": "Asks for the hops out and back; a minute is normal", 
             "request_telemetry": "Asks for battery, voltage and uptime now", "request_nodeinfo": "Brings back a name changed over the air"}
 
 
-def node_row(n, db=False, routes=None, silent_min=30):
+def node_row(n, db=False, routes=None, silent_min=30, availability=None):
     nid = str(n.get("id") or "")
     name = dname(n)
     own_name = str(n.get("name") or "") if n.get("label") and n.get("name") else ""
@@ -2285,7 +2395,14 @@ def node_row(n, db=False, routes=None, silent_min=30):
         quiet = bool(heard) and not db and (time.time() - _utc_secs(heard)) > int(silent_min) * 60
     except (TypeError, ValueError):
         quiet = False
-    heard_html = (f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" + (f"<span class='verdict warn' data-tip='Quiet' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet</span>" if quiet else "")) if heard else "<span class='sub'>never</span>"
+    # Spec 093: the quiet verdict says a line has been crossed now; the percentage says how the node
+    # has behaved over the window, which is what tells a flat battery from a walk behind a hill. The
+    # same helper the register page uses, so one node never has two figures. A database-only row has
+    # nothing heard here to measure, so it carries none.
+    av = None if db else (availability or {}).get(nid)
+    heard_html = (f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>"
+                  + (f"<span class='verdict warn' data-tip='Quiet' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet</span>" if quiet else "")
+                  + _avword(av)) if heard else "<span class='sub'>never</span>"
     batt = n.get("battery")
     # one line for the figure, one small line for the voltage and the age together (0.2.10: short rows)
     ts = n.get("battery_ts")
@@ -2393,16 +2510,16 @@ NODES_JS = r"""<script>
 </script>"""
 
 
-def nodes_tables(nodes, routes=None, silent_min=30):
+def nodes_tables(nodes, routes=None, silent_min=30, availability=None):
     heard = [n for n in nodes if n.get("heard_here", True)]
     db = [n for n in nodes if not n.get("heard_here", True)]
-    rows = "".join(node_row(n, routes=routes, silent_min=silent_min) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
+    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
     db_rows = "".join(node_row(n, db=True, silent_min=silent_min) for n in db)
     return rows, db_rows, len(heard), len(db)
 
 
-def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None):
-    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min)
+def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None):
+    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability)
     live = [n for n in nodes if n.get("heard_here", True)]
     head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Last heard</th><th>Ask</th></tr></thead>"
     lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here since the bridge started, "
@@ -2428,8 +2545,8 @@ def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None):
     return f"{lead}{filters}{dl}<div class='tablewrap'><table>{head}<tbody id='nodes'>{rows}</tbody></table></div><p class='meta' id='nf-none' hidden>No node matches that filter.</p>{fold}{js}"
 
 
-def nodes_rows_html(nodes):
-    return nodes_tables(nodes)[0]
+def nodes_rows_html(nodes, availability=None):
+    return nodes_tables(nodes, availability=availability)[0]
 
 
 # -- log
@@ -2711,16 +2828,34 @@ def manage_forms(r):
     return (f"<details class='fold ctl'><summary data-tip='Over the air' data-tip-more='Read and write this device through the mesh under this radio&#39;s admin key'>{ICONS['sliders']}Over the air</summary><div class='manage'><p class='meta' style='margin:0'>Every write is shown only once the device has answered with it.</p>{read}{setf}{regf}{push}{reboot}</div></details>")
 
 
+def _avbits(a):
+    """Spec 093: the figure, its tone and its histogram, built once. The register page puts it in a
+    cell of its own and the Nodes row puts it beside the quiet verdict; neither invents its own."""
+    ser = a.get("series") or []
+    blocks = "".join("\u25ae" if v else "\u25af" for v in ser)
+    pct = int(a.get("pct") or 0)
+    tone = "ok" if pct >= 80 else ("warn" if pct >= 40 else "bad")
+    tip = f"heard in {a.get('heard')} of {a.get('buckets')} {'hours' if a.get('bucket_secs') == 3600 else 'days'}"
+    return pct, tone, tip, blocks
+
+
+def _avword(a):
+    """The same figure, inline on a row that already has a cell. Nothing when nobody asked: an
+    absent answer is not 0%, which would say the node was never heard."""
+    if not a:
+        return ""
+    pct, tone, tip, blocks = _avbits(a)
+    return (f"<span class='verdict {tone}' data-tip='{e(tip)}' data-tip-more='{e(blocks)}' "
+            f"style='font-variant-numeric:tabular-nums'>{pct}%</span>")
+
+
 def _avcell(a):
     """Spec 036: the heard-percentage cell, with the histogram in the tooltip."""
     if not a:
         return "<td class='meta'>·</td>"
-    ser = a.get("series") or []
-    blocks = "".join("▮" if v else "▯" for v in ser)
-    pct = int(a.get("pct") or 0)
-    tone = "ok" if pct >= 80 else ("warn" if pct >= 40 else "bad")
-    return (f"<td data-tip='heard in {a.get('heard')} of {a.get('buckets')} {'hours' if a.get('bucket_secs') == 3600 else 'days'}' "
-            f"data-tip-more='{e(blocks)}' style='font-variant-numeric:tabular-nums;color:var(--{tone})'>{pct}%</td>")
+    pct, tone, tip, blocks = _avbits(a)
+    return (f"<td data-tip='{e(tip)}' data-tip-more='{e(blocks)}' "
+            f"style='font-variant-numeric:tabular-nums;color:var(--{tone})'>{pct}%</td>")
 
 
 def _fwcell(r, iv):
@@ -2760,20 +2895,44 @@ def register_rows(reg, availability=None, inv=None):
         nid = str(r.get("id") or "")
         heard = r.get("heard") or r.get("last_heard_db")
         heard_html = f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" if heard else ("<span class='sub'>on the bench only, not heard on the air</span>" if r.get("bench_only") else "<span class='sub'>not heard</span>")
-        managed = ("<span class='pill'>managed</span>" + (f"<div class='sub'>since <time datetime='{e(str(r.get('managed_at') or ''))}' data-age>{e(age(r.get('managed_at') or ''))}</time></div>" if r.get("managed_at") else "")
-                   + manage_forms(r) if r.get("managed") else "<span class='sub'>not managed: bring it to the bench</span>")
+        # Spec 095: the register is a register. Over the air lives on the node's own page, where an
+        # operator is already looking when they want to change one device, and where the forms have
+        # room to be used on a phone.
+        managed = ("<span class='pill'>managed</span>"
+                   + (f"<div class='sub'>since <time datetime='{e(str(r.get('managed_at') or ''))}' data-age>{e(age(r.get('managed_at') or ''))}</time></div>" if r.get("managed_at") else "")
+                   + f"<div><a class='line' href='/node?id={e(nid)}'>Manage over the air</a></div>"
+                   if r.get("managed") else "<span class='sub'>not managed: bring it to the bench</span>")
         form = (f"<form data-action='register_set' data-refresh='register:register-rows' class='regform'><input type='hidden' name='id' value='{e(nid)}'>"
                 f"<input type='text' name='label' value='{e(str(r.get('label') or ''))}' maxlength='80' placeholder='label' aria-label='label'>"
                 f"<input type='text' name='holder' value='{e(str(r.get('holder') or ''))}' maxlength='80' placeholder='who holds it' aria-label='who holds it'>"
                 "<button type='submit' class='line'>Save</button><div class='res meta' role='status'></div></form>")
-        fg = _act("node_forget")
-        forget = (f"<details class='fold ctl'><summary>Forget</summary><form data-action='node_forget' data-risk='change' data-confirm=\"{e(fg.get('confirm') or '')}\" data-refresh='register:register-rows'>"
-                  f"<input type='hidden' name='id' value='{e(nid)}'><div><span class='meta'>Its label and holder</span><br>" + seg("register", (("keep", "Keep the label"), ("drop", "Drop it")), "keep") + "</div>"
-                  "<button type='submit' class='danger'>Forget this node</button><div class='res meta' role='status'></div></form></details>")
-        rows += (f"<tr data-id='{e(nid)}'><td><b>{e(dname(r))}</b><div class='sub'>{e(nid)}{(' · ' + e(str(r.get('name') or ''))) if r.get('label') and r.get('name') else ''}</div>{forget}</td><td>{form}</td>"
+        rows += (f"<tr data-id='{e(nid)}'><td><b>{e(dname(r))}</b><div class='sub'>{e(nid)}{(' · ' + e(str(r.get('name') or ''))) if r.get('label') and r.get('name') else ''}</div><a class='sub' href='/node?id={e(nid)}'>open</a></td><td>{form}</td>"
                  f"<td class='hide-narrow'>{e(str(r.get('hw') or ''))}<div class='sub'>{e(str(r.get('role') or ''))}</div></td>{_fwcell(r, inv.get(nid))}{_keycell(nid, inv.get(nid))}"
                  f"<td>{managed}</td><td>{heard_html}</td>{_avcell(availability.get(str(r.get('id') or ''))).replace('<td ', '<td class=hide-narrow ', 1)}</tr>")
     return rows or "<tr><td colspan=8 class='meta'>No device yet. Plug one into the box by USB, then onboard it on the <a href='/bench'>Bench</a> page; it appears here.</td></tr>"
+
+
+def profile_files(prof=None):
+    """Spec 098: the profile in and out in the shape the Meshtastic CLI already writes.
+
+    The line the fold has to draw, because getting it wrong puts keys in a file somebody emails:
+    this is how a radio should behave, not who it is. A real --export-config carries the private
+    key, the admin keys and the channel URL. This carries none of them and cannot restore a device."""
+    pe, pi = _act("profile_export"), _act("profile_import")
+    return (f"<details class='fold' data-keep='profile-files' style='max-width:760px'><summary>Carry this profile between boxes</summary>"
+            "<p class='meta'>The five fields above, written the way <code>meshtastic --export-config</code> writes them, "
+            "so the CLI can apply them and another box can read them. "
+            "<b>It is a fleet profile, not a device backup:</b> how a radio should behave, never who it is. "
+            "No owner, no location, no keys and no channel URL, so it is safe to send to somebody. "
+            "Reading a file works the other way round: the five fields are taken and everything else in it, "
+            "including any keys, is named and left where it was.</p>"
+            f"<p><a class='line' style='display:inline-block;text-decoration:none' href='/profile.yaml' download>{e(pe['title'])}</a></p>"
+            f"<form data-action='profile_import' data-risk='change' data-confirm=\"{e(pi.get('confirm') or '')}\" data-refresh='drift:drift-body' class='card'>"
+            "<label>Paste a Meshtastic configure yaml"
+            "<textarea name='yaml' rows='6' placeholder='# start of Meshtastic configure yaml' "
+            "style='width:100%;font-family:ui-monospace,monospace;font-size:.85rem'></textarea></label>"
+            f"<button type='submit' class='line'>{e(pi['title'])}</button>"
+            "<div class='res meta' role='status'></div></form></details>")
 
 
 def groups_section(gs):
@@ -2783,14 +2942,22 @@ def groups_section(gs):
     rows = ""
     for g in gs.get("groups") or []:
         nm = str(g.get("name") or "")
-        rows += (f"<tr data-group='{e(nm)}'><td><span class='nodeicon'>{NODE_ICON_SVG.get(str(g.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span><b>{e(nm)}</b></td><td>{int(g.get('count') or 0)} device{'s' if int(g.get('count') or 0) != 1 else ''}</td>"
-                 f"<td><form data-action='group_set' data-risk='change' data-confirm=\"{e(gset.get('confirm') or '')}\" data-refresh='groups:groups-body' class='regform' style='grid-template-columns:1fr auto;min-width:320px'><input type='hidden' name='name' value='{e(nm)}'>{icon_picker('icon', str(g.get('icon') or 'radio'), inherit=False)}<button type='submit' class='line'>Set the icon</button><div class='res meta' role='status'></div></form></td>"
-                 f"<td><form data-action='group_delete' data-risk='change' data-confirm=\"{e(gdel.get('confirm') or '')}\" data-refresh='groups:groups-body'><input type='hidden' name='name' value='{e(nm)}'><button type='submit' class='danger'>Remove the group</button><div class='res meta' role='status'></div></form></td></tr>")
+        # Spec 096: a declared group is addressed by its id, so typing a new name here renames it
+        # and its devices stay in it. A group nobody declared has only its name to go on, and
+        # sending that declares it, which is the same thing the operator is asking for.
+        key = (f"<input type='hidden' name='id' value='{e(str(g.get('id') or ''))}'>" if g.get("declared")
+               else f"<input type='hidden' name='name' value='{e(nm)}'>")
+        rename = (f"<input type='text' name='name' value='{e(nm)}' maxlength='40' aria-label='group name'>"
+                  if g.get("declared") else "")
+        rows += (f"<tr data-group='{e(nm)}'><td><span class='swatch' style='background:var(--{e(str(g.get('colour') or 'node-none'))})'></span><span class='nodeicon'>{NODE_ICON_SVG.get(str(g.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span><b>{e(nm)}</b></td><td>{int(g.get('count') or 0)} device{'s' if int(g.get('count') or 0) != 1 else ''}</td>"
+                 f"<td><form data-action='group_set' data-risk='change' data-confirm=\"{e(gset.get('confirm') or '')}\" data-refresh='groups:groups-body' class='gform'>{key}{rename}{icon_picker('icon', str(g.get('icon') or 'radio'), inherit=False)}{colour_picker('colour', str(g.get('colour') or ''))}<button type='submit' class='line'>Save the group</button><div class='res meta' role='status'></div></form></td>"
+                 f"<td><form data-action='group_delete' data-risk='change' data-confirm=\"{e(gdel.get('confirm') or '')}\" data-refresh='groups:groups-body'>{key}<button type='submit' class='danger'>Remove the group</button><div class='res meta' role='status'></div></form></td></tr>")
     create = (f"<form data-action='group_set' class='card' data-risk='change' data-clear='1' data-confirm=\"{e(gset.get('confirm') or '')}\" data-refresh='groups:groups-body' style='margin-top:var(--s3)'><h2 style='margin-top:0'>Create a group</h2>"
               "<label>Name<input type='text' name='name' maxlength='40' required placeholder='e.g. Recce'></label><span class='meta'>Map icon</span>" + icon_picker("icon", "radio", inherit=False)
+              + "<span class='meta'>Map colour</span>" + colour_picker("colour", "")
               + "<button type='submit' class='line'>Create the group</button><div class='res meta' role='status'></div></form>")
     return (f"<details class='fold' data-keep='groups'><summary>Groups</summary><p class='meta'>A group is a word you give devices (a section, a vehicle, the routers). Its icon is what its devices carry on the map unless one has its own; the map, the lists, the alerts and the exports filter by group. Kept on the box; nothing is written to any radio.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Group</th><th>Devices</th><th>Icon</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No group yet. Give a device a group on the Nodes page, or create one below.</td></tr>'}</tbody></table></div>{create}</details>")
+            f"<div class='tablewrap'><table><thead><tr><th>Group</th><th>Devices</th><th>Icon and colour</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No group yet. Give a device a group on the Nodes page, or create one below.</td></tr>'}</tbody></table></div>{create}</details>")
 
 
 def register_body(reg, drift=None, availability=None, inv=None, groups=None):
@@ -2836,7 +3003,8 @@ def drift_section(d):
             f"<label>Position every (seconds)<input type='number' name='position_broadcast_secs' value='{v('position_broadcast_secs')}' min='32' max='86400'></label>"
             f"<label>Region<input type='text' name='region' value='{v('region')}' placeholder='EU_868'></label>"
             f"<label>Preset<input type='text' name='modem_preset' value='{v('modem_preset')}' placeholder='SHORT_FAST'></label></div>"
-            "<button class='line' style='margin-top:var(--s2)'>Save the profile</button><div class='res meta' role='status'></div></form>")
+            "<button class='line' style='margin-top:var(--s2)'>Save the profile</button><div class='res meta' role='status'></div></form>"
+            + profile_files())
     c = d.get("counts") or {}
     rows = ""
     for dev in d.get("devices") or []:
@@ -3179,7 +3347,35 @@ def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
             + (f"<p class='meta'>On charge at {e(', '.join(charging[-6:]))}{' and earlier' if len(charging) > 6 else ''} (shown as 100%).</p>" if charging else "")
             + f"<h2>Voltage</h2>{series_chart(tel, 'voltage', ' V', None, None, ((3.3, 'bad'),), 'voltage')}"
             + envblock +
-            f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No message from this node in the window.</td></tr>'}</tbody></table></div>")
+            f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No message from this node in the window.</td></tr>'}</tbody></table></div>"
+            + manage_section(n) + WRITE_JS)
+
+
+def manage_section(n):
+    """Spec 095: over the air, on the page an operator is already looking at.
+
+    These were four forms and three tick boxes inside one cell of the register table, which is a
+    few characters wide on a phone. Forget comes with them and sits at the bottom: it was one press
+    from the node's name, which is the worst place on the page for the most destructive thing on it.
+
+    The forms themselves come from manage_forms, the same helper and the same catalogue entries the
+    register used, so there is one description of what each write does and not two.
+    """
+    nid = str(n.get("id") or "")
+    if not nid:
+        return ""
+    if not n.get("managed"):
+        return ("<h2 id='manage'>Manage</h2><p class='meta'>This device is not managed by this box, so nothing "
+                "here can be written to it over the air. Bring it to the <a href='/bench'>Bench</a> to manage it.</p>")
+    fg = _act("node_forget")
+    forget = ("<details class='fold ctl' style='margin-top:var(--s4)'><summary>Forget this device</summary>"
+              f"<form data-action='node_forget' data-risk='change' data-confirm=\"{e(fg.get('confirm') or '')}\">"
+              f"<input type='hidden' name='id' value='{e(nid)}'><div><span class='meta'>Its label and holder</span><br>"
+              + seg("register", (("keep", "Keep the label"), ("drop", "Drop it")), "keep") + "</div>"
+              "<button type='submit' class='danger'>Forget this device</button><div class='res meta' role='status'></div></form></details>")
+    return ("<h2 id='manage'>Manage</h2><p class='meta'>Written to the device over the air and read back before "
+            "it counts. Slow and lossy: an unconfirmed write is not a failed one.</p>"
+            + manage_forms(n) + forget)
 
 
 def health_chart(h):
@@ -3236,14 +3432,67 @@ def rotation_section(rs):
     if not rot:
         return f"<h2 id='rotation'>Since the key rotation</h2><p class='meta'>No rotation marked on this box. A rotation from this screen marks itself; one done elsewhere is marked below, and the checklist then counts every device back on the new key.</p>{form}"
     c = rs.get("counts") or {}
+    # Spec 094: two kinds, and the difference is what counts a device back. A rotation changed the
+    # key under the whole mesh, so hearing a device at all proves it took it. A new channel proves
+    # nothing by being heard, so only a read-back that carried the channel counts.
+    chan = rot.get("kind") == "channel"
+    head = "Since the new channel" if chan else "Since the key rotation"
+    rule = ("A device is back when its own read-back carried the channel. Being heard on the mesh does not count: "
+            "a device talks on the primary channel whether or not it has this one."
+            if chan else
+            "A device is back when this radio hears any packet from it, because a packet it can decode carries the new key.")
+    col = "Carried it" if chan else "First heard after"
+    notyet = "has not carried it yet" if chan else "not heard since the rotation"
     back = "".join(f"<tr><td><b>{e(b.get('name'))}</b><div class='sub'>{e(b.get('id'))}</div></td><td class='ok'>back</td><td class='meta'><time datetime='{e(b.get('heard'))}' data-age>{e(age(b.get('heard')))}</time></td></tr>" for b in rs.get("back") or [])
-    wait = "".join(f"<tr><td><b>{e(w.get('name'))}</b><div class='sub'>{e(w.get('id'))}</div></td><td class='warn'>waiting</td><td class='meta'>not heard since the rotation</td></tr>" for w in rs.get("waiting") or [])
-    return (f"<h2 id='rotation'>Since the key rotation</h2><p class='meta'>Slot {int(rot.get('index') or 0)}{(' (' + e(rot.get('name')) + ')') if rot.get('name') else ''}, {e(rot.get('source') or '')} <time datetime='{e(rot.get('ts'))}' data-age>{e(age(rot.get('ts')))}</time>{(': ' + e(rot.get('note'))) if rot.get('note') else ''}. "
-            f"<b>{int(c.get('back') or 0)} of {int(c.get('expected') or 0)} back</b>, {int(c.get('waiting') or 0)} waiting. A device is back when this radio hears any packet from it, because a packet it can decode carries the new key.</p>"
-            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>State</th><th>First heard after</th></tr></thead><tbody>{wait}{back or ''}{'' if (wait or back) else '<tr><td colspan=3 class=meta>No device was expected back.</td></tr>'}</tbody></table></div>{form}")
+    wait = "".join(f"<tr><td><b>{e(w.get('name'))}</b><div class='sub'>{e(w.get('id'))}</div></td><td class='warn'>waiting</td><td class='meta'>{e(notyet)}</td></tr>" for w in rs.get("waiting") or [])
+    return (f"<h2 id='rotation'>{e(head)}</h2><p class='meta'>Slot {int(rot.get('index') or 0)}{(' (' + e(rot.get('name')) + ')') if rot.get('name') else ''}, {e(rot.get('source') or '')} <time datetime='{e(rot.get('ts'))}' data-age>{e(age(rot.get('ts')))}</time>{(': ' + e(rot.get('note'))) if rot.get('note') else ''}. "
+            f"<b>{int(c.get('back') or 0)} of {int(c.get('expected') or 0)} back</b>, {int(c.get('waiting') or 0)} waiting. {e(rule)}</p>"
+            f"<div class='tablewrap'><table><thead><tr><th>Device</th><th>State</th><th>{e(col)}</th></tr></thead><tbody>{wait}{back or ''}{'' if (wait or back) else '<tr><td colspan=3 class=meta>No device was expected back.</td></tr>'}</tbody></table></div>{form}")
 
 
-def alerts_section(al, tak_on=True):
+def beacon_section(bc):
+    """Spec 097: the beacon's own record, and what its answer actually proves.
+
+    It is deliberately not in Messages: a check every half hour would be most of what a quiet
+    day's conversation contains, and Messages is the operator's."""
+    bc = bc or {}
+    act = _act("beacon_set")
+    on = bool(bc.get("enabled"))
+    tgt = str(bc.get("target") or "channel:0")
+    node = tgt.startswith("!")
+    proves = ("an answer proves that device received it"
+              if node else
+              "an answer proves a neighbour repeated it, and nothing about any named device")
+    state = ("off" if not on else
+             (f"answered {age(str(bc.get('answered')))}" if bc.get("answered") else "on, nothing answered yet"))
+    misses, thr = int(bc.get("misses") or 0), int(bc.get("threshold") or 3)
+    # red is the alert colour on every other page: using it for one miss out of three would have the
+    # page shouting while the beacon is still being answered. It turns red when it has actually gone.
+    warn = (f"<p class='meta'{' style=color:var(--bad)' if misses >= thr else ''}>"
+            f"{misses} unanswered in a row, out of {thr} that raise an alert.</p>"
+            if on and misses else "")
+    onoff = (("on", "On"), ("off", "Off"))
+    form = (f"<form data-action='beacon_set' class='card' data-risk='air' data-confirm=\"{e(act.get('confirm') or '')}\" data-refresh='alerts:alerts-body' style='max-width:720px'>"
+            f"<p class='meta'>{e(act['description'])}</p>"
+            f"<div class='regform' style='grid-template-columns:1fr 1fr 1fr'>"
+            f"<div><span class='meta'>Beacon</span><br>{seg('enabled', onoff, 'on' if on else 'off')}</div>"
+            f"<label>Aimed at<input type='text' name='target' value='{e(tgt)}' maxlength='12' placeholder='!ee000011 or channel:0'></label>"
+            f"<label>Every (minutes)<input type='number' name='every_min' value='{int(bc.get('every_min') or 30)}' min='5' max='1440'></label>"
+            f"<label>Alert after (unanswered)<input type='number' name='misses' value='{thr}' min='1' max='20'></label>"
+            "<div></div><div></div></div>"
+            "<button class='line' style='margin-top:var(--s2)'>Save the beacon</button><div class='res meta' role='status'></div></form>")
+    return (f"<details class='fold' data-keep='beacon'><summary>Beacon: {e(state)}</summary>"
+            "<p class='meta'>A message the box sends on its own, on a timer, so that a quiet mesh and a dead one stop looking the same. "
+            "Off by default: every beacon is airtime on the shared channel, and a beacon aimed at a channel is seen by every handset on it. "
+            "It never appears in Messages.</p>"
+            f"<p class='meta'>Aimed at <b>{e(tgt)}</b>: {e(proves)}.</p>{warn}"
+            + (f"<p class='meta'>Last sent <time datetime='{e(str(bc.get('sent')))}' data-age>{e(age(str(bc.get('sent'))))}</time>."
+               + (f" Last answered <time datetime='{e(str(bc.get('answered')))}' data-age>{e(age(str(bc.get('answered'))))}</time>." if bc.get("answered") else " Nothing has answered yet.")
+               + "</p>" if bc.get("sent") else "")
+            + form + "</details>")
+
+
+def alerts_section(al, tak_on=True, bc=None):
     """Spec 026: what is open, what was, the thresholds, and the test. Spec 050: without TAK, no TAK chat and no test."""
     al = al or {}
     st = al.get("settings") or {}
@@ -3287,13 +3536,14 @@ def alerts_section(al, tak_on=True):
                          for x in (al.get("acked") or []))
                + "</tbody></table></div></details>" if (al.get("acked") or []) else "")
             + f"<h2>Recent</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>Kind</th><th>What</th><th>State</th></tr></thead><tbody>{recent or '<tr><td colspan=4 class=meta>None yet.</td></tr>'}</tbody></table></div>"
-            + f"<details class='fold' data-keep='thresholds'><summary>Thresholds</summary>{form}{test}</details>")
+            + f"<details class='fold' data-keep='thresholds'><summary>Thresholds</summary>{form}{test}</details>"
+            + beacon_section(bc))
 
 
-def health_body(h, al=None, tak_on=True):
+def health_body(h, al=None, tak_on=True, bc=None):
     js = "<script>window.onMesh=function(d){if(d.kind==='status'){window.mmFrag('health','health-body');}if(d.kind==='alert'){window.mmFrag('alerts','alerts-body');}};</script>"
     js = js.replace("window.mmFrag('alerts','alerts-body');", "var o=document.querySelector('#alerts-body details'),was=!!(o&&o.open);window.mmFrag('alerts','alerts-body',function(){var n=document.querySelector('#alerts-body details');if(n&&was){n.open=true;}});")
-    _out = ((f"<div id='alerts-body'>{alerts_section(al, tak_on)}</div>"
+    _out = ((f"<div id='alerts-body'>{alerts_section(al, tak_on, bc)}</div>"
             "<h2>How busy the mesh is</h2><p class='meta'>From the history store. On LoRa the channel utilisation is the number that says whether the mesh is about to fall over: under 10% is quiet, under 25% normal, under 40% busy, above that saturated. On EU_868 this radio's own transmit air time must stay under the 10% duty-cycle limit.</p>"
             f"<div id='health-body'>{health_cards(h)}</div>{js}{WRITE_JS}"))
     return _out + export_section()
@@ -4341,6 +4591,18 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
                 self.send_header("Content-Length", str(len(data))); self.end_headers()
                 self.wfile.write(data); return
+            if path == "/profile.yaml":
+                # Spec 098: a read action is a GET, and the screen's form machinery POSTs, so the
+                # export cannot be a button. It is a file, which is what the CLI wants anyway.
+                res = web.client.ask("profile_export")
+                text = str((res or {}).get("yaml") or "")
+                if not text:
+                    return self._send(500, "the box did not answer with a profile", "text/plain")
+                data = text.encode()
+                self.send_response(200); self.send_header("Content-Type", "application/yaml; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="mesh-manager-profile.yaml"')
+                self.send_header("Content-Length", str(len(data))); self.end_headers()
+                self.wfile.write(data); return
             if path == "/export/inventory.csv":
                 import csv as _csv, io as _io
                 cols = ["id", "name", "hw", "firmware", "fingerprint", "key_since", "key_changed", "key_ack", "managed", "behind", "behind_reason", "confirmed", "heard"]
@@ -4425,7 +4687,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 want_group = (q.get("group", [""])[0] or "").strip()
                 nodes_ = [n for n in (L.get("nodes") or []) if not want_group or str(n.get("group") or "") == want_group]
                 groups_ = sorted({str(g.get("name")) for g in (self._ask("groups").get("groups") or []) if g.get("name")} | {str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
-                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
+                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_, availability=_availability(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
             if path == "/log":
                 return self._send(200, self._page("Log", log_body(self._ask("log", n=300).get("lines", [])), "/log"))
             if path == "/channels":
@@ -4465,6 +4727,11 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 npos = len(self._ask("history", kind="positions", node=nid, since=since, limit=5000).get("rows") or [])
                 env = self._ask("history", kind="environment", node=nid, since=since, limit=2000).get("rows") or []
                 av = next((r for r in (self._ask("availability", hours=hours).get("nodes") or []) if r.get("id") == nid), None)
+                # Spec 095: the Manage section needs the register's view of the device, not the
+                # mesh's. A node from _links carries no "managed" flag, so without this every
+                # device on its own page reads as unmanaged and the forms never appear.
+                _reg = next((r for r in (self._ask("register").get("rows") or []) if r.get("id") == nid), None)
+                node = dict(node, **{k: v for k, v in (_reg or {}).items() if v is not None}) if _reg else node
                 return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av), "/nodes"))
             if path == "/health":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
@@ -4472,7 +4739,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 members = self._members(q.get("group", [""])[0])
                 if members is not None and isinstance(al, dict):
                     al = dict(al, open=[o for o in (al.get("open") or []) if o.get("node") in members], recent=[r for r in (al.get("recent") or []) if r.get("node") in members])
-                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), al, tak_on=(self._ask("status") or {}).get("tak") != "off"), "/health"))
+                return self._send(200, self._page("Health", health_body(self._ask("health", hours=24), al, tak_on=(self._ask("status") or {}).get("tak") != "off", bc=self._ask("beacon")), "/health"))
             if path == "/fragment/health":
                 return self._send(200, health_cards(self._ask("health", hours=24)), "text/html; charset=utf-8")
             if path == "/fragment/drift":
@@ -4480,7 +4747,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/fragment/rotation":
                 return self._send(200, rotation_section(self._ask("rotation_status")), "text/html; charset=utf-8")
             if path == "/fragment/alerts":
-                return self._send(200, alerts_section(self._ask("alerts"), tak_on=(self._ask("status") or {}).get("tak") != "off"), "text/html; charset=utf-8")
+                return self._send(200, alerts_section(self._ask("alerts"), tak_on=(self._ask("status") or {}).get("tak") != "off", bc=self._ask("beacon")), "text/html; charset=utf-8")
             if path == "/register":
                 av = {r.get("id"): r for r in (self._ask("availability", hours=24).get("nodes") or [])}
                 return self._send(200, self._page("Register", register_body(self._ask("register"), drift=self._ask("drift"), availability=av, inv=self._ask("inventory"), groups=self._ask("groups")), "/register"))

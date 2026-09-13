@@ -47,7 +47,8 @@ ops = set(re.findall(r"^    def op_([a-z0-9_]+)\(", br, re.M))
 exposed = {a.get("op") or a["id"] for a in C.ACTIONS}
 # Deliberate exclusions, each with its reason. channel_url returns a join URL, which carries the
 # channel's key: it is withheld from the catalogue on purpose and Spec 085 is why that matters.
-WITHHELD = {"channel_url": "returns a join URL, which carries the channel key"}
+WITHHELD = {"channel_url": "returns a join URL, which carries the channel key",
+            "beacon_settings": "the screen form's own subset of `beacon`, which answers the same question in full"}
 unexposed = sorted(ops - exposed - set(WITHHELD))
 check("AC5 every bridge operation is exposed or deliberately withheld", unexposed, [])
 check_true("AC5 the withheld list is short and each has a reason",

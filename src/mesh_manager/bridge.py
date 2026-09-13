@@ -29,7 +29,7 @@ except ImportError:  # the gateway depends on it; a bench without it still impor
 from . import __version__
 from . import catalogue as C
 from . import channel as CH
-from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, NODE_ICONS, read_config, utc
+from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, GROUP_COLOURS, NODE_ICONS, read_config, utc
 from .history import History
 from . import peers as P
 from . import mqttproxy as MQ
@@ -839,8 +839,9 @@ class Bridge(TAKMeshtasticGateway):
     # ADR 003's sharing table, per peer and per class (Spec 053). `air` is held off until slice 4. Direct messages,
     # keys, admin traffic and firmware are not classes: they never cross.
     SHARING_DEFAULT = {"nodes": {"out": True, "in": True}, "messages": {"out": False, "in": True, "channels": [], "air": False, "air_channel": None},
-                       "waypoints": {"out": True, "in": True, "air": False}, "alerts": {"out": True, "in": True}}
-    SHARING_CLASSES = ("nodes", "messages", "waypoints", "alerts")
+                       "waypoints": {"out": True, "in": True, "air": False}, "alerts": {"out": True, "in": True},
+                       "groups": {"out": True, "in": True}}   # Spec 096
+    SHARING_CLASSES = ("nodes", "messages", "waypoints", "alerts", "groups")
 
     @classmethod
     def _sharing_defaults(cls):
@@ -976,7 +977,7 @@ class Bridge(TAKMeshtasticGateway):
 
     def _snapshot_item(self):
         own = [n for n in self.op_nodes().get("nodes", []) if not n.get("remote")] if self.interface is not None else []
-        keep = ("id", "name", "short", "label", "hw", "battery", "voltage", "charging", "lat", "lon", "heard", "snr", "hops", "heard_here", "icon", "group", "role")
+        keep = ("id", "name", "short", "label", "hw", "battery", "voltage", "charging", "lat", "lon", "heard", "snr", "hops", "heard_here", "icon", "group", "group_colour", "role")
         rows = [{k: n.get(k) for k in keep if k in n} for n in own]
         return {"class": "nodes", "origin": self.peering.id, "origin_name": self.peering.name, "path": [self.peering.id], "ts": utc(time.time()), "data": rows}
 
@@ -1142,6 +1143,12 @@ class Bridge(TAKMeshtasticGateway):
                 else:
                     bag[key] = {"node": data.get("node"), "kind": data.get("kind"), "text": data.get("text"), "since": data.get("since") or utc(time.time()), "origin": origin, "origin_name": oname}
             self._emit("alert", state=data.get("state") or "open", node=data.get("node"), what=data.get("kind"), text=data.get("text"), origin=origin, origin_name=oname, tak=False)
+        elif cls == "groups" and isinstance(data, dict):
+            # Spec 096: groups are not a remote picture beside our own, the way nodes and alerts
+            # are. They are one table both boxes hold, so an arriving item is merged into ours and
+            # the screen redraws only when something actually moved.
+            if self._groups_merge(data):
+                self._emit("register", origin=origin, origin_name=oname)
         else:
             return
         fwd = dict(item); fwd["path"] = list(item.get("path") or []) + [self.peering.id]
@@ -1364,6 +1371,10 @@ class Bridge(TAKMeshtasticGateway):
                 "own": self._own(), "region": region_name(lora.region) if lora else None,
                 "chutil": self._own_chutil(), "verdict": self._verdict(self._own_chutil()),
                 "alerts_open": len(self._alerts_load()["open"]),
+                # Spec 092: a rotation is done when the fleet is back, not when the key is pushed,
+                # so the count follows the operator to whatever page they are on. Asked of the
+                # rotation's own answer, so the strip and the rotation page cannot disagree.
+                "rotation_waiting": self._rotation_waiting(),
                 "modem_preset": preset_name(lora.modem_preset) if lora else None,
                 "primary_channel": primary, "watchdog": self.watchdog_state, "position": self.own_position(),
                 "forwarded_counter": getattr(self.socket_client, "packets", None) if self.observe else None,
@@ -1395,10 +1406,16 @@ class Bridge(TAKMeshtasticGateway):
             n = dict(n)
             n["label"] = labels.get(n.get("id"), "")
             r_ = regall.get(n.get("id"), {}) if isinstance(regall.get(n.get("id")), dict) else {}
-            n["group"] = str(r_.get("group") or "")
+            gkey = str(r_.get("group") or "")
+            # Spec 096: membership is held by id, the screen and the payload want the name. An
+            # undeclared group is its own name, so the same lookup answers both.
+            n["group"] = str((groups.get(gkey) or {}).get("name") or gkey)
             n["tags"] = list(r_.get("tags") or [])
             n["icon_own"] = r_.get("icon") or ""
-            n["icon"] = r_.get("icon") or (groups.get(n["group"]) or {}).get("icon") or "radio"
+            n["icon"] = r_.get("icon") or (groups.get(gkey) or {}).get("icon") or "radio"
+            # Spec 090: the group's colour travels with the node, and whether this box has any
+            # group at all, because that decides what an ungrouped node draws in.
+            n["group_colour"] = str((groups.get(gkey) or {}).get("colour") or "")
             # the battery, by trust: the telemetry this bridge heard (newest wins), the library's
             # node database, the gateway's figure. Above 100 means on external power (Spec 018).
             bat = self.batteries.get(n.get("id"))
@@ -1426,7 +1443,9 @@ class Bridge(TAKMeshtasticGateway):
             n["last_heard_db"] = utc(lh) if lh else None
             out.append(n)
         out.extend(self._remote_rows(set(str(n.get("id")) for n in out)))  # Spec 052: the peers' pictures
-        return {"nodes": out, "count": len(out)}
+        # Spec 090: whether this box has any group at all. An ungrouped node is grey once one
+        # exists and keeps its own colour while none does, so a box that never groups never changes.
+        return {"nodes": out, "count": len(out), "grouped": bool(groups)}
 
     def _identity_note(self, nid, key, hw, role):
         """Spec 043: the radio's database says what a node is (hardware, role) and which public key it
@@ -1548,7 +1567,8 @@ class Bridge(TAKMeshtasticGateway):
             # each with its own receipt; the screen says "n of m delivered", never "sent to the group"
             gname = dest[6:].strip()
             reg = self._register_load()
-            members = sorted(nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == gname)
+            gkey = self._group_key(gname)   # Spec 096: the caller says the name, the register holds the id
+            members = sorted(nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == gkey)
             if not members:
                 return {"error": f"no device in group {gname!r}"}
             ids = [self._send_one(text, int(channel or 0), m) for m in members]
@@ -1975,7 +1995,8 @@ class Bridge(TAKMeshtasticGateway):
                 continue
             # onboarded on the bench, never yet heard on the air: in the register, not in the radio's database
             rows.append({"id": nid, "name": r.get("name") or nid, "heard_here": False, "heard": None, "battery": None, "snr": None, "hops": None,
-                         "group": str(r.get("group") or ""), "tags": list(r.get("tags") or []), "icon": r.get("icon") or (groups.get(str(r.get("group") or "")) or {}).get("icon") or "radio",
+                         "group": str((groups.get(str(r.get("group") or "")) or {}).get("name") or r.get("group") or ""),
+                         "tags": list(r.get("tags") or []), "icon": r.get("icon") or (groups.get(str(r.get("group") or "")) or {}).get("icon") or "radio",
                          "label": r.get("label", ""), "holder": r.get("holder", ""), "note": r.get("note", ""), "hw": r.get("hw"), "firmware": r.get("firmware"),
                          "role": r.get("role"), "managed": bool(r.get("managed")), "managed_at": r.get("managed_at"), "onboarded_at": r.get("onboarded_at"),
                          "export_at": r.get("export_at"), "bench_only": True})
@@ -1993,7 +2014,10 @@ class Bridge(TAKMeshtasticGateway):
             if v is not None:
                 entry[k] = str(v)[:200]
         if group is not None:
-            entry["group"] = str(group).strip()[:40]
+            # Spec 096: a move carries its own clock, because membership merges per node and the
+            # entry's own "updated" moves for a label edit that has nothing to do with the group.
+            entry["group"] = self._group_key(group)
+            entry["group_at"] = utc(time.time())
         if tags is not None:
             raw = tags if isinstance(tags, list) else str(tags).split(",")
             seen, clean = set(), []
@@ -2007,6 +2031,8 @@ class Bridge(TAKMeshtasticGateway):
         entry["updated"] = utc(time.time())
         self._register_save(reg)
         self._emit("register", id=nid)
+        if group is not None:
+            self._share_groups()
         return {"written": {"id": nid, "label": entry.get("label", ""), "holder": entry.get("holder", ""), "note": entry.get("note", ""),
                             "group": entry.get("group", ""), "tags": entry.get("tags", []), "icon": entry.get("icon", "")}, "confirmed": True}
 
@@ -2015,11 +2041,145 @@ class Bridge(TAKMeshtasticGateway):
         return os.path.join(self.state_dir, "groups.json")
 
     def _groups_load(self):
+        """Spec 096: groups keyed by a stable id, with when each field was written.
+
+        They used to be keyed by name, which made the name the identity, and a rename was then one
+        group vanishing and another appearing rather than a field changing. Two boxes could not
+        merge a rename against a recolour because there was nothing to resolve against.
+
+        An older box is migrated on the first read: every group gains an id, and every register
+        entry that pointed at it by name is rewritten. Nobody loses their group to this.
+        """
         try:
             d = json.load(open(self._groups_path()))
-            return {str(k): v for k, v in d.items() if isinstance(v, dict)}
         except (OSError, ValueError, AttributeError):
             return {}
+        if not isinstance(d, dict):
+            return {}
+        d = {str(k): v for k, v in d.items() if isinstance(v, dict)}
+        if all("name" in v for v in d.values()):
+            return d           # already the new shape
+        now = utc(time.time())
+        migrated, by_name = {}, {}
+        for name, v in d.items():
+            if "name" in v:
+                migrated[name] = v
+                continue
+            gid = secrets.token_hex(6)
+            migrated[gid] = {"name": name, "icon": v.get("icon") or "radio", "colour": v.get("colour") or "",
+                             "created": v.get("created") or now, "deleted": None,
+                             "at": {"name": v.get("created") or now, "icon": v.get("created") or now,
+                                    "colour": v.get("created") or now, "deleted": None}}
+            by_name[name] = gid
+        if by_name:
+            reg = self._register_load() if hasattr(self, "_register_load") else {}
+            touched = False
+            for nid, r in reg.items():
+                if isinstance(r, dict) and str(r.get("group") or "") in by_name:
+                    r["group"] = by_name[str(r["group"])]
+                    r.setdefault("group_at", now)
+                    touched = True
+            if touched and hasattr(self, "_register_save"):
+                self._register_save(reg)
+            self._groups_save(migrated)
+        return migrated
+
+    def _group_key(self, value):
+        """What a membership actually stores. A declared group is held by its id, so a rename does
+        not move anybody; a name nobody has declared is held as the name, which is how an
+        undeclared group has always worked and still does. Declaring that name later adopts them."""
+        v = str(value or "").strip()[:40]
+        if not v:
+            return ""
+        g = self._groups_load()
+        if v in g:
+            return v
+        return self._group_by_name(v) or v
+
+    def _groups_item(self):
+        """Spec 096: what crosses the peer link. The whole table, tombstones included, and who
+        belongs where. Small enough to send whole, which makes the merge a fold rather than a
+        protocol: there is no ordering to get wrong and a lost item costs nothing."""
+        reg = self._register_load() if hasattr(self, "_register_load") else {}
+        members = {nid: {"group": str(r.get("group") or ""), "at": str(r.get("group_at") or "")}
+                   for nid, r in reg.items()
+                   if isinstance(r, dict) and (r.get("group") or r.get("group_at"))}
+        return {"groups": self._groups_load(), "members": members}
+
+    @staticmethod
+    def _later(a, b):
+        """The later of two stamps; an absent stamp loses to any real one."""
+        return a if str(a or "") >= str(b or "") else b
+
+    def _groups_merge(self, item):
+        """Last write wins, field by field. A rename here and a recolour there both stand, because
+        each field carries its own clock and neither touches the other's.
+
+        A tombstone is a field like the rest: a delete whose clock is later than the writes it
+        competes with wins, so the box that still held the group does not put it back."""
+        if not isinstance(item, dict):
+            return False
+        mine = self._groups_load()
+        theirs = item.get("groups") or {}
+        changed = False
+        for gid, t in theirs.items():
+            if not isinstance(t, dict):
+                continue
+            m = mine.get(gid)
+            if m is None:
+                mine[gid] = t
+                changed = True
+                continue
+            at_m, at_t = dict(m.get("at") or {}), dict(t.get("at") or {})
+            for field in ("name", "icon", "colour"):
+                if str(at_t.get(field) or "") > str(at_m.get(field) or ""):
+                    m[field] = t.get(field)
+                    at_m[field] = at_t.get(field)
+                    changed = True
+            # the tombstone, and its undoing: whichever clock is later decides
+            if str(at_t.get("deleted") or "") > str(at_m.get("deleted") or ""):
+                m["deleted"] = t.get("deleted")
+                at_m["deleted"] = at_t.get("deleted")
+                changed = True
+            m["at"] = at_m
+            mine[gid] = m
+        if changed:
+            self._groups_save(mine)
+        # membership, last write wins per node
+        reg = self._register_load() if hasattr(self, "_register_load") else {}
+        touched = False
+        for nid, t in (item.get("members") or {}).items():
+            if not isinstance(t, dict):
+                continue
+            r = reg.setdefault(nid, {})
+            if str(t.get("at") or "") > str(r.get("group_at") or ""):
+                r["group"] = str(t.get("group") or "")
+                r["group_at"] = t.get("at")
+                touched = True
+        # a group deleted by the merge takes its members with it
+        for r in reg.values():
+            if not isinstance(r, dict):
+                continue
+            gone = (mine.get(str(r.get("group") or "")) or {}).get("deleted")
+            if r.get("group") and gone:
+                r["group"] = ""
+                r["group_at"] = self._later(r.get("group_at"), gone)
+                touched = True
+        if touched and hasattr(self, "_register_save"):
+            self._register_save(reg)
+        return changed or touched
+
+    def _share_groups(self):
+        """Tell the peers. Silent on a box with no peering, which is every box on the bench."""
+        if getattr(self, "peering", None):
+            self._peer_share("groups", self._groups_item())
+
+    def _group_by_name(self, name):
+        """The id of a live group with this name, or None. The screen still speaks names."""
+        for gid, g in self._groups_load().items():
+            if not g.get("deleted") and str(g.get("name") or "") == str(name):
+                return gid
+        return None
 
     def _groups_save(self, g):
         os.makedirs(self.state_dir, exist_ok=True)
@@ -2029,43 +2189,96 @@ class Bridge(TAKMeshtasticGateway):
         os.replace(tmp, self._groups_path())
 
     def op_groups(self, **_):
-        g = self._groups_load()
+        g = {k: v for k, v in self._groups_load().items() if not v.get("deleted")}
         reg = self._register_load()
         counts = {}
         for r in reg.values():
             if isinstance(r, dict) and r.get("group"):
                 counts[str(r["group"])] = counts.get(str(r["group"]), 0) + 1
-        names = sorted(set(g) | set(counts), key=str.lower)
-        return {"groups": [{"name": n, "icon": (g.get(n) or {}).get("icon") or "radio", "count": counts.get(n, 0), "declared": n in g} for n in names], "icons": list(NODE_ICONS)}
+        # keyed by id now; the screen still reads names, so both travel
+        ids = sorted(set(g) | set(counts), key=lambda k: str((g.get(k) or {}).get("name") or k).lower())
+        return {"groups": [{"id": i, "name": str((g.get(i) or {}).get("name") or i),
+                            "icon": (g.get(i) or {}).get("icon") or "radio",
+                            "colour": (g.get(i) or {}).get("colour") or "",
+                            "count": counts.get(i, 0), "declared": i in g} for i in ids],
+                "icons": list(NODE_ICONS), "colours": list(GROUP_COLOURS)}
 
-    def op_group_set(self, name=None, icon=None, **_):
+    def op_group_set(self, name=None, icon=None, colour=None, id=None, **_):
+        """Spec 096: addressed by id where there is one, so a rename is a field and not a new group."""
+        g = self._groups_load()
+        gid = str(id or "").strip() or None
+        if gid and gid not in g:
+            return {"error": f"no group {gid}"}
+        if not gid:
+            gid = self._group_by_name(name)
         name = str(name or "").strip()[:40]
-        if not name:
+        if not gid and not name:
             return {"error": "name is required"}
-        icon = str(icon or "radio")
-        if icon not in NODE_ICONS:
+        icon = str(icon or "").strip()
+        if icon and icon not in NODE_ICONS:
             return {"error": "icon must be one of: " + ", ".join(NODE_ICONS)}
-        g = self._groups_load()
-        g[name] = {"icon": icon, "created": (g.get(name) or {}).get("created") or utc(time.time())}
+        was = (g.get(gid) or {}) if gid else {}
+        # Spec 090: a colour is optional, and keeping the one it had is not the same as clearing it.
+        # Two groups may carry the same colour: no validation, no warning, no error.
+        colour = str(colour or "").strip()
+        if colour and colour not in GROUP_COLOURS:
+            return {"error": "colour must be one of: " + ", ".join(GROUP_COLOURS)}
+        now = utc(time.time())
+        gid = gid or secrets.token_hex(6)
+        at = dict((was.get("at") or {}))
+        rec = {"name": name or str(was.get("name") or ""),
+               "icon": icon or str(was.get("icon") or "radio"),
+               "colour": colour or str(was.get("colour") or ""),
+               "created": was.get("created") or now, "deleted": None}
+        # only what the caller actually set moves its own clock: a recolour must not stamp the name
+        # as freshly written, or it would beat a rename that happened later on the other box.
+        for field, given in (("name", bool(name)), ("icon", bool(icon)), ("colour", bool(colour))):
+            if given or field not in at:
+                at[field] = now
+        at["deleted"] = None
+        rec["at"] = at
+        g[gid] = rec
         self._groups_save(g)
-        self._emit("register", group=name)
-        return {"group": {"name": name, "icon": icon}, "confirmed": True}
+        if name and name != gid:
+            # a name that was only ever typed on a node now has a record: its members move to the
+            # id, or declaring a group would empty it.
+            reg = self._register_load()
+            moved = [nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == name]
+            for nid in moved:
+                reg[nid]["group"] = gid
+                reg[nid]["group_at"] = now
+            if moved:
+                self._register_save(reg)
+        self._emit("register", group=rec["name"])
+        self._share_groups()
+        return {"group": {"id": gid, "name": rec["name"], "icon": rec["icon"], "colour": rec["colour"]}, "confirmed": True}
 
-    def op_group_delete(self, name=None, **_):
-        name = str(name or "").strip()
+    def op_group_delete(self, name=None, id=None, **_):
+        """Spec 096: a delete leaves a tombstone. Without one, the peer that still holds the group
+        puts it back on its next send, and delete is the one thing the sync silently undoes."""
         g = self._groups_load()
+        now = utc(time.time())
+        gid = str(id or "").strip() or self._group_by_name(name) or str(name or "").strip()
         reg = self._register_load()
-        cleared = [nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == name]
-        if name not in g and not cleared:
-            return {"error": f"no group {name!r}"}
-        g.pop(name, None)
+        cleared = [nid for nid, r in reg.items() if isinstance(r, dict) and str(r.get("group") or "") == gid]
+        if gid not in g and not cleared:
+            return {"error": f"no group {(id or name)!r}"}
+        rec = g.get(gid) or {}
         for nid in cleared:
             reg[nid]["group"] = ""
-        self._groups_save(g)
+            reg[nid]["group_at"] = now
+        if gid in g:
+            # a group nobody declared has no record to mark, and its members leaving is the whole
+            # of the delete. A declared one leaves a tombstone or the peer sends it straight back.
+            rec["deleted"] = now
+            rec.setdefault("at", {})["deleted"] = now
+            g[gid] = rec
+            self._groups_save(g)
         if cleared:
             self._register_save(reg)
-        self._emit("register", group=name)
-        return {"removed": name, "cleared": cleared, "confirmed": True}
+        self._emit("register", group=rec.get("name") or gid)
+        self._share_groups()
+        return {"removed": rec.get("name") or gid, "id": gid, "cleared": cleared, "confirmed": True}
 
     def _register_note(self, snap, where="bench", **more):
         """What a read of the device itself established: hardware, firmware, role, managed."""
@@ -2329,6 +2542,7 @@ class Bridge(TAKMeshtasticGateway):
             row = after.get(f"ch{index}")
             ok = bool(row) and row["name"] == src.settings.name and row["_psk"] == bytes(src.settings.psk) and row["role"] == self._channel_row(index, src)["role"]
             why = None if ok else (f"{nid} did not answer within {self.READBACK_S} s" if not row else "the device's own answer differs from what was written")
+            self._channel_pushed(index, nid, confirmed=ok)   # Spec 094: only a read-back counts
             self._emit("node", id=nid, action="node_channel_push", index=index, confirmed=ok)
             return {"written": ["channel"], "sent": sent, "confirmed": ok, "read_back": self._public(row) if row else {}, "unconfirmed": why}
         except Exception as e:  # noqa: BLE001
@@ -3188,6 +3402,10 @@ class Bridge(TAKMeshtasticGateway):
             why = str((d.get("routing") or {}).get("errorReason") or "NONE")
             ok = why == "NONE"
             rec["ack"] = "delivered" if ok else why
+            if rec.get("beacon"):   # Spec 097: the beacon's own record, and no chat receipt
+                if ok:
+                    self._beacon_answered(pid)
+                return
             h = getattr(self, "history", None)
             if h and h.ok:
                 h.set_ack(pid, rec["ack"])
@@ -3409,6 +3627,94 @@ class Bridge(TAKMeshtasticGateway):
         self._emit("node", id=None, action="profile_set")
         return {"written": prof, "confirmed": True}
 
+    # ---- Spec 098: the profile in the format the Meshtastic CLI already writes ------------------
+    # Where each of the five lives in the CLI's file, confirmed against the protobufs rather than
+    # remembered: the section, the camelCase spelling the CLI emits by default, and the snake_case
+    # one it emits when asked. Both are read, because both files exist in the wild.
+    PROFILE_YAML = (("role", "device", "role", "role"),
+                    ("region", "lora", "region", "region"),
+                    ("modem_preset", "lora", "modemPreset", "modem_preset"),
+                    ("tx_power", "lora", "txPower", "tx_power"),
+                    ("position_broadcast_secs", "position", "positionBroadcastSecs", "position_broadcast_secs"))
+    # What a full --export-config carries that this box deliberately will not take. Named so the
+    # answer can say what it ignored; the values are never read, let alone repeated.
+    PROFILE_IGNORED = ("owner", "owner_short", "location", "channel_url", "channelUrl",
+                       "canned_messages", "ringtone", "module_config", "security")
+
+    def op_profile_export(self, **_):
+        """The profile as the CLI would write it, carrying the profile and nothing else.
+
+        Not a device backup. A real --export-config carries security.privateKey, the admin keys and
+        channel_url, which is the channel key, and none of those belong in a file the box hands
+        out. The header says so, so nobody finds this later and mistakes it for one."""
+        prof = self.op_profile()
+        cfg = {}
+        for field, section, camel, _snake in self.PROFILE_YAML:
+            v = prof.get(field)
+            if v is None or str(v).strip() == "":
+                continue          # absent, not empty: an empty value read back is a setting
+            cfg.setdefault(section, {})[camel] = v
+        head = ("# Mesh Manager fleet profile, in the Meshtastic CLI's shape.\n"
+                "# How a radio should behave, not who it is: no owner, no location, no keys and no\n"
+                "# channel URL. This is not a device backup and cannot restore one.\n")
+        body = ""
+        for section in ("device", "lora", "position"):
+            if section not in cfg:
+                continue
+            body += f"  {section}:\n" + "".join(
+                f"    {k}: {v}\n" for k, v in cfg[section].items())
+        return {"yaml": head + ("config:\n" + body if body else "config: {}\n"),
+                "fields": {f: prof.get(f) for f in self.PROFILE_FIELDS if prof.get(f) is not None}}
+
+    def op_profile_import(self, yaml=None, text=None, **_):
+        """Read a file the CLI wrote. Five fields in, everything else named and left.
+
+        All or nothing: a value out of range refuses the whole file rather than leaving the profile
+        half changed, because a partly applied profile is worse than one that was not applied."""
+        raw = yaml if yaml not in (None, "") else text
+        if raw in (None, ""):
+            return {"error": "nothing to import: give the contents of a Meshtastic configure yaml"}
+        try:
+            import yaml as _y
+        except ImportError:
+            return {"error": "this box has no yaml reader installed"}
+        try:
+            doc = _y.safe_load(str(raw))
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"that is not yaml: {type(e).__name__}"}
+        if not isinstance(doc, dict):
+            return {"error": "a Meshtastic configure yaml is a mapping; this is not"}
+        cfg = doc.get("config")
+        if not isinstance(cfg, dict):
+            return {"error": "no config section: this does not look like a Meshtastic configure yaml"}
+        want = {}
+        for field, section, camel, snake in self.PROFILE_YAML:
+            sec = cfg.get(section)
+            if not isinstance(sec, dict):
+                continue
+            for spelling in (camel, snake):
+                if spelling in sec and sec[spelling] not in (None, ""):
+                    want[field] = sec[spelling]
+                    break
+        if not want:
+            return {"error": "nothing in that file belongs to a fleet profile: no role, region, modem preset, transmit power or position interval"}
+        # named, never read: the point of saying what was ignored is that nobody believes the whole
+        # file was applied, and it would be no better to put a private key in the answer instead.
+        ignored = sorted({k for k in self.PROFILE_IGNORED if k in doc}
+                         | {f"config.{k}" for k in cfg if k not in ("device", "lora", "position")}
+                         | {f"config.{sec}" for sec in ("device", "lora", "position")
+                            if isinstance(cfg.get(sec), dict)
+                            and any(sp not in [c for _f, s, c, _n in self.PROFILE_YAML if s == sec]
+                                    and sp not in [n for _f, s, _c, n in self.PROFILE_YAML if s == sec]
+                                    for sp in cfg[sec])})
+        before = self.op_profile()
+        r = self.op_profile_set(**want)
+        if r.get("error"):
+            # op_profile_set writes nothing when it refuses, so the profile is already untouched;
+            # restoring anyway would be a write on a path that must not write.
+            return {"error": r["error"], "wrote": None}
+        return {"written": r.get("written"), "ignored": ignored, "was": before, "confirmed": True}
+
     def _drift_of(self, prof, snap):
         diffs = []
         for k in self.PROFILE_FIELDS:
@@ -3589,6 +3895,64 @@ class Bridge(TAKMeshtasticGateway):
         except (OSError, ValueError):
             return None
 
+    def _rotation_armed(self):
+        """Spec 094: slots created but not yet pushed anywhere. A channel nobody has pushed is not
+        an outstanding job, so creating one arms the checklist rather than raising it."""
+        try:
+            return json.load(open(self._rotation_path())).get("armed") or {}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def _rotation_write(self, rec):
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            tmp = self._rotation_path() + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(rec, f)
+            os.replace(tmp, self._rotation_path())
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"rotation.json not written: {type(e).__name__}: {e}")
+
+    def _rotation_read(self):
+        try:
+            return json.load(open(self._rotation_path())) or {}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def _channel_armed(self, index, name=None):
+        """A channel was created. Remember the slot; raise nothing yet."""
+        rec = self._rotation_read()
+        armed = dict(rec.get("armed") or {})
+        armed[str(int(index))] = {"name": name, "at": utc(time.time())}
+        rec["armed"] = armed
+        self._rotation_write(rec)
+
+    def _channel_pushed(self, index, nid, confirmed=False):
+        """A push landed. Only a read-back that carried the channel counts: on this kind of
+        checklist, being heard proves nothing, because a device talks on the primary either way."""
+        if not confirmed:
+            return
+        rec = self._rotation_read()
+        armed = dict(rec.get("armed") or {})
+        key = str(int(index))
+        if key not in armed and not (rec.get("kind") == "channel" and int(rec.get("index", -1)) == int(index)):
+            return   # a push to a slot nobody created here is not a new-channel job
+        if rec.get("kind") != "channel" or int(rec.get("index", -1)) != int(index):
+            # the first confirmed push raises it. Expected is the managed devices: those are the
+            # ones this box can push to, unlike a rotation where the key is the whole mesh's.
+            reg = self._register_load() if hasattr(self, "_register_load") else {}
+            expected = {k: str(v.get("label") or v.get("name") or k)
+                        for k, v in reg.items() if isinstance(v, dict) and v.get("managed")}
+            expected.pop((self._own() or {}).get("id"), None)
+            rec = {"ts": utc(time.time()), "index": int(index), "name": (armed.get(key) or {}).get("name"),
+                   "source": "pushed from the screen", "note": None, "kind": "channel",
+                   "expected": expected, "carried": {}, "armed": {k: v for k, v in armed.items() if k != key}}
+            self._emit("rotation", state="marked", index=int(index), name=rec["name"], expected=len(expected))
+        carried = dict(rec.get("carried") or {})
+        carried[str(nid)] = utc(time.time())
+        rec["carried"] = carried
+        self._rotation_write(rec)
+
     def _rotation_mark(self, index, name=None, source="screen", note=None):
         """Record a rotation and the devices expected back: the register plus anyone heard here in the last seven days."""
         own = (self._own() or {}).get("id")
@@ -3611,7 +3975,8 @@ class Bridge(TAKMeshtasticGateway):
             if expected[nid] == nid and db.get("longName"):
                 expected[nid] = db["longName"]
         expected.pop(own, None)
-        rec = {"ts": utc(time.time()), "index": int(index), "name": name, "source": source, "note": note, "expected": expected}
+        rec = {"ts": utc(time.time()), "index": int(index), "name": name, "source": source, "note": note,
+               "kind": "rotation", "expected": expected, "armed": {}}   # Spec 094: the later event wins
         try:
             os.makedirs(self.state_dir, exist_ok=True)
             tmp = self._rotation_path() + ".tmp"
@@ -3639,10 +4004,36 @@ class Bridge(TAKMeshtasticGateway):
         rec = self._rotation_mark(index, name=name, source="marked by hand", note=note)
         return {"marked": rec["ts"], "index": index, "name": name, "expected": len(rec["expected"]), "confirmed": True}
 
+    def _rotation_waiting(self):
+        """How many devices a marked rotation is still waiting for, or None when none is open.
+        The same answer the rotation page renders, so the strip cannot drift from the page."""
+        try:
+            if not self._rotation_load():
+                return None
+            n = int((self.op_rotation_status().get("counts") or {}).get("waiting") or 0)
+        except (OSError, ValueError, AttributeError, TypeError):
+            return None
+        return n or None   # nothing outstanding is the same as no rotation, to the strip
+
     def op_rotation_status(self, **_):
         rec = self._rotation_load()
-        if not rec:
+        if not rec or not rec.get("ts"):
+            # a slot may be armed with nothing raised yet: that is not a checklist
             return {"rotation": None, "back": [], "waiting": [], "note": "no rotation marked on this box"}
+        # Spec 094: two kinds, one record and one reader. A rotation counts a device back when it
+        # has been heard, because the key changed under the whole mesh. A new channel counts it
+        # back only when its own read-back carried the channel: being heard proves nothing there.
+        if rec.get("kind") == "channel":
+            carried = rec.get("carried") or {}
+            back, waiting = [], []
+            for nid, name in sorted((rec.get("expected") or {}).items(), key=lambda kv: kv[1].lower()):
+                if nid in carried:
+                    back.append({"id": nid, "name": name, "heard": carried[nid]})
+                else:
+                    waiting.append({"id": nid, "name": name})
+            return {"rotation": {k: rec.get(k) for k in ("ts", "index", "name", "source", "note", "kind")},
+                    "back": back, "waiting": waiting,
+                    "counts": {"expected": len(rec.get("expected") or {}), "back": len(back), "waiting": len(waiting)}}
         ts = rec["ts"]
         first = {}
         h = getattr(self, "history", None)
@@ -3661,7 +4052,7 @@ class Bridge(TAKMeshtasticGateway):
                 back.append({"id": nid, "name": name, "heard": first[nid]})
             else:
                 waiting.append({"id": nid, "name": name})
-        return {"rotation": {k: rec.get(k) for k in ("ts", "index", "name", "source", "note")}, "back": back, "waiting": waiting,
+        return {"rotation": {k: rec.get(k) for k in ("ts", "index", "name", "source", "note", "kind")}, "back": back, "waiting": waiting,
                 "counts": {"expected": len(rec.get("expected") or {}), "back": len(back), "waiting": len(waiting)}}
 
     # ---- alerts (Spec 026) ----------------------------------------------------------------
@@ -3939,6 +4330,177 @@ class Bridge(TAKMeshtasticGateway):
         self._alerts_save(a)
         return raised
 
+    # ---- the beacon (Spec 097): a transmission on a timer, and an alert when it stops being answered
+    BEACON_DEFAULTS = {"enabled": False, "target": "channel:0", "every_min": 30, "misses": 3}
+    BEACON_FLOOR_MIN = 5          # a beacon is airtime nobody asked for; the floor is deliberate
+    BEACON_NODE = "beacon"        # the alert's node key, so one beacon holds one alert
+
+    def _beacon_path(self):
+        return os.path.join(self.state_dir, "beacon.json")
+
+    def _beacon_load(self):
+        try:
+            d = json.load(open(self._beacon_path()))
+        except (OSError, ValueError, AttributeError):
+            d = {}
+        b = dict(self.BEACON_DEFAULTS)
+        b.update({k: v for k, v in d.items() if k in self.BEACON_DEFAULTS})
+        for k in ("sent", "answered", "count", "pending", "sent_at"):
+            b[k] = d.get(k)
+        b["count"] = int(b.get("count") or 0)
+        return b
+
+    def _beacon_save(self, b):
+        try:
+            os.makedirs(self.state_dir, exist_ok=True)
+            tmp = self._beacon_path() + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(b, f)
+            os.replace(tmp, self._beacon_path())
+        except OSError as e:
+            self.logger.debug(f"beacon.json not written: {type(e).__name__}: {e}")
+
+    @staticmethod
+    def _beacon_target(target):
+        """A node id or a channel index, and nothing else. Not ^all, which would be a broadcast on
+        whatever channel happened to be first, and not a group, which is one message per member."""
+        t = str(target or "").strip()
+        if re.fullmatch(r"![0-9a-f]{8}", t):
+            return t, None
+        m = re.fullmatch(r"channel:([0-7])", t)
+        if m:
+            return t, int(m.group(1))
+        return None, None
+
+    def op_beacon_settings(self, **_):
+        b = self._beacon_load()
+        return {k: b[k] for k in self.BEACON_DEFAULTS}
+
+    def op_beacon(self, **_):
+        """The live picture: `misses` is how many have gone unanswered in a row, `threshold` is the
+        number that raises the alert. The settings call answers the other question."""
+        b = self._beacon_load()
+        return {"enabled": bool(b["enabled"]), "target": b["target"], "every_min": int(b["every_min"]),
+                "misses": int(b.get("count") or 0), "threshold": int(b["misses"]),
+                "sent": b.get("sent"), "answered": b.get("answered"),
+                "proves": ("that device answered" if str(b["target"]).startswith("!")
+                           else "that a neighbour repeated it, and no more")}
+
+    def op_beacon_set(self, enabled=None, target=None, every_min=None, misses=None, **_):
+        b = self._beacon_load()
+        if every_min is not None and every_min != "":
+            try:
+                v = int(every_min)
+            except (TypeError, ValueError):
+                return {"error": f"every_min must be a whole number of minutes, {self.BEACON_FLOOR_MIN} to 1440"}
+            if not self.BEACON_FLOOR_MIN <= v <= 1440:
+                return {"error": f"every_min must be {self.BEACON_FLOOR_MIN} to 1440 minutes: a beacon is airtime on a shared channel"}
+            b["every_min"] = v
+        if target is not None and target != "":
+            t, _ch = self._beacon_target(target)
+            if t is None:
+                return {"error": "target must be a radio id (!hex) or channel:0 to channel:7"}
+            b["target"] = t
+        if misses is not None and misses != "":
+            try:
+                v = int(misses)
+            except (TypeError, ValueError):
+                return {"error": "misses must be a whole number, 1 to 20"}
+            if not 1 <= v <= 20:
+                return {"error": "misses must be 1 to 20"}
+            b["misses"] = v
+        if enabled is not None and enabled != "":
+            on = str(enabled).strip().lower() in ("1", "true", "on", "yes")
+            if on != bool(b["enabled"]):
+                # either way the run starts again, and switching off takes its alert with it rather
+                # than leaving one open that nothing will ever clear.
+                b["count"], b["pending"], b["sent_at"] = 0, None, None
+                if not on:
+                    a = self._alerts_load()
+                    if self._clear_alert(a, self.BEACON_NODE, "beacon"):
+                        self._alerts_save(a)
+            b["enabled"] = on
+        self._beacon_save(b)
+        self._emit("alert", state="beacon", beacon=self.op_beacon())
+        return {"written": {k: b[k] for k in self.BEACON_DEFAULTS}, "confirmed": True}
+
+    def _beacon_judge(self, b, a=None):
+        """The one that went out last, now that its interval has passed. Unanswered is a miss.
+
+        Judging on the next send rather than the moment the interval ends is what lets a late ack
+        still land: a beacon that has only just left has not had its chance."""
+        pid = b.get("pending")
+        if pid is None:
+            return False
+        b["pending"] = None
+        if str((self.outbox.get(int(pid)) or {}).get("ack") or "") == "delivered":
+            return False
+        b["count"] = int(b.get("count") or 0) + 1
+        if b["count"] < int(b["misses"]):
+            return False
+        a = a if a is not None else self._alerts_load()
+        who = str(b["target"])
+        if who.startswith("!"):
+            reg = self._register_load() if hasattr(self, "_register_load") else {}
+            name = str((reg.get(who) or {}).get("label") or who)
+            text = f"{name} has not answered {b['count']} beacons"
+        else:
+            # what was actually proven, and no more: a broadcast's ack comes from a neighbour
+            # repeating the packet, so its absence says nothing about any named device.
+            text = f"nothing repeated the last {b['count']} beacons on {who.replace('channel:', 'channel ')}"
+        if self._raise_alert(a, self.BEACON_NODE, "beacon", text):
+            self._alerts_save(a)
+            return True
+        return False
+
+    def _beacon_send(self, b):
+        """Out on the radio, and nowhere else. Not a chat event, not the conversation's history:
+        a check every half hour would be most of what a quiet day's Messages contains."""
+        who, ch = self._beacon_target(b["target"])
+        text = f"Mesh Manager check {time.strftime('%H:%MZ', time.gmtime())}"
+        dest = who if ch is None else "^all"
+        pkt = self.interface.sendText(text, destinationId=dest, channelIndex=int(ch or 0),
+                                      wantAck=True, onResponse=self._on_ack)
+        pid = getattr(pkt, "id", None)
+        if pid is not None:
+            self.outbox[int(pid)] = {"ts": utc(time.time()), "text": text, "to": dest,
+                                     "channel": int(ch or 0), "ack": None, "beacon": True}
+        return pid
+
+    def _beacon_due(self, now=None):
+        """One pass. Sends at most one beacon, and only when the interval has actually elapsed."""
+        b = self._beacon_load()
+        if not b.get("enabled"):
+            return False
+        if self.interface is None:
+            # a radio that is not there is not a miss: the box already alerts on its own radio, and
+            # counting this would put a device's name on a fault that is not the device's.
+            return False
+        now = float(now or time.time())
+        last = float(b.get("sent_at") or 0)
+        if last and now - last < int(b["every_min"]) * 60:
+            return False
+        self._beacon_judge(b)
+        try:
+            pid = self._beacon_send(b)
+        except Exception as e:  # noqa: BLE001
+            self.logger.warning(f"the beacon could not be sent: {type(e).__name__}: {e}")
+            return False
+        b["pending"], b["sent"], b["sent_at"] = pid, utc(now), now
+        self._beacon_save(b)
+        return True
+
+    def _beacon_answered(self, pid):
+        """Called from the ack handler when a delivered ack belongs to the beacon."""
+        b = self._beacon_load()
+        if b.get("pending") is None or int(b["pending"]) != int(pid):
+            return
+        b["pending"], b["count"], b["answered"] = None, 0, utc(time.time())
+        self._beacon_save(b)
+        a = self._alerts_load()
+        if self._clear_alert(a, self.BEACON_NODE, "beacon"):
+            self._alerts_save(a)
+
     def _alert_loop(self):
         if self._stop.wait(120):
             return
@@ -3947,6 +4509,10 @@ class Bridge(TAKMeshtasticGateway):
                 self._judge_alerts()
             except Exception as e:  # noqa: BLE001
                 self.logger.warning(f"the alert pass failed: {type(e).__name__}: {e}")
+            try:
+                self._beacon_due()   # Spec 097: this pass already runs every minute
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"the beacon pass failed: {type(e).__name__}: {e}")
             if self._stop.wait(60):
                 return
 
@@ -4236,6 +4802,8 @@ class Bridge(TAKMeshtasticGateway):
         ok = bool(arrived) and row.get("name") == name and row.get("role") == "SECONDARY" and row.get("_psk") == bytes(ch.settings.psk)
         r = self._write_reply({"index": index, "name": name, "role": "SECONDARY"}, self._public(row), arrived, sent, why, ok)
         r["index"] = index
+        if r.get("confirmed"):
+            self._channel_armed(index, name=name)   # Spec 094: armed, not raised
         self._emit("write", action="channel_create", index=index, confirmed=r["confirmed"])
         return r
 
