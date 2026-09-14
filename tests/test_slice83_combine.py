@@ -110,6 +110,13 @@ var out={
   noHistNear:nodeStale(n('x',1,1,300000),NOW,[],600000),
   noHistFar: nodeStale(n('x',1,1,1200000),NOW,[],600000),
   neverHeard:nodeStale(n('x',1,1,null),NOW,[],600000),
+  // A node the broker is carrying is current; it is the radio link that is absent, not the node.
+  // Reporting it as not heard lately sent an operator looking for a fault that was not there.
+  // Raised 14 September 2026.
+  mqttFresh:nodeStale({id:'m',heard:iso(NOW-20000000),mqtt_at:iso(NOW-60000)},NOW,fast,600000),
+  mqttAlsoQuiet:nodeStale({id:'m',heard:iso(NOW-20000000),mqtt_at:iso(NOW-20000000)},NOW,fast,600000),
+  mqttNeverOnAir:nodeStale({id:'m',heard:null,mqtt_at:iso(NOW-60000)},NOW,fast,600000),
+  overMqtt:[overMqtt({via_mqtt:true}),overMqtt({via_mqtt:false}),overMqtt({})],
   words:[clusterWord({count:1,stale:0,allStale:false}),
          clusterWord({count:5,stale:0,allStale:false}),
          clusterWord({count:5,stale:2,allStale:false}),
@@ -152,6 +159,10 @@ console.log(JSON.stringify(out));
         check("AC8 without history, five minutes is inside the floor", g["noHistNear"], False)
         check("AC8 and twenty minutes is not", g["noHistFar"], True)
         check("AC8 never heard at all is quiet, because nothing is known", g["neverHeard"], True)
+        check("a node the broker is carrying is not quiet", g["mqttFresh"], False)
+        check("and one nothing has carried for hours still is", g["mqttAlsoQuiet"], True)
+        check("and one this radio never heard is current if the broker has it", g["mqttNeverOnAir"], False)
+        check("and the screen can tell which route it came by", g["overMqtt"], [True, False, False])
         check("AC9 the words", g["words"],
               ["", "5 nodes", "5 nodes, 2 not heard lately", "3 nodes, none heard lately"])
 

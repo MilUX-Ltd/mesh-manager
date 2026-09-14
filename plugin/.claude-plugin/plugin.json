@@ -1,7 +1,7 @@
 {
   "name": "mesh-manager",
   "displayName": "Mesh Manager",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Operate a Meshtastic mesh through a Mesh Manager box: the tools, the standing role and the skills, in one install. The box is the server; this carries no credential.",
   "author": {
     "name": "MilUX Ltd",

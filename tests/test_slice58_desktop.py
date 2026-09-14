@@ -31,7 +31,7 @@ check("AC3 the usbmodem is picked on Darwin, --serial wins, none is None",
 
 # AC4: the bridge in desktop mode
 st = tempfile.mkdtemp()
-br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "desktop", "SITE_NAME": "Laptop"}, socket_path=os.path.join(st, "b.sock"), state_dir=st)
+br = B.Bridge({"SERIAL": "", "MODE": "desktop", "SITE_NAME": "Laptop"}, socket_path=os.path.join(st, "b.sock"), state_dir=st)
 s = br.op_status()
 check("AC4 the bridge is a desktop with TAK off", (br.box_mode, s.get("mode"), s.get("tak")), ("desktop", "desktop", "off"))
 br.stop()

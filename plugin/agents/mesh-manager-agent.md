@@ -6,7 +6,7 @@ audit_verdict: pass with cautions
 cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
 audit_sha: d7ae553a0bf56e1d
-product_version: 1.2.1
+product_version: 1.2.2
 origin: mesh-manager/agents
 source: MilUX Ltd
 maintainer: MilUX Ltd

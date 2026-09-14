@@ -16,6 +16,7 @@ import socket
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -635,6 +636,13 @@ class Bridge(TAKMeshtasticGateway):
         snr = packet.get("rxSnr") if isinstance(packet, dict) else None
         hops = ((packet.get("hopStart", 0) - packet.get("hopLimit", 0))
                 if isinstance(packet, dict) and "hopStart" in packet and "hopLimit" in packet else None)
+        # A packet a broker handed us carries hop_start equal to hop_limit, which the arithmetic
+        # above reads as nought hops, and nought hops here means this radio heard it directly. It
+        # did not hear it at all. The hop count of a packet that came in over the network is not a
+        # fact about any radio link, so it is unknown rather than zero. Raised 14 September 2026.
+        via_mqtt = bool(packet.get("viaMqtt")) if isinstance(packet, dict) else False
+        if via_mqtt:
+            hops = None
         if fr and snr is not None:
             # the link store: rxSnr describes the LAST hop into this radio, so only a packet
             # that came with no hops says anything about the link between that node and us
@@ -646,7 +654,7 @@ class Bridge(TAKMeshtasticGateway):
             except (TypeError, ValueError):
                 pass
         self._emit("packet", **{"from": fr, "to": packet.get("toId") if isinstance(packet, dict) else None,
-                                "port": d.get("portnum"), "snr": snr, "hops": hops})
+                                "port": d.get("portnum"), "snr": snr, "hops": hops, "via_mqtt": via_mqtt})
         self._history_note(packet, d, fr, snr, hops)
 
     def _history_note(self, packet, d, fr, snr, hops):
@@ -979,7 +987,7 @@ class Bridge(TAKMeshtasticGateway):
 
     def _snapshot_item(self):
         own = [n for n in self.op_nodes().get("nodes", []) if not n.get("remote")] if self.interface is not None else []
-        keep = ("id", "name", "short", "label", "hw", "battery", "voltage", "charging", "lat", "lon", "heard", "snr", "hops", "heard_here", "icon", "group", "group_colour", "role")
+        keep = ("id", "name", "short", "label", "hw", "battery", "voltage", "charging", "lat", "lon", "heard", "snr", "hops", "heard_here", "icon", "group", "group_colour", "role", "via_mqtt", "mqtt_at")
         rows = [{k: n.get(k) for k in keep if k in n} for n in own]
         return {"class": "nodes", "origin": self.peering.id, "origin_name": self.peering.name, "path": [self.peering.id], "ts": utc(time.time()), "data": rows}
 
@@ -2896,7 +2904,10 @@ class Bridge(TAKMeshtasticGateway):
             names = sorted((n for n in os.listdir(d) if n.endswith(".json")), reverse=True)
         except OSError:
             return None
-        return names[0][:-5].replace("-", ":", 3).replace(":", "-", 2) if names else None
+        # The filename is the instant with its colons swapped for hyphens, so reading it back means
+        # putting the last two hyphens of the four back. Turning three round and two back left the
+        # seconds separator a hyphen and the answer unparseable, so the screen could not age it.
+        return names[0][:-5].replace("-", ":", 4).replace(":", "-", 2) if names else None
 
     def op_gateway_export(self, **_):
         """The gateway's own owner, configuration and channels, kept on the box.
@@ -2949,6 +2960,16 @@ class Bridge(TAKMeshtasticGateway):
         if os.path.realpath(want) not in by_real:
             seen = ", ".join(c["path"] for c in radios) or "nothing"
             return {"error": f"this box cannot see {want}. Plugged in now: {seen}"}
+        # AC6 asks for a path that survives a reboot and a change of socket, and a device answers to
+        # several names that do not: a by-path alias moves with the socket, and a symlink somebody
+        # made answers to nothing at all once it is gone. Only the box's own name for the radio is
+        # kept, whatever name was used to ask for it, because the config is read back at every boot.
+        # Refusing rather than quietly rewriting, so an operator who typed one thing and got another
+        # is told. Found in review, 14 September 2026.
+        want = by_real[os.path.realpath(want)]
+        if want != str(path or "").strip():
+            return {"error": f"that is another name for {want}, and names like it move when the cable "
+                             f"moves or the box reboots. Choose {want}, which does not."}
         cur = str(self.conf.get("SERIAL") or "")
         if cur and os.path.realpath(cur) == os.path.realpath(want):
             return {"serial": cur, "unchanged": True, "confirmed": True,
@@ -2968,7 +2989,16 @@ class Bridge(TAKMeshtasticGateway):
 
     @staticmethod
     def _write_conf_key(path, key, value):
-        """One key, in place, with every other line of the file left exactly as it was."""
+        """One key, in place, with every other line of the file left exactly as it was.
+
+        This runs as root on a box, on behalf of the screen, which does not. The screen's account
+        can write in the config's directory by design (the installer gives it that, for the
+        connections file, the brief, the audit and the token), so anything this write assumes about
+        that directory is an assumption about a less trusted account. A fixed temporary name was
+        such an assumption: plant a symlink at it and root writes wherever the link points, then
+        leaves the config itself a symlink somebody else chose. The temporary file is now created
+        exclusively, under a name nobody can predict, and the write fails rather than following
+        anything already sitting there. Found in review, 14 September 2026."""
         lines = open(path).read().splitlines()
         out, done = [], False
         for ln in lines:
@@ -2980,10 +3010,22 @@ class Bridge(TAKMeshtasticGateway):
             out.append(ln)
         if not done:
             out.append(f"{key}={value}")
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write("\n".join(out) + "\n")
-        os.replace(tmp, path)
+        d = os.path.dirname(os.path.abspath(path)) or "."
+        fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write("\n".join(out) + "\n")
+            try:                                  # the config is read by the screen's account too
+                os.chmod(tmp, 0o644)
+            except OSError:
+                pass
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def _restart_for_radio(self):
         """The unit is Restart=always, so stopping is how the bridge comes back on the new radio.
@@ -2992,6 +3034,14 @@ class Bridge(TAKMeshtasticGateway):
         already accepts for a new release."""
         self.restarted = getattr(self, "restarted", 0) + 1
         self._stop.set()
+        # Setting the event ends the background threads and leaves the socket server serving, so the
+        # process never exits and Restart=always never fires. What actually happened was that the
+        # watchdog thread stopped pinging and systemd killed the unit on WatchdogSec, fifteen
+        # minutes after the screen promised a few seconds. This is ADR-005 happening a second time.
+        # The handlers run on their own threads, so shutting down from inside one is safe.
+        srv = getattr(self, "_server", None)
+        if srv is not None:
+            threading.Thread(target=srv.shutdown, name="gateway-restart", daemon=True).start()
 
     def op_bench_devices(self, **_):
         """Spec 063: what is plugged in and ready for the bench, on a box or on a laptop."""

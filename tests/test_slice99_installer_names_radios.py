@@ -12,7 +12,7 @@ its hand.
 MESH_MANAGER_ROOT lets this suite give the installer a /dev/serial/by-id of its own, so the checks
 are about what it says, not about what happens to be plugged into this machine.
 """
-import os, re, subprocess, sys, tempfile
+import os, re, shlex, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read  # noqa: E402
 
@@ -69,6 +69,44 @@ check_true("AC5 with one candidate it prints the whole command to run next",
            "--serial /dev/serial/by-id/" + RADIO in out1, out1[-500:])
 check_true("AC5 and that command names the tarball, not a placeholder",
            re.search(r"install\.sh\s+\S*\.tgz", out1) is not None or "install.sh" in out1, out1[-300:])
+
+
+def suggested(out):
+    """The line the refusal tells the operator to run next."""
+    for ln in out.splitlines():
+        if "install.sh" in ln and "--serial" in ln:
+            return ln.strip()
+    return ""
+
+
+# AC5 says the operator can copy one line rather than assemble it, and what was printed could not be
+# copied. The group placeholder went out bare, so a shell reads `<your TAK group>` as a redirect:
+# pasting it fails on "your: No such file or directory" and leaves a file called `group` behind. The
+# line must survive being pasted into a shell as a command whose arguments are all words. Reviewed
+# 14 Sep 2026.
+# the default shape, which is the one whose suggestion carries a placeholder for the TAK group
+rc4, out4 = run(box([RADIO]))
+_line = suggested(out4)
+check_true("AC5 the refusal actually prints a line to run", bool(_line), out4[-300:])
+try:
+    _words = shlex.split(_line)
+    _split_ok = True
+except ValueError as _e:
+    _words, _split_ok = [], False
+check_true("AC5 and that line is one command, not a command and a shell redirect",
+           _split_ok and not any(ch in _line for ch in "<>|&;"), _line)
+check_true("AC5 and any placeholder in it is a word the shell would hand to the installer",
+           all(not w.startswith("<") for w in _words), _line)
+
+# It also has to be the command for THIS box. The suggestion was rebuilt from the basename of the
+# tarball and a bare ./install.sh, so an operator who ran it from anywhere but the unpacked
+# directory was handed a path that does not exist, and every other flag they had typed was dropped.
+rc5, out5 = run(box([RADIO]), "--mode", "server", "--port", "9123")
+_line5 = suggested(out5)
+check_true("AC5 the suggestion keeps the tarball it was given, path and all",
+           "/nonexistent.tgz" in _line5, _line5)
+check_true("AC5 and keeps the arguments the operator already typed",
+           "--port" in _line5 and "9123" in _line5, _line5)
 
 # ---- AC3 nothing plugged in ----------------------------------------------------------------------------
 rc2, out2 = run(box([]), "--mode", "server")

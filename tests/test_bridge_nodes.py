@@ -47,8 +47,8 @@ if "def mesh_nodes(self):" not in patched:
     print(f"\nFAILURES: {FAILURES}")
     sys.exit(1)
 
-body = patched[patched.index("    def mesh_nodes(self):"):patched.index("    def heartbeat(self):")]
-ns = {}
+body = patched[patched.index("    def note_radio(self, from_id, packet):"):patched.index("    def heartbeat(self):")]
+ns = {"datetime": __import__("datetime")}
 exec("class G:\n" + body, ns)          # noqa: S102 - the point is to run the shipped code
 G = ns["G"]
 
@@ -161,6 +161,69 @@ check("a node with no callsign falls back to its radio id", out[0]["name"], "!e1
 # did not name), but it has to be kept in step with what the gateway emits.
 # The checker is the contract's other half and lives in the estate's console repository. It is
 # checked when TAK_HEALTH_SH names it; otherwise the line reads SKIP, never ok, so a missing
+
+# ---------- a packet handed over by a broker is not a packet this radio heard -------------
+# Raised 14 September 2026, seen on a box: a node reachable only over MQTT read "not heard
+# lately" on the screen and still showed a signal figure in dB beside it. Both halves come
+# from the same place. note_radio is called for every packet that decodes, MQTT included,
+# and treats all of them as something this box's radio heard:
+#
+#   - Signal. The packet carries the rx_snr of whichever gateway heard it over the air, and
+#     the guard below writes it as though this radio had measured it. Confirmed on a live
+#     box, where the radio's own log read `rxSNR=6.25 rxRSSI=-54 via MQTT hopStart=3`: the
+#     number is real, and it describes a link this box is not part of.
+#   - Hops. An MQTT packet arrives with hop_start equal to hop_limit, which arithmetic reads
+#     as nought hops, which in this product means HEARD DIRECTLY. That puts a node on the
+#     link map as a direct neighbour of a radio that cannot hear it at all. Live, that was a
+#     node two hundred and fifty miles from the gateway, reading 5.8 dB and direct.
+#
+# The patch already draws the distinction this needs, one line above: never-heard is a
+# different state from gone-quiet. Reached-over-MQTT is a third, and the record has to carry
+# it so the screen can say it rather than reporting silence on a link nothing was using.
+MQTT_PACKET = {"viaMqtt": True, "rxSnr": 6.25, "rxRssi": -54, "hopStart": 3, "hopLimit": 3}  # as seen live
+AIR_PACKET = {"rxSnr": 11.5, "rxRssi": -92, "hopStart": 3, "hopLimit": 3}
+
+g = G()
+g._mesh_radio = {}
+g.note_radio("!ee000031", dict(MQTT_PACKET))
+rec = g._mesh_radio.get("!ee000031", {})
+check("a broker's packet gives the node no signal reading", rec.get("snr"), None)
+check("and no rssi either", rec.get("rssi"), None)
+check("and no hop count, because nought hops here means heard directly", rec.get("hops"), None)
+check_true("and the record says how it arrived", bool(rec.get("via_mqtt")), repr(rec))
+check_true("and when it last arrived that way", bool(rec.get("mqtt_at")), repr(rec))
+
+# the case on the box: heard over the air first, then only over MQTT afterwards
+g = G()
+g._mesh_radio = {}
+g.note_radio("!ee000032", dict(AIR_PACKET))
+check("a packet off the air does give a reading", g._mesh_radio["!ee000032"].get("snr"), 11.5)
+g.note_radio("!ee000032", dict(MQTT_PACKET))
+rec = g._mesh_radio["!ee000032"]
+check("once it is only reaching us over MQTT the old reading is not held out as current",
+      rec.get("snr"), None)
+check("nor the old hop count", rec.get("hops"), None)
+check_true("and it is marked as arriving over MQTT", bool(rec.get("via_mqtt")), repr(rec))
+
+# heard_here has always meant heard ON THE AIR, and a record now exists for a node that has only
+# ever arrived over MQTT. Seen live on a box: a node 250 miles away reading as heard here, beside a
+# signal figure, which is the claim this flag exists to stop the screen making.
+out = nodes({"!ee000034": dev("Relayed only", mid="!ee000034")},
+            {"!ee000034": {"via_mqtt": True, "mqtt_at": "2026-09-14T09:30:00Z"}})
+check("a node only ever reached over MQTT was not heard here", out[0].get("heard_here"), False)
+out = nodes({"!ee000035": dev("On air", mid="!ee000035")},
+            {"!ee000035": {"heard": "2026-09-14T09:30:00Z", "snr": 6.2, "hops": 0}})
+check("and one heard on the air was", out[0].get("heard_here"), True)
+
+# and the node list carries it, because the screen cannot say what it is not told
+out = nodes({"!ee000033": dev("Relayed", mid="!ee000033")},
+            {"!ee000033": {"heard": "2026-09-14T09:00:00Z", "via_mqtt": True,
+                           "mqtt_at": "2026-09-14T09:30:00Z", "snr": None, "hops": None}})
+row = out[0]
+check("the node list passes on that it came over MQTT", row.get("via_mqtt"), True)
+check("and when", row.get("mqtt_at"), "2026-09-14T09:30:00Z")
+check("and offers no signal figure for it", row.get("snr"), None)
+
 # contract check is visible.
 CHECKER = next((c for c in [os.environ.get("TAK_HEALTH_SH", "")] if c and os.path.exists(c)), "tak-health.sh (not found)")
 emitted = set()

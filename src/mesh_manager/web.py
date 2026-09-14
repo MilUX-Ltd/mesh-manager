@@ -1181,11 +1181,20 @@ SIG_SVG = ("<svg class='sig__bars' viewBox='0 0 22 16' aria-hidden='true'><rect 
            "<rect class='b2' x='6' y='8' width='4' height='8'/><rect class='b3' x='12' y='4' width='4' height='12'/><rect class='b4' x='18' y='0' width='4' height='16'/></svg>")
 
 
-def sig(snr, hops):
-    """Bars by SNR band with the figure beside them, never colour alone; a hop pill after."""
+def sig(snr, hops, via_mqtt=False):
+    """Bars by SNR band with the figure beside them, never colour alone; a hop pill after.
+
+    A node the broker is carrying has no signal this box measured and no hop count that describes a
+    path to here, so it says how it arrived instead of showing a reading that belongs to a link
+    nothing is using. Raised 14 September 2026."""
     hop = ""
     if hops is not None:
         hop = " <span class='pill'>" + ("direct" if int(hops) == 0 else f"{int(hops)} hop" + ("s" if int(hops) != 1 else "")) + "</span>"
+    if via_mqtt and snr is None:
+        return ("<span class='sig sig--0' data-tip='Reached over MQTT' "
+                "data-tip-more='This node is arriving through a broker over the network, not over this box"
+                "&#39;s radio. There is no signal reading because this radio did not hear it.'>"
+                "<span class='sub'>over MQTT</span></span>" + hop)
     if snr is None:
         return "<span class='sig sig--0'><span class='sub'>no reading</span></span>" + hop
     snr = float(snr)
@@ -1777,9 +1786,17 @@ OVERLAY_JS = r"""<script>
   // than a second definition. A node the map holds no history for has no rhythm to read, and gets a stated
   // floor instead of a guess from one sample.
   function staleGap(times,floorMs){var g=gapFor(times||[]);return (times&&times.length>1)?g:Math.max(g,floorMs||600000);}
-  function nodeStale(node,now,times,floorMs){var t=Date.parse((node&&node.heard)||'')||0;
+  // Reached over MQTT is current, and saying "not heard lately" about it reports a fault that is
+  // not there: the broker is carrying the node and its position is as new as anything else on the
+  // map. What is absent is a radio link, which the signal reading says on its own. So freshness is
+  // the most recent time we had anything from the node, by either route. Raised 14 September 2026.
+  function nodeStale(node,now,times,floorMs){
+    var t=Math.max(Date.parse((node&&node.heard)||'')||0,Date.parse((node&&node.mqtt_at)||'')||0);
     if(!t)return true;   // never heard is not fresh: nothing is known about it
     return (now-t)>staleGap(times,floorMs);}
+  // and it is worth saying which route, because a node only the broker is carrying cannot be
+  // reached if the network goes
+  function overMqtt(n){return !!(n&&n.via_mqtt);}
   // Spec 083: radios on top of each other become one marker at their centre of mass. The threshold is in
   // screen pixels because the clutter is a screen problem: the same field is one blob at zoom 10 and eight
   // separate radios at zoom 18. Greedy against each cluster's first member, so the seed never drifts and the
@@ -1881,9 +1898,10 @@ OVERLAY_JS = r"""<script>
   // A list works where zooming cannot, which is two radios on one bench at the same coordinates.
   function clusterList(c){var now=Date.now();
     return "<div class='mm-cl-list'>"+c.members.map(function(n){var st=staleNow(n),t=Date.parse(n.heard||'')||0;
+      var when=Math.max(t,Date.parse(n.mqtt_at||'')||0);
       return "<button type='button' class='mm-cl-row"+(st?' stale':'')+"' data-id='"+escH(n.id)+"'>"
         +"<i style='background:"+groupColour(n)+"'></i><span class='nm'>"+escH(names_[n.id]||n.label||n.name||n.id)+"</span>"
-        +"<span class='age'>"+(t?escH(fmtAge(now-t))+(st?' · not heard lately':''):'never heard')+"</span></button>";}).join('')+"</div>";}
+        +"<span class='age'>"+(when?escH(fmtAge(now-when))+(st?' · not heard lately':(overMqtt(n)?' · over MQTT':'')):'never heard')+"</span></button>";}).join('')+"</div>";}
   function soloCluster(n){var st=staleNow(n);
     return {group:String(n.group||''),members:[n],count:1,fresh:st?0:1,stale:st?1:0,allStale:st,lat:n.lat,lon:n.lon};}
   function drawNodes(pts,layer){
@@ -2440,7 +2458,7 @@ def node_row(n, db=False, routes=None, silent_min=30, availability=None):
     glyph = f"<span class='nodeicon' data-tip='{e(str(n.get('icon') or 'radio'))}{(' · ' + e(str(n.get('group')))) if n.get('group') else ''}'>{NODE_ICON_SVG.get(str(n.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span>"
     gtags = " ".join([f"<span class='pill'>{e(str(n.get('group')))}</span>"] if n.get("group") else []) + "".join(f" <span class='pill' style='opacity:.8'>{e(str(t))}</span>" for t in (n.get("tags") or [])[:4])
     return (f"<tr data-id='{e(nid)}' class='{'db' if db else ''}' {attrs}><td>{glyph}<b><a href='/node?id={e(nid)}' class='plain' data-tip='This node over time' data-tip-more='Battery, voltage, hours heard and messages'>{e(name)}</a></b>{(' ' + gtags) if gtags else ''}<div class='sub'>{e(nid)}{('<span class=hide-narrow> · ' + e(sub) + '</span>') if sub else ''}</div></td>"
-            f"<td>{sig(n.get('snr'), n.get('hops'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
+            f"<td>{sig(n.get('snr'), n.get('hops'), n.get('via_mqtt'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
             f"<td><div class='row-actions'>{asks}"
             + ("" if db else node_name_fold(n))
             + f"</div><div class='res meta' role='status'></div>"
@@ -2902,7 +2920,16 @@ def register_rows(reg, availability=None, inv=None):
     for r in reg.get("rows", []):
         nid = str(r.get("id") or "")
         heard = r.get("heard") or r.get("last_heard_db")
-        heard_html = f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" if heard else ("<span class='sub'>on the bench only, not heard on the air</span>" if r.get("bench_only") else "<span class='sub'>not heard</span>")
+        # A node the broker is carrying is being received now, and the register said "not heard"
+        # about one whose position was moving on the map at the same moment. Heard on the air and
+        # seen over MQTT are separate facts, so the register shows the later of them and names the
+        # route, rather than reporting silence on a link nothing was using. Raised 14 September 2026.
+        mqtt_at = r.get("mqtt_at") if r.get("via_mqtt") else None
+        if mqtt_at and (not heard or str(mqtt_at) > str(heard)):
+            heard_html = (f"<time datetime='{e(str(mqtt_at))}' data-age>{e(age(mqtt_at))}</time> "
+                          "<span class='sub'>over MQTT</span>")
+        else:
+            heard_html = f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" if heard else ("<span class='sub'>on the bench only, not heard on the air</span>" if r.get("bench_only") else "<span class='sub'>not heard</span>")
         # Spec 095: the register is a register. Over the air lives on the node's own page, where an
         # operator is already looking when they want to change one device, and where the forms have
         # room to be used on a phone.
@@ -4231,9 +4258,13 @@ def gateway_card(gw):
     # Spec 101: what it would cost to lose this radio right now, and the one action that changes it.
     kept = gw.get("export_at")
     ex = _act("gateway_export")
-    keep = (f"<form data-action='gateway_export' style='margin-top:var(--s2)'>"
+    # A read goes out as a GET: the server answers /api/<action> on GET and refuses a read on POST
+    # with 405, so this form wearing the write path's shape was a button that could only ever fail.
+    # The GET path writes its answer into .out, where the write path uses .res. Found in review,
+    # 14 September 2026.
+    keep = (f"<form data-action='gateway_export' data-method=get style='margin-top:var(--s2)'>"
             f"<button type='submit' class='line'>{e(ex['title'])}</button>"
-            "<div class='res meta' role='status'></div></form>")
+            "<div class='out meta' role='status'></div></form>")
     if kept:
         saved = (f"<p class='meta'>A copy of this radio's configuration and channels was kept on the box "
                  f"<time datetime='{e(str(kept))}' data-age>{e(age(str(kept)))}</time>. Restore it onto a "
@@ -4255,8 +4286,12 @@ def radio_body(cfg, own_id="?", mqtt=None, gw=None):
     if not cfg or "long_name" not in cfg:
         # the chooser comes first here on purpose: a page that says "not readable yet" and offers
         # nothing is what this card exists to stop.
+        # WRITE_JS drives every form in the chooser. Without it the buttons submit the page to
+        # itself and nothing happens, which is what shipped on exactly the branch a box with no
+        # radio lands on: the one journey the chooser exists for. Found in review, 14 September 2026.
         return (gateway_card(gw) +
-                "<p class='warn'>The radio's settings are not readable yet. The bridge reads them when the radio connects; if the strip above says the radio is missing, check the USB cable.</p>")
+                "<p class='warn'>The radio's settings are not readable yet. The bridge reads them when the radio connects; if the strip above says the radio is missing, check the USB cable.</p>"
+                + WRITE_JS)
     v = lambda k: e(str(cfg.get(k) if cfg.get(k) is not None else ""))
     rs, rr = _act("radio_set"), _act("radio_set_region")
     settings = (f"<form class='card' data-action='radio_set' data-risk='change' data-confirm=\"{e(rs['confirm'])}\">"

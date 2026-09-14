@@ -15,7 +15,7 @@ getting a radio chosen and attached, and nothing about whether the mesh it joins
 
 Every block is guarded: a missing helper is one verdict, not a traceback hiding the rest.
 """
-import json, os, re, sys, tempfile, threading
+import ast, json, os, re, sys, tempfile, threading, time
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -157,6 +157,30 @@ for bad in ("/dev/ttyACM0", "COM3", "", "not a path", BYID + "/../../etc/passwd"
     r = d_.op_gateway_set(path=bad)
     check_true(f"AC6 {bad!r} is refused", "error" in r, json.dumps(r)[:140])
 
+# AC6 said "a path that is not a by-id path is refused", and the guard only knew the shape of a
+# port number. Any other name for the same device passed: a by-path alias moves when the cable moves
+# into another socket, which is the exact failure a by-id path exists to prevent, and a symlink
+# somebody made in their home directory is not a name a box can rely on either. Reviewed 14 Sep 2026.
+_alias_dir = tempfile.mkdtemp()
+BY_PATH = os.path.join(_alias_dir, "pci-0000:00:14.0-usb-0:2:1.0-port0")
+HOME_LINK = os.path.join(_alias_dir, "my-radio")
+os.symlink(RADIO, BY_PATH)
+os.symlink(RADIO, HOME_LINK)
+for alias in (BY_PATH, HOME_LINK):
+    g_ = box(serial=OTHER)
+    r = g_.op_gateway_set(path=alias)
+    check_true(f"AC6 {os.path.basename(alias)!r} is refused: it is another name for a radio, not its by-id path",
+               "error" in r, json.dumps(r)[:200])
+    check_true("AC6 and no alias was written into the config",
+               alias not in open(g_.conf["CONFIG_PATH"]).read(), open(g_.conf["CONFIG_PATH"]).read()[:200])
+
+# And what is stored is the box's own name for the radio, never the operator's spelling of it: the
+# config is read back at every boot, so the one path in it has to be the stable one.
+h_ = box(serial=OTHER)
+r = h_.op_gateway_set(path=RADIO)
+check_true("AC6 a by-id path is accepted", "error" not in r, json.dumps(r)[:200])
+check("AC6 and the config holds the candidate's own path", r.get("serial"), RADIO)
+
 # ---- AC7 the bridge re-attaches ---------------------------------------------------------------------------------
 e_ = box(serial=RADIO)
 r = e_.op_gateway_set(path=OTHER)
@@ -164,6 +188,53 @@ check_true("AC7 the answer says the bridge is restarting onto the new radio",
            re.search(r"restart|outage|moment", json.dumps(r), re.I) is not None, json.dumps(r)[:200])
 check_true("AC7 and the bridge was actually asked to re-attach",
            e_.restarted >= 1 or e_._stop.is_set(), f"restarted={e_.restarted}, stop={e_._stop.is_set()}")
+
+# The check above passes on a counter the restart increments itself, so it held while the bridge
+# never actually went anywhere. Setting the stop event ends the background threads and leaves the
+# socket server serving forever, so the process does not exit, `Restart=always` never fires, and
+# the promise of "a few seconds" became the 900 second watchdog. This is ADR-005 and LESSONS 26
+# happening a second time, so the check now holds the thing itself: the server stops.
+class _Srv:
+    def __init__(self):
+        self.shutdown_calls = 0
+    def shutdown(self):
+        self.shutdown_calls += 1
+    def server_close(self):
+        pass
+
+i_ = box(serial=RADIO)
+i_.socket_path = os.path.join(i_.state_dir, "b.sock")
+i_._server = _Srv()
+i_.op_gateway_set(path=OTHER)
+check("AC7 the socket server is shut down, so the process can exit and systemd restart it",
+      i_._server.shutdown_calls, 1)
+
+# and the same thing proven against a real serve_forever rather than a stub, because the stub only
+# proves we called a method we chose the name of
+j_ = box(serial=RADIO)
+j_.socket_path = os.path.join(j_.state_dir, "live.sock")
+j_._server = None
+j_._subs, j_._subs_lock = [], threading.Lock()
+_serving = threading.Event()
+def _run():
+    _serving.set()
+    try:
+        j_.serve_forever()
+    finally:
+        _serving.clear()
+threading.Thread(target=_run, daemon=True).start()
+_serving.wait(3)
+for _ in range(60):                       # give the server a moment to be listening
+    if getattr(j_, "_server", None) is not None:
+        break
+    time.sleep(0.05)
+j_.op_gateway_set(path=OTHER)
+for _ in range(80):                       # and a moment to come back out of the loop
+    if not _serving.is_set():
+        break
+    time.sleep(0.05)
+check_true("AC7 and serve_forever actually returns, so the unit restarts in seconds not minutes",
+           not _serving.is_set(), "serve_forever is still running after the radio was changed")
 
 # ---- AC8 setting what is already set ------------------------------------------------------------------------------
 f_ = box(serial=RADIO)
@@ -191,12 +262,29 @@ check_true("AC10 the screen offers the chooser", "gateway_set" in web, "nothing 
 # Found by opening the page: the card was only rendered on the branch where the radio is unreadable,
 # and "gateway_set is somewhere in web.py" passed anyway. The Radio page must render it on BOTH
 # branches, because changing a working radio is the case this card exists for.
-_rb = web[web.find("def radio_body("):web.find("def proposal_form(")]
-# the page's own returns, at one indent: radio_body holds a nested helper whose return is its own
-_returns = [l for l in _rb.splitlines() if l.startswith("    return")]
+# Every way out of radio_body, read off the parse tree rather than off the indent. The line filter
+# this replaced matched returns at exactly one indent, so the early return inside `if not cfg` was
+# never in the list at all and "every way out" only ever meant the last one. That branch is the one
+# a box with no radio lands on. Returns belonging to the nested helper are excluded by walking only
+# this function's own body.
+_tree = ast.parse(web)
+_fn = next(n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef) and n.name == "radio_body")
+_nested = {id(n) for f in ast.walk(_fn) if isinstance(f, ast.FunctionDef) and f is not _fn
+           for n in ast.walk(f) if isinstance(n, ast.Return)}
+_returns = [ast.get_source_segment(web, n) or "" for n in ast.walk(_fn)
+            if isinstance(n, ast.Return) and id(n) not in _nested]
+check_true("AC10 the Radio page has more than one way out, and both were checked",
+           len(_returns) >= 2, f"{len(_returns)} return(s) found")
 check_true("AC10 every way out of the Radio page carries the chooser",
-           bool(_returns) and all("gateway_card(gw)" in l for l in _returns),
-           " | ".join(l.strip()[:70] for l in _returns))
+           bool(_returns) and all("gateway_card(gw)" in r for r in _returns),
+           " | ".join(" ".join(r.split())[:70] for r in _returns))
+# Rendering the card is not offering the chooser. The forms in it are driven entirely by WRITE_JS;
+# a page carrying the card without the script shows a button that submits the page to itself and
+# does nothing at all, which is what shipped on the branch where the radio cannot be read. That
+# branch is the one a box with no radio lands on, so it is the only branch that really had to work.
+check_true("AC10 and every one of them carries the script that makes it do something",
+           bool(_returns) and all("WRITE_JS" in r for r in _returns),
+           " | ".join(" ".join(r.split())[:70] for r in _returns))
 # This check used to look for the phrase anywhere in web.py. It passed while the phrase sat behind
 # `if mode == "desktop"` and a box still read "Radio missing", which is the whole fault this card is
 # about. It now holds the two things that have to be true on a box.
@@ -206,6 +294,31 @@ check_true("AC10 the strip says watching for a radio on any shape that has none 
 _face = web[web.find('card("Radio",'):][:900]
 check_true("AC10 and the home page offers the way to choose one",
            "/radio" in _face and re.search(r"watching for a radio", _face, re.I) is not None, _face[:400])
+
+# ---- the config write itself (found in review, 14 Sep 2026) ----------------------------------------------
+# gateway_set is the one thing on the box that makes the root bridge write a file on behalf of the
+# screen, and the screen runs as its own unprivileged account with the config directory group
+# writable (install.sh gives it ReadWritePaths=/etc/mesh-manager). Writing through a predictable
+# temporary name means anything that can create a file in that directory can choose what root
+# overwrites. The write has to stay inside the directory it was given whatever is already sitting
+# in it.
+_w = tempfile.mkdtemp()
+_conf_p = os.path.join(_w, "config")
+open(_conf_p, "w").write("SERIAL=/dev/old\nFILTER_GROUP=MilUX\n")
+_victim = os.path.join(_w, "victim")
+open(_victim, "w").write("ORIGINAL\n")
+os.symlink(_victim, _conf_p + ".tmp")           # what the screen's account can plant
+try:
+    Bridge._write_conf_key(_conf_p, "SERIAL", "/dev/new")
+except OSError:
+    pass                                         # refusing outright is a fine way to be safe
+check("the config write does not follow a planted symlink", open(_victim).read(), "ORIGINAL\n")
+check_true("and the config file is still a file, not a link somebody chose",
+           not os.path.islink(_conf_p), "the config was replaced by a symlink")
+check_true("and the key was still written", "SERIAL=/dev/new" in open(_conf_p).read(),
+           open(_conf_p).read()[:120])
+check_true("and the rest of the file is untouched", "FILTER_GROUP=MilUX" in open(_conf_p).read(),
+           open(_conf_p).read()[:120])
 
 # ---- AC12 a box that never touches it is untouched ---------------------------------------------------------------------------
 check_true("AC12 nothing about this reaches a box that already works",

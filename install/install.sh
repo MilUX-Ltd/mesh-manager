@@ -29,6 +29,11 @@ set -euo pipefail
 
 ROOT="${MESH_MANAGER_ROOT:-}"
 DRY=0; ROUTE_HOST_ARG=""; ROUTE_HOST=""; TARBALL=""; SERIAL=""; REGION=""; CHANNEL=""; FILTER_GROUP=""; PASSWORD=""; BIND_ARG=""; PORT_ARG=""; AUTH_ARG=""; MAP_LAT_ARG=""; MAP_LON_ARG=""; TILES_ARG=""; MBTILES_ARG=""; GPS_ARG=""; CLEAR_POS=0; TOKEN_FILE=""; UPDATE_MODE_ARG=""; MODE_ARG=""; PEER_BIND_ARG=""; PEER_PORT_ARG=""; SITE_NAME_ARG=""; SITE_ADDRESS_ARG=""
+# What the operator actually typed, kept before the loop below consumes it. The refusal that names
+# the radios hands back THEIR command with the radio added, rather than one reassembled from a few
+# of the variables: rebuilding it dropped the tarball's directory and every other flag they had
+# already worked out. Found in review, 14 September 2026.
+ORIG_ARGS=("$@")
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial)        SERIAL="${2:-}"; shift 2 ;;
@@ -210,9 +215,24 @@ name_the_radios() {   # prints the list; returns 0 when exactly one candidate lo
     if (( n == 1 )); then
         echo "Run this, which is the same command with the radio filled in:" >&2
         echo "" >&2
-        printf '  sudo ./install.sh %s --serial /dev/serial/by-id/%s%s
-' \
-               "$(basename "$TARBALL")" "$only" "$([[ "$MODE" == server ]] && echo ' --mode server' || echo " --filter-group <your TAK group>")" >&2
+        # Quoted with %q so the whole line can be pasted. The group placeholder used to go out
+        # bare, and a shell reads <your TAK group> as two redirections: the paste failed on
+        # "your: No such file or directory" and left a file called group behind.
+        local line="  sudo $(printf '%q' "$0")"
+        local a
+        for a in "${ORIG_ARGS[@]}"; do
+            [[ "$a" == "--serial" || "$a" == "--filter-group" ]] && continue
+            line+=" $(printf '%q' "$a")"
+        done
+        line+=" --serial $(printf '%q' "/dev/serial/by-id/$only")"
+        local need_group=0
+        [[ "$MODE" != server && "$MODE" != hub && -z "$FILTER_GROUP" ]] && need_group=1
+        (( need_group )) && line+=" --filter-group 'your TAK group'"
+        echo "$line" >&2
+        if (( need_group )); then
+            echo "" >&2
+            echo "  Replace 'your TAK group' with the name of the TAK group this box carries." >&2
+        fi
         return 0
     fi
     if (( n == 0 )); then

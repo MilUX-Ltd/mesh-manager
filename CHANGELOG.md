@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## 1.2.2 (14 September 2026)
+
+**Corrections to 1.2.1, found by reading it rather than by running it.** Four of them stopped the
+feature 1.2.1 was cut for from working at all on the box it was written for, and the suites that
+were supposed to hold them passed throughout. Every check below now fails against 1.2.1.
+
+- **Choosing the first radio does nothing.** On the Radio page, a box whose radio settings cannot be
+  read yet offered the chooser without the script that drives it, so "Use this radio" submitted the
+  page to itself. That is the state a box with no radio is in, which is the one journey the chooser
+  exists for.
+- **The button that keeps a copy of the gateway could not keep one.** Keeping a copy is a read, and
+  the screen sent it as a write, which the box refuses. The suite now holds the rule for every form
+  on the screen rather than for this one.
+- **Changing the radio did not restart the bridge.** It set the stop flag and left the socket server
+  running, so the process never exited and the unit never restarted. What actually brought it back
+  was the watchdog, fifteen minutes after the screen said a few seconds. The suite used to check the
+  flag; it now checks that the bridge stops.
+- **Writing the chosen radio into the config could overwrite another file.** The bridge writes as
+  root on behalf of the screen, which does not run as root and can write in that directory by
+  design. The temporary file went in under a predictable name and followed anything already there.
+- **Only the box's own name for a radio is stored.** A by-path alias, or a link somebody made, was
+  accepted and written down, and both move when a cable moves. That is the failure a by-id path
+  exists to prevent.
+- **The installer's suggested command can be copied.** It kept the tarball's directory and the flags
+  already typed, and the group placeholder is quoted, where before it was read by the shell as a
+  redirection and left a stray file behind.
+- **The screen can say when a copy was kept.** The time read back out of the export's filename was
+  malformed, so nothing could age it.
+
+**A node reached over MQTT is reported as reached over MQTT.** A packet handed over by a broker
+carries the signal reading taken by whichever gateway heard it on the air, and a hop count that
+describes that gateway's path rather than this box's. Both were being read as though this radio had
+made them, so a node arriving only through a broker showed a signal strength and counted as heard
+directly. Seen on a live box on 14 September 2026: a node two hundred and fifty miles from the
+gateway, reading 5.8 dB and direct.
+
+Heard on the air and reached over MQTT are now separate facts, each with its own time. A node the
+broker is carrying reads as current with its route named, where it used to read as not heard lately
+beside a signal figure for a link nothing was using. Signal and hop count are shown only for the air
+path, and a node this radio has never actually heard no longer counts as heard here.
+
 ## 1.2.1 (13 September 2026)
 
 **A radio can be chosen, changed and replaced from the box.** Until now the gateway radio was named once on

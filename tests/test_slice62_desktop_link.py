@@ -20,14 +20,14 @@ def wait_for(pred, secs=8.0):
 
 # AC1: a laptop with no radio is a real site
 st_dir = tempfile.mkdtemp()
-b = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "desktop", "SITE_NAME": "Someone's laptop"}, socket_path=os.path.join(st_dir, "b.sock"), state_dir=st_dir)
+b = B.Bridge({"SERIAL": "", "MODE": "desktop", "SITE_NAME": "Someone's laptop"}, socket_path=os.path.join(st_dir, "b.sock"), state_dir=st_dir)
 s = b.op_status()
 check("AC1 a desktop with no radio is the real bridge, with an identity", (s.get("mode"), s.get("radio_present"), bool((s.get("site") or {}).get("id")), (s.get("site") or {}).get("name")), ("desktop", False, True, "Someone's laptop"))
 check_true("AC1 and it is not the demo", str(s.get("version")) != "0.1.0", repr(s.get("version")))
 
 # AC3: it joins a hub and both ends see it
 hub_dir = tempfile.mkdtemp()
-hub = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "A hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_dir, "b.sock"), state_dir=hub_dir)
+hub = B.Bridge({"SERIAL": "", "MODE": "hub", "PEER_BIND": "127.0.0.1", "PEER_PORT": 0, "SITE_NAME": "A hub", "SITE_ADDRESS": "127.0.0.1"}, socket_path=os.path.join(hub_dir, "b.sock"), state_dir=hub_dir)
 inv = hub.op_peer_invite()
 j = b.op_peer_join(invite=inv["invite"])
 check_true("AC3 the laptop joins a hub by invite", j.get("joined") is True, repr(j))

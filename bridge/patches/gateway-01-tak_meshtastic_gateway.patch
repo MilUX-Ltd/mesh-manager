@@ -832,6 +832,24 @@
 +        # topology is worse than an absent one).
 +        try:
 +            rec = self._mesh_radio.setdefault(from_id, {})
++            via_mqtt = bool(packet.get('viaMqtt'))
++            rec['via_mqtt'] = via_mqtt
++            if via_mqtt:
++                # patched 14 Sep 2026: a packet a broker handed us was not heard on this radio.
++                # It arrives carrying the rx_snr the uplinking gateway measured over the air, and
++                # a hop_start equal to its hop_limit. Read here, the first is somebody else's
++                # measurement of a link this box is not part of, and the second is arithmetic that
++                # comes out at nought hops, which in this product means HEARD DIRECTLY. Confirmed
++                # on a live box: a node 250 miles from the gateway, reading 5.8 dB and direct, with
++                # the radio's own log saying 'rxSNR=6.25 ... via MQTT hopStart=3'. Neither figure
++                # describes anything here, so neither is kept, and the record says how the packet
++                # actually arrived so the screen can say that instead of reporting silence on a
++                # link nothing was using.
++                rec['mqtt_at'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
++                rec.pop('snr', None)
++                rec.pop('rssi', None)
++                rec['hops'] = None
++                return
 +            rec['heard'] = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 +            for src, dst in (('rxSnr', 'snr'), ('rxRssi', 'rssi')):
 +                if packet.get(src) is not None:
@@ -887,11 +905,19 @@
 +        for nid, m in list(merged.items())[:250]:
 +            r = self._mesh_radio.get(nid, {})
 +            m['heard'], m['snr'], m['hops'] = r.get('heard'), r.get('snr'), r.get('hops')
++            # patched 14 Sep 2026: reached-over-MQTT is a state of its own, beside the two
++            # below. A node the broker is carrying is not quiet, and saying it has not been
++            # heard lately reports a fault that is not there.
++            m['via_mqtt'], m['mqtt_at'] = bool(r.get('via_mqtt')), r.get('mqtt_at')
 +            # Has this gateway ACTUALLY heard it, or does it only know of it because the
 +            # radio's stored database mentioned it at startup? Never-heard is a different
 +            # state from gone-quiet, and from no-GPS-fix, and the console says so rather
 +            # than quietly filing a device that may be long gone under "on the mesh".
-+            m['heard_here'] = bool(r)
++            # heard on the AIR, which is what this flag has always meant to the screen. Before
++            # 14 Sep 2026 it was bool(r), and a record now exists for a node that has only ever
++            # arrived over MQTT, so that would have claimed this gateway heard something it
++            # cannot hear. Found on a live box: a node 250 miles away, reading as heard here.
++            m['heard_here'] = bool(r.get('heard'))
 +            if not m['name']:
 +                m['name'] = nid
 +            out.append(m)

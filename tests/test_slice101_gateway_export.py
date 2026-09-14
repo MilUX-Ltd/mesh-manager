@@ -16,7 +16,7 @@ gateway still works, and it is its own card. This suite holds the product to say
 
 Every block is guarded.
 """
-import json, os, re, stat, sys, tempfile, threading
+import datetime as _dt, json, os, re, stat, sys, tempfile, threading
 sys.path.insert(0, os.path.dirname(__file__))
 from _common import ROOT, check, check_true, finish, read  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -153,10 +153,47 @@ check("AC5 a box with no export says so", g.get("export_at"), None)
 c.op_gateway_export()
 g = c.op_gateway()
 check_true("AC5 and once taken, says when", bool(g.get("export_at")), json.dumps(g)[:200])
+# "says when" has to mean a time somebody can read. The export's filename is the instant with its
+# colons swapped for hyphens, and reading it back turned three of the four separators round instead
+# of the two that were swapped, so every answer carried a malformed instant the screen could not
+# age. The card renders it into a <time datetime=...>, so this is the difference between "kept 20
+# minutes ago" and nothing at all. Found in review, 14 Sep 2026.
+_at = str(g.get("export_at") or "")
+try:
+    _parsed = _dt.datetime.fromisoformat(_at.replace("Z", "+00:00"))
+except ValueError as _e:
+    _parsed = None
+check_true("AC5 and the time it gives is a time, not something shaped like one",
+           _parsed is not None, f"{_at!r} does not parse as an instant")
+check_true("AC5 and it is the time the export was actually taken",
+           _parsed is not None and abs((_dt.datetime.now(_dt.timezone.utc) - _parsed).total_seconds()) < 300,
+           f"{_at!r} is not near now")
 
 # ---- AC6, AC7, AC8 the screen -------------------------------------------------------------------------------------
 web = read("src/mesh_manager/web.py") or ""
 check_true("AC6 the screen offers the export", "gateway_export" in web, "nothing on the screen")
+# Offering it means a button that exports. The screen has two submit paths: a read goes out as a GET
+# to /api/<action>, and everything else is POSTed. The server holds the same line from the other
+# side and answers a read on POST with 405, so a read action wearing the POST form is a button that
+# can only ever fail. This is a rule about every form on the screen, not about this one, because the
+# next read action added to a page would land in exactly the same place.
+_risk = dict(re.findall(r'"id":\s*"([a-z0-9_]+)".*?"risk":\s*"([a-z]+)"', read("src/mesh_manager/catalogue.py") or "", re.S))
+_wrong = []
+for _m in re.finditer(r"<form\b([^>]*?)data-action=['\"]([a-z0-9_]+)['\"]([^>]*)>", web):
+    _tag, _act = _m.group(0), _m.group(2)
+    if _risk.get(_act) is None:
+        continue
+    _is_get = "data-method=get" in _tag or "data-method='get'" in _tag
+    if (_risk[_act] == "read") != _is_get:
+        _wrong.append(f"{_act} is a {_risk[_act]} submitted as {'GET' if _is_get else 'POST'}")
+check_true("AC6 and every read action on the screen is submitted the way the server answers it",
+           not _wrong, "; ".join(_wrong))
+# The GET path writes its answer into a .out container and the POST path into .res. A form that
+# changed method and kept the other container says nothing back to the operator.
+_ex_form = web[web.find("data-action='gateway_export'") - 200:]
+_ex_form = _ex_form[:_ex_form.find("</form>") + 7]
+check_true("AC6 and the export form has the container its own path writes into",
+           "class='out" in _ex_form, " ".join(_ex_form.split())[:240])
 check_true("AC7 and warns when there is none",
            re.search(r"export_at", web) is not None, "the card never looks at whether an export exists")
 check_true("AC8 the words say a replacement is a new identity",
