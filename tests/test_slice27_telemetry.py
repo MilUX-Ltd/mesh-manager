@@ -30,7 +30,7 @@ def get(p):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return r.status, b
 s, page = get("/node?id=!aa000001")
 check_true("AC1 the node page renders the facts", s == 200 and "Tracker9" in page and "!aa000001" in page and "Positions in the window" in page)
-check_true("AC1 both charts from the telemetry rows, with the 20 percent line", page.count("<svg class='chart'") == 2 and "20%" in page and "battery over time" in page and "voltage over time" in page)
+check_true("AC1 both charts from the telemetry rows, with the 20 percent line", page.count("<svg class='chart'") >= 2 and "20%" in page and "battery over time" in page and "voltage over time" in page)   # Spec 104 adds utilisation and air time to the page
 check_true("AC1 the last messages", "stored before the restart" in page)
 s, one = get("/node?id=!bb000002")
 check_true("AC1 one reading says there is not enough for a chart", s == 200 and "Not enough readings yet" in one)

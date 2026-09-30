@@ -61,7 +61,7 @@ threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
 c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", "/nodes"); nodes = c.getresponse().read().decode(); c.close()
 row_b = nodes[nodes.index("data-id='!bb000002'"):nodes.index("data-id='!cc000003'")]
 row_a = nodes[nodes.index("data-id='!aa000001'"):nodes.index("data-id='!bb000002'")]
-check_true("AC2 a charging device reads on charge with its voltage, never 101%", "on charge" in row_b and "4.1 V" in row_b and "101" not in row_b)
+check_true("AC2 a charging device reads on charge with its voltage, never 101%", "on charge" in row_b and "4.1 V" in row_b and "101%" not in row_b)
 check_true("AC1 a level shows with its age", "58%" in row_a and "data-age" in row_a.split("58%")[1][:200])
 srv.shutdown()
 FB.NODES[1].update({"battery": 9}); FB.NODES[1].pop("charging", None); FB.NODES[1].pop("voltage", None)

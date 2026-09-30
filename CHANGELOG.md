@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 1.4.0 (30 September 2026)
+
+**See the mesh over time.** Everything Mesh Manager showed was now: who is heard, what the airtime is. This
+release adds the history behind it, and makes that history something to trust: every figure counts the whole
+window, a reading another gateway took is never stored as this radio's, and a node that keeps restarting is
+seen as restarting rather than as going quiet.
+
+**Health counts the whole window, and draws it hour by hour** (Spec 104). The page counted the newest five
+thousand packets and called it the window, so on a busy week every figure on it was short; it now counts in
+the store, however many there are. Below the existing chart, the window hour by hour: this radio's channel
+utilisation beside the mesh's, its transmit air time against the region's budget, the packets heard over the
+air (and how many more a broker carried), how far packets travel, and how the messages this radio sent fared,
+with the radio's reason for each failure. A node's page draws its own channel utilisation and air time.
+
+**A node that keeps restarting is noticed** (Spec 103). Every node reports how long it has been up; the box
+now reads it. When a node says it started after the last time it was heard, that is a reboot, which tells a
+restart apart from a packet that arrived late or was heard twice. The node's page says how many times it
+rebooted in the last day and when it started each time; its row on the Nodes page carries the count; three
+of its own in a day raise an alert (a setting beside the others; nought turns it off). A reboot this
+computer asked for, from the node's page or the bench, is labelled as that and not counted. The agent can ask which
+nodes have been restarting. The count is what this radio saw: two reboots between two readings look like one.
+
+**The history store's foundations** (Spec 102), the first part of 1.4.0, *see the mesh over time*.
+Nothing on the screen changes yet; what changes is what the store can be trusted to say.
+
+- **Every table is indexed.** Only the neighbour table ever was: the lines that make the indexes ran
+  inside another loop and picked up the wrong table's name. Positions, telemetry and packets, up to two
+  hundred thousand rows each, were read end to end for every question asked of them. A box upgrading
+  builds the indexes once, on its first start.
+- **A position and a packet keep their signal strength** (RSSI) beside the SNR, when the radio gave one
+  that a radio could give. Anything else is kept as nothing, never as nought.
+- **A reading a broker carried is marked as such**, and the signal figures and hop count it arrived with
+  are not stored, because they describe another gateway's reception, not this radio's. The position is
+  kept: where a node says it is holds whichever way the packet came. The store can now be asked for only
+  what this radio heard itself, which the coverage map and the health charts later in 1.4.0 will use.
+  Rows from before the upgrade cannot say which they were, so they are left out of that question.
+
 ## 1.2.2 (14 September 2026)
 
 **Corrections to 1.2.1, found by reading it rather than by running it.** Four of them stopped the

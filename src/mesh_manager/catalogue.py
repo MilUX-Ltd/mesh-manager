@@ -271,6 +271,7 @@ ACTIONS = [
     {"id": "alert_set", "title": "Set the alert thresholds", "risk": "change", "op": "alert_set",
      "inputs": [{"name": "silent_min", "type": "int", "required": False, "min": 1, "max": 1440, "description": "minutes without a packet before a registered device is silent"},
                 {"name": "battery_pct", "type": "int", "required": False, "min": 1, "max": 90, "description": "the battery percentage under which a device alerts"},
+                {"name": "reboots_day", "type": "int", "required": False, "min": 0, "max": 50, "description": "reboots of its own in 24 h at which a node alerts; 0 is off (Spec 103)"},
                 {"name": "unknown", "type": "enum", "values": ["on", "off"], "required": False, "description": "alert when a node not in the register is heard"},
                 {"name": "fence_m", "type": "int", "required": False, "min": 0, "max": 100000, "description": "metres from the box beyond which a node alerts; 0 turns the fence off"},
                 {"name": "to_tak", "type": "enum", "values": ["on", "off"], "required": False, "description": "send each alert to All Chat Rooms on the TAK Server"}],
@@ -327,6 +328,10 @@ ACTIONS = [
                 {"name": "since", "type": "text", "required": False, "max_bytes": 20, "description": "a UTC time, YYYY-MM-DDTHH:MM:SSZ; only rows from then"},
                 {"name": "limit", "type": "int", "required": False, "min": 1, "max": 5000, "description": "rows at most (500 if not given)"}],
      "description": "What the box has heard over time, from the history store that survives a restart: positions, device telemetry, messages or packets, per node or for all, newest last."},
+    {"id": "reboots", "title": "Reboots", "risk": "read", "op": "reboots",
+     "inputs": [{"name": "node", "type": "text", "required": False, "max_bytes": 12, "description": "one radio id, !hex; every node if not given"},
+                {"name": "hours", "type": "int", "required": False, "min": 1, "max": 720, "description": "the window in hours (24 if not given)"}],
+     "description": "Nodes seen to have restarted (Spec 103): each reboot with when the node started again and whether this computer asked for it, and per node how many were its own. Seen means between two readings the box heard; the count is at least this many."},
     {"id": "history_summary", "title": "History summary", "risk": "read", "op": "history_summary", "inputs": [],
      "description": "Row counts and the time span of each history table, and the store's size on disk."},
     {"id": "messages", "title": "Messages", "risk": "read", "op": "web:messages", "inputs": [],
@@ -538,6 +543,7 @@ KNOWN_WORDS = set(KNOWN_WORDS) | {"rotation", "rotated", "checklist", "expected"
 KNOWN_WORDS = set(KNOWN_WORDS) | {"profile", "drift", "drifted", "unread", "enforced", "unenforced", "fleet", "line", "preset", "pressed", "blank"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"atak", "xml", "template", "tiles", "tile", "zoom", "quadkey", "imagery", "folder", "browsers", "browser", "viewer", "layer", "sources", "source"}
 KNOWN_WORDS = set(KNOWN_WORDS) | {"mode", "server", "desktop", "origin", "origin_name"}   # Spec 084: the box shapes, and where a row came from
+KNOWN_WORDS = set(KNOWN_WORDS) | {"reboot", "reboots", "rebooted", "restarted", "started", "asked", "seen", "readings", "least"}   # Spec 103
 
 
 # ---- Spec 085: no key in the record ----------------------------------------------------------

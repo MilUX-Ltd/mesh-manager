@@ -374,7 +374,8 @@ def run_action(web, aid, args, who):
         res = {k: v for k, v in res.items() if k != "url"}
     if aid in ("nodes", "links"):
         rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web),
-                                                availability=_availability(web) if aid == "nodes" else None)
+                                                availability=_availability(web) if aid == "nodes" else None,
+                                                reboots=_reboots(web) if aid == "nodes" else None)
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
     if action["risk"] != "read":
         K.audit(web.etc_dir, who=who, event="run", action=aid, arguments=C.redact_args(aid, clean), outcome="error" if "error" in res else "ok")
@@ -402,6 +403,50 @@ def _availability(web):
         return _AV_CACHE["by_id"]
     _AV_CACHE.update({"at": now, "by_id": by_id})
     return by_id
+
+
+_RB_CACHE = {"at": 0.0, "by_node": {}}
+
+
+def _reboots(web):
+    """Spec 103: each node's reboots in the last day, by id, for the node rows. Cached for a minute, as the
+    availability is: the rows redraw on every packet and a day's count does not move inside a minute."""
+    now = time.time()
+    if now - _RB_CACHE["at"] < 60:
+        return _RB_CACHE["by_node"]
+    try:
+        by = (web.client.ask("reboots", hours=24, timeout=4) or {}).get("by_node") or {}
+    except (BridgeDown, AttributeError, TypeError, ValueError):
+        return _RB_CACHE["by_node"]
+    _RB_CACHE.update({"at": now, "by_node": by if isinstance(by, dict) else {}})
+    return _RB_CACHE["by_node"]
+
+
+def _rbword(r):
+    """Spec 103: the reboot count on a node row; nothing when there were none of its own."""
+    n = int((r or {}).get("count") or 0)
+    if n < 1:
+        return ""
+    return (f"<span class='verdict warn' data-tip='Reboots' data-tip-more='Seen to restart of its own accord in the last 24 h; "
+            f"the node&#39;s page lists when'>{n} reboot{'' if n == 1 else 's'} in 24 h</span>")
+
+
+def reboots_block(rb):
+    """Spec 103: on the node's page, how often it restarted in the last day and when."""
+    rows = [r for r in ((rb or {}).get("rows") or []) if isinstance(r, dict)]
+    own = sum(1 for r in rows if not r.get("asked"))
+    asked = len(rows) - own
+    if not rows:
+        head = "No reboots seen in the last 24 h."
+    elif not own:
+        head = f"No reboots of its own seen in the last 24 h; {asked} asked for from this computer."
+    else:
+        head = f"Rebooted {own} time{'' if own == 1 else 's'} in the last 24 h" + (f", and {asked} more asked for from this computer." if asked else ".")
+    items = "".join(f"<li><time datetime='{e(str(r.get('booted') or ''))}'>{e(str(r.get('booted') or '')[:16])}Z</time>"
+                    + (" <span class='sub'>asked for from this computer</span>" if r.get("asked") else "") + "</li>"
+                    for r in reversed(rows))
+    return (f"<h2>Reboots</h2><p class='meta'>{e(head)} Seen means between two readings this radio heard, so the count is at least this many.</p>"
+            + (f"<ul class='meta'>{items}</ul>" if items else ""))
 
 
 def _silent_min(web):
@@ -2406,7 +2451,7 @@ ASK_MORE = {"traceroute": "Asks for the hops out and back; a minute is normal", 
             "request_telemetry": "Asks for battery, voltage and uptime now", "request_nodeinfo": "Brings back a name changed over the air"}
 
 
-def node_row(n, db=False, routes=None, silent_min=30, availability=None):
+def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots=None):
     nid = str(n.get("id") or "")
     name = dname(n)
     own_name = str(n.get("name") or "") if n.get("label") and n.get("name") else ""
@@ -2428,7 +2473,7 @@ def node_row(n, db=False, routes=None, silent_min=30, availability=None):
     av = None if db else (availability or {}).get(nid)
     heard_html = (f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>"
                   + (f"<span class='verdict warn' data-tip='Quiet' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet</span>" if quiet else "")
-                  + _avword(av)) if heard else "<span class='sub'>never</span>"
+                  + _avword(av) + ("" if db else _rbword((reboots or {}).get(nid)))) if heard else "<span class='sub'>never</span>"
     batt = n.get("battery")
     # one line for the figure, one small line for the voltage and the age together (0.2.10: short rows)
     ts = n.get("battery_ts")
@@ -2536,16 +2581,16 @@ NODES_JS = r"""<script>
 </script>"""
 
 
-def nodes_tables(nodes, routes=None, silent_min=30, availability=None):
+def nodes_tables(nodes, routes=None, silent_min=30, availability=None, reboots=None):
     heard = [n for n in nodes if n.get("heard_here", True)]
     db = [n for n in nodes if not n.get("heard_here", True)]
-    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
+    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability, reboots=reboots) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
     db_rows = "".join(node_row(n, db=True, silent_min=silent_min) for n in db)
     return rows, db_rows, len(heard), len(db)
 
 
-def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None):
-    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability)
+def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None, reboots=None):
+    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability, reboots=reboots)
     live = [n for n in nodes if n.get("heard_here", True)]
     head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Last heard</th><th>Ask</th></tr></thead>"
     lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here since the bridge started, "
@@ -3345,7 +3390,7 @@ def series_chart(pts, key, unit="", lo=None, hi=None, guides=(), label=""):
             f"<polyline points='{line}'/><text x='30' y='{ht - 4}'>{e(pts[0]['ts'][5:16].replace('T', ' '))}Z</text><text x='{w - 110}' y='{ht - 4}'>{e(pts[-1]['ts'][5:16].replace('T', ' '))}Z</text></svg>")
 
 
-def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
+def node_body(n, tel, msgs, npos, hours, env=None, availability=None, reboots=None):
     """Spec 025: one node, its facts, its battery and voltage over time, its last messages."""
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if n.get("lat") is not None and n.get("lon") is not None else "no fix")
     heard = n.get("heard") or n.get("last_heard_db")
@@ -3377,10 +3422,12 @@ def node_body(n, tel, msgs, npos, hours, env=None, availability=None):
         avblock = (f"<h2>Heard</h2><p class='meta'><b>{availability.get('pct')}%</b> of the window: heard in {availability.get('heard')} of {availability.get('buckets')} "
                    f"{'hours' if availability.get('bucket_secs') == 3600 else 'days'}.</p>"
                    f"<svg class='chart avail' viewBox='0 0 {len(ser) * w} 20' width='{len(ser) * w}' height='20' role='img' aria-label='heard per bucket'>{bars}</svg>")
-    return (f"<div class='cards'>{facts}</div>{form}{avblock}"
+    return (f"<div class='cards'>{facts}</div>{form}{avblock}{reboots_block(reboots)}"
             f"<h2>Battery</h2>{series_chart(levels, 'level', '%', 0, 100, ((20, 'bad'),), 'battery')}"
             + (f"<p class='meta'>On charge at {e(', '.join(charging[-6:]))}{' and earlier' if len(charging) > 6 else ''} (shown as 100%).</p>" if charging else "")
             + f"<h2>Voltage</h2>{series_chart(tel, 'voltage', ' V', None, None, ((3.3, 'bad'),), 'voltage')}"
+            + f"<h2>Channel utilisation</h2>{series_chart(tel, 'chutil', '%', 0, max([45.0] + [float(r['chutil']) * 1.1 for r in tel if r.get('chutil') is not None]), ((25, 'warn'), (40, 'bad')), 'channel utilisation')}"
+            + f"<h2>Transmit air time</h2>{series_chart(tel, 'airutil', '%', 0, None, (), 'transmit air time')}"
             + envblock +
             f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No message from this node in the window.</td></tr>'}</tbody></table></div>"
             + manage_section(n) + WRITE_JS)
@@ -3429,6 +3476,77 @@ def health_chart(h):
             f"<polyline points='{line}'/><text x='30' y='{ht - 4}'>{e(first)}Z</text><text x='{w - 40}' y='{ht - 4}'>{e(last)}Z</text></svg>")
 
 
+def hours_chart(series, lines, unit="", lo=0.0, hi=None, guides=(), label=""):
+    """Spec 104: the window hour by hour, one line per (key, dashed); an hour with no reading leaves a gap."""
+    ser = list(series or [])
+    vals = [float(x[k]) for x in ser for k, _ in lines if x.get(k) is not None]
+    if len(ser) < 2 or not vals:
+        return f"<p class='meta'>Not enough readings yet for a chart of {e(label)}.</p>"
+    hi = max([hi or 0.0] + [v * 1.1 for v in vals]) or 1.0
+    w, ht = 600, 120
+    def x(i): return 30 + i * (w - 40) / max(1, len(ser) - 1)
+    def y(v): return ht - 18 - (float(v) - lo) / (hi - lo) * (ht - 30)
+    out = []
+    for k, dashed in lines:
+        run = []
+        for i, p in enumerate(ser + [{}]):
+            if p.get(k) is not None:
+                run.append(f"{x(i):.1f},{y(p[k]):.1f}")
+                continue
+            if len(run) > 1:
+                out.append(f"<polyline points='{' '.join(run)}'" + (" style='stroke-dasharray:5 4'" if dashed else "") + "/>")
+            elif run:
+                cx, cy = run[0].split(",")
+                out.append(f"<circle cx='{cx}' cy='{cy}' r='2'/>")
+            run = []
+    g = "".join(f"<line x1='30' x2='{w - 10}' y1='{y(v):.1f}' y2='{y(v):.1f}' class='{cls}'/><text x='2' y='{y(v) + 4:.1f}'>{v:g}{e(unit)}</text>" for v, cls in guides if lo <= v <= hi)
+    first, last = str(ser[0].get("hour") or "")[5:16].replace("T", " "), str(ser[-1].get("hour") or "")[5:16].replace("T", " ")
+    return (f"<svg class='chart' viewBox='0 0 {w} {ht}' role='img' aria-label='{e(label)} by the hour'><title>{e(label)} by the hour</title>{g}{''.join(out)}"
+            f"<text x='30' y='{ht - 4}'>{e(first)}Z</text><text x='{w - 110}' y='{ht - 4}'>{e(last)}Z</text></svg>")
+
+
+def health_window(h):
+    """Spec 104: the window hour by hour, how far packets travel, and how the box's own messages fared."""
+    ser = h.get("series") or []
+    out = ""
+    if ser:
+        bud = h.get("budget_pct")
+        out += ("<h2>Channel utilisation over the window</h2><p class='meta'>This radio as the solid line, the mesh (the mean of what the other nodes report) dashed.</p>"
+                + hours_chart(ser, (("chutil", False), ("mesh_chutil", True)), "%", 0, 45, ((25, "warn"), (40, "bad")), "channel utilisation, this radio and the mesh")
+                + "<h2>Transmit air time over the window</h2><p class='meta'>This radio's share of the air" + (f", against the {bud:g}% budget on {e(h.get('region') or '')}" if bud else "") + ".</p>"
+                + hours_chart(ser, (("airutil", False),), "%", 0, bud or None, ((bud, "bad"),) if bud else (), "transmit air time")
+                + "<h2>Heard over the air, per hour</h2>"
+                + hours_chart(ser, (("packets", False),) + ((("unmarked", True),) if any(x.get("unmarked") for x in ser) else ()), "", 0, None, (), "packets heard over the air"))
+        um = sum(int(x.get("unmarked") or 0) for x in ser)
+        if um:
+            out += (f"<p class='meta'>Dashed: {um} packets stored before this version, when a packet a broker carried could not be told "
+                    "from one this radio heard. They leave the window as it moves on.</p>")
+        vb = int(h.get("via_broker") or 0)
+        if vb:
+            out += f"<p class='meta'>And {vb} more carried by a broker, which this radio did not hear.</p>"
+    hops = h.get("hops")
+    if hops:
+        cells = (("0", "direct"), ("1", "1 hop"), ("2", "2 hops"), ("3+", "3 or more"), ("unknown", "unknown"))
+        out += ("<h2>How far packets travel</h2><p class='meta'>Packets this radio heard over the air, by how many radios passed them on.</p>"
+                "<div class='tablewrap'><table><thead><tr>" + "".join(f"<th>{t}</th>" for _, t in cells) + "</tr></thead><tbody><tr>"
+                + "".join(f"<td>{int(hops.get(k) or 0)}</td>" for k, _ in cells) + "</tr></tbody></table></div>")
+    ak = h.get("acks")
+    if ak is not None:
+        n = int(ak.get("sent") or 0)
+        if not n:
+            out += "<h2>What this radio sent</h2><p class='meta'>This radio sent no message in the window.</p>"
+        else:
+            nw = int(ak.get("no_word") or 0) + int(ak.get("waiting") or 0)
+            line = f"Of {n} message{'' if n == 1 else 's'} this radio sent, {int(ak.get('delivered') or 0)} {'was' if int(ak.get('delivered') or 0) == 1 else 'were'} delivered, {int(ak.get('failed') or 0)} failed and {nw} had no word back"
+            if ak.get("waiting"):
+                line += f" ({int(ak['waiting'])} sent in the last ten minutes)"
+            rs = ", ".join(f"{e(str(k))} {int(v)}" for k, v in (ak.get("reasons") or {}).items())
+            rate = ak.get("rate")
+            out += (f"<h2>What this radio sent</h2><p class='meta'>{e(line)}.{(' The radio gave: ' + rs + '.') if rs else ''}"
+                    + (f" <b>{float(rate):g}%</b> of those answered failed." if rate is not None else "") + "</p>")
+    return out
+
+
 def health_cards(h):
     if not h or "error" in h:
         return f"<p class='bad'>{e(str((h or {}).get('error') or 'The bridge did not answer, so there are no health figures. The Mesh page says whether it is running.'))}</p>"
@@ -3448,7 +3566,7 @@ def health_cards(h):
                  f"<td>{('%.2f%%' % float(d['airutil'])) if d.get('airutil') is not None else '<span class=sub>none</span>'}</td>"
                  f"<td>{(str(int(d['battery'])) + '%') if d.get('battery') is not None and 0 <= int(d['battery']) <= 100 else ('on charge' if d.get('battery') is not None and int(d['battery']) > 100 else '<span class=sub>none</span>')}</td>"
                  f"<td class='meta'>{('<time datetime=' + chr(39) + e(d['last_telemetry']) + chr(39) + ' data-age>' + e(age(d['last_telemetry'])) + '</time>') if d.get('last_telemetry') else 'none'}</td></tr>")
-    return (f"<div class='cards'>{cards}</div><h2>Channel utilisation by the hour</h2>{health_chart(h)}"
+    return (f"<div class='cards'>{cards}</div><h2>Channel utilisation by the hour</h2>{health_chart(h)}{health_window(h)}"
             "<h2>Per node</h2><p class='meta'>Packets this radio heard from each node in the window, and the last device metrics each reported. Utilisation is the share of air time the node's radio hears busy; air time is the share it spends transmitting.</p>"
             "<div class='tablewrap'><table><thead><tr><th>Node</th><th>Packets</th><th>Per hour</th><th>Channel utilisation</th><th>Air utilisation</th><th>Battery</th><th>Reported</th></tr></thead>"
             f"<tbody>{rows or '<tr><td colspan=7 class=meta>Nothing in the window yet.</td></tr>'}</tbody></table></div>")
@@ -3552,6 +3670,7 @@ def alerts_section(al, tak_on=True, bc=None):
     form = (f"<form data-action='alert_set' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:720px'><p class='meta'>{e(a['description'])}</p>"
             f"<div class='regform' style='grid-template-columns:1fr 1fr 1fr'><label>Silent after (minutes)<input type='number' name='silent_min' value='{int(st.get('silent_min', 30))}' min='1' max='1440'></label>"
             f"<label>Battery under (%)<input type='number' name='battery_pct' value='{int(st.get('battery_pct', 20))}' min='1' max='90'></label>"
+            f"<label data-tip='Reboots in a day' data-tip-more='A node restarting of its own accord this many times in 24 h raises an alert; 0 is off'>Reboots in a day (0 is off)<input type='number' name='reboots_day' value='{int(st.get('reboots_day', 3))}' min='0' max='50'></label>"
             f"<label data-tip='Fence around this box' data-tip-more='A radius from the box&#39;s own position; drawn fences live on the map'>Fence around this box (metres, 0 is off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
             f"<div><span class='meta'>Unknown nodes</span><br>{seg('unknown', onoff, 'on' if st.get('unknown', True) else 'off')}</div>"
             + (f"<div><span class='meta'>To TAK chat</span><br>{seg('to_tak', onoff, 'on' if st.get('to_tak', True) else 'off')}</div>" if tak_on else "<div></div>") +
@@ -4797,7 +4916,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 want_group = (q.get("group", [""])[0] or "").strip()
                 nodes_ = [n for n in (L.get("nodes") or []) if not want_group or str(n.get("group") or "") == want_group]
                 groups_ = sorted({str(g.get("name")) for g in (self._ask("groups").get("groups") or []) if g.get("name")} | {str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
-                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_, availability=_availability(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
+                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_, availability=_availability(web), reboots=_reboots(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
             if path == "/log":
                 return self._send(200, self._page("Log", log_body(self._ask("log", n=300).get("lines", [])), "/log"))
             if path == "/channels":
@@ -4837,12 +4956,13 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 npos = len(self._ask("history", kind="positions", node=nid, since=since, limit=5000).get("rows") or [])
                 env = self._ask("history", kind="environment", node=nid, since=since, limit=2000).get("rows") or []
                 av = next((r for r in (self._ask("availability", hours=hours).get("nodes") or []) if r.get("id") == nid), None)
+                rb = self._ask("reboots", node=nid, hours=24)   # Spec 103: always the last day, whatever the window
                 # Spec 095: the Manage section needs the register's view of the device, not the
                 # mesh's. A node from _links carries no "managed" flag, so without this every
                 # device on its own page reads as unmanaged and the forms never appear.
                 _reg = next((r for r in (self._ask("register").get("rows") or []) if r.get("id") == nid), None)
                 node = dict(node, **{k: v for k, v in (_reg or {}).items() if v is not None}) if _reg else node
-                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av), "/nodes"))
+                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av, reboots=rb), "/nodes"))
             if path == "/health":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 al = self._ask("alerts")

@@ -10,6 +10,7 @@ import secrets
 import datetime
 import json
 import logging
+import math
 import os
 import queue
 import socket
@@ -31,7 +32,7 @@ from . import __version__
 from . import catalogue as C
 from . import channel as CH
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, DEFAULT_STATE, GROUP_COLOURS, NODE_ICONS, read_config, utc
-from .history import History
+from .history import History, plausible_rssi, plausible_uptime, rebooted
 from . import peers as P
 from . import mqttproxy as MQ
 from . import radiopos as RPOS
@@ -383,6 +384,8 @@ class Bridge(TAKMeshtasticGateway):
         self.gps_fix = None                   # the box's own receiver's last fix (Spec 014)
         self.gps_state = None                 # what the last read of the receiver established: reachable, fix, satellites
         self.outbox = {}                      # Spec 034: sent messages by packet id, and what the radio said became of them
+        self._uptime_last = {}                # Spec 103: node -> (received, uptime) of its last plausible reading
+        self._asked_reboot = {}               # Spec 103: node -> when the box last sent it something it reboots for
         self.waypoints = {}                   # Spec 041: waypoints heard on the mesh, by id, the live ones
         self.neighbor_edges = {}              # Spec 042: (reporter, neighbour) -> {snr, ts}, from NeighborInfo
         self.gps_port_factory = None          # opens the receiver's port; pyserial by default
@@ -643,9 +646,11 @@ class Bridge(TAKMeshtasticGateway):
         via_mqtt = bool(packet.get("viaMqtt")) if isinstance(packet, dict) else False
         if via_mqtt:
             hops = None
-        if fr and snr is not None:
+        if fr and snr is not None and not via_mqtt:
             # the link store: rxSnr describes the LAST hop into this radio, so only a packet
-            # that came with no hops says anything about the link between that node and us
+            # that came with no hops says anything about the link between that node and us.
+            # Spec 102: a packet a broker carried says nothing about any link to this radio;
+            # its SNR is the reception of whichever gateway heard it.
             try:
                 snr = float(snr)
                 self.links.setdefault(fr, collections.deque(maxlen=LINK_HISTORY)).append([utc(time.time()), snr, hops])
@@ -655,10 +660,12 @@ class Bridge(TAKMeshtasticGateway):
                 pass
         self._emit("packet", **{"from": fr, "to": packet.get("toId") if isinstance(packet, dict) else None,
                                 "port": d.get("portnum"), "snr": snr, "hops": hops, "via_mqtt": via_mqtt})
-        self._history_note(packet, d, fr, snr, hops)
+        self._history_note(packet, d, fr, snr, hops, rssi=plausible_rssi(packet.get("rxRssi") if isinstance(packet, dict) else None), via_mqtt=via_mqtt)
 
-    def _history_note(self, packet, d, fr, snr, hops):
-        """Spec 020: what this packet adds to the history. Never raises into the receive path."""
+    def _history_note(self, packet, d, fr, snr, hops, rssi=None, via_mqtt=False):
+        """Spec 020: what this packet adds to the history. Never raises into the receive path.
+        Spec 102: a packet a broker carried is marked, and the signal figures it came with are another
+        gateway's reception, so none of them is stored as this box's."""
         try:
             h = getattr(self, "history", None)
             if not h or not h.ok or not isinstance(packet, dict):
@@ -667,12 +674,17 @@ class Bridge(TAKMeshtasticGateway):
                 snr_f = float(snr) if snr is not None else None
             except (TypeError, ValueError):
                 snr_f = None
+            if snr_f is not None and not math.isfinite(snr_f):
+                snr_f = None
+            mq = 1 if via_mqtt else 0
+            if mq:
+                snr_f = rssi = hops = None
             size = None
             try:
                 size = len(d.get("payload") or b"")
             except Exception:  # noqa: BLE001
                 size = None
-            h.packet(fr, port=d.get("portnum"), snr=snr_f, hops=hops, size=size)
+            h.packet(fr, port=d.get("portnum"), snr=snr_f, hops=hops, size=size, rssi=rssi, via_mqtt=mq)
             port = d.get("portnum")
             if fr and port == "TEXT_MESSAGE_APP":
                 dev = getattr(self, "meshtastic_devices", {}).get(fr, {})
@@ -680,6 +692,7 @@ class Bridge(TAKMeshtasticGateway):
             if fr and port == "TELEMETRY_APP":
                 dm = (d.get("telemetry") or {}).get("deviceMetrics") or {}
                 if dm:
+                    self._reboot_note(fr, dm.get("uptimeSeconds"))   # Spec 103: before the row, so the last one is the previous
                     h.telemetry(fr, level=dm.get("batteryLevel"), voltage=dm.get("voltage"), chutil=dm.get("channelUtilization"), airutil=dm.get("airUtilTx"), uptime=dm.get("uptimeSeconds"))
             if fr:
                 lat = lon = None
@@ -698,10 +711,56 @@ class Bridge(TAKMeshtasticGateway):
                     lat, lon = rec        # the TAK path: the gateway's record moved since we last looked
                 if lat is not None and lon is not None and (lat or lon):
                     self._last_pos[fr] = (lat, lon)
-                    h.position(fr, lat, lon, snr=snr_f, hops=hops)
+                    h.position(fr, lat, lon, snr=snr_f, hops=hops, rssi=rssi, via_mqtt=mq)
         except Exception as e:  # noqa: BLE001
             if hasattr(self, "logger"):
                 self.logger.debug(f"history note skipped: {type(e).__name__}: {e}")
+
+    def _reboot_note(self, fr, uptime):
+        """Spec 103: compare this reading's start time with the node's last one; record a reboot when it moved.
+        Never raises into the receive path."""
+        try:
+            u = plausible_uptime(uptime)
+            h = getattr(self, "history", None)
+            if u is None or not fr or fr == (self._own() or {}).get("id"):
+                return   # this radio resets when its port opens; its restarts are the bridge's business
+            now = time.time()
+            prev = self._uptime_last.get(fr)
+            if prev is None and h and h.ok:
+                prev = h.last_uptime(fr)
+            self._uptime_last[fr] = (now, u)
+            if not prev or not rebooted(prev[0], prev[1], now, u):
+                return
+            booted = now - u
+            asks = self._asked_reboot.get(fr) or []
+            asked = any(t - 60 <= booted <= t + self.ASKED_WINDOW_S for t in asks)
+            if h and h.ok:
+                h.reboot(fr, utc(booted), uptime=u, asked=asked)
+            self._emit("reboot", node=fr, booted=utc(booted), asked=asked)
+        except Exception as e:  # noqa: BLE001
+            if hasattr(self, "logger"):
+                self.logger.debug(f"reboot note skipped: {type(e).__name__}: {e}")
+
+    def op_reboots(self, node=None, hours=24, **_):
+        """Spec 103: the reboots seen in the window, newest last, and per node how many were its own and how
+        many this computer asked for. Seen: a reboot between two readings that were not heard is not counted."""
+        try:
+            hours = max(1, min(int(hours or 24), 24 * 30))
+        except (TypeError, ValueError):
+            hours = 24
+        h = getattr(self, "history", None)
+        if not h or not h.ok:
+            return {"error": "the history store is not available on this box", "rows": [], "by_node": {}}
+        cutoff = utc(time.time() - hours * 3600)
+        # by when the node started, not when the box noticed: a node silent for a day and a half
+        # is recorded when heard again, and its restart is not one of the last 24 hours
+        rows = [r for r in h.query("reboots", node=node or None, since=utc(time.time() - (hours + 24 * 30) * 3600), limit=5000)
+                if str(r.get("booted") or "") >= cutoff]
+        by = {}
+        for r in rows:
+            b = by.setdefault(r["node"], {"count": 0, "asked": 0})
+            b["asked" if r.get("asked") else "count"] += 1
+        return {"hours": hours, "node": node or None, "rows": rows, "by_node": by}
 
     def op_availability(self, hours=24, **_):
         """Spec 036: how much of the window each node was actually heard for. Hourly buckets up
@@ -749,13 +808,13 @@ class Bridge(TAKMeshtasticGateway):
         out.sort(key=lambda r: (-r["pct"], r["name"]))
         return {"hours": hours, "bucket_secs": bucket, "buckets": nb, "nodes": out}
 
-    def op_history(self, kind="positions", node=None, since=None, limit=500, **_):
+    def op_history(self, kind="positions", node=None, since=None, limit=500, over_air=False, **_):
         h = getattr(self, "history", None)
         if not h or not h.ok:
             return {"error": "the history store is not available on this box", "rows": []}
         if kind not in ("positions", "telemetry", "messages", "packets", "environment", "waypoints", "neighbors"):
             return {"error": "kind must be positions, telemetry, messages, packets, environment, waypoints or neighbors"}
-        rows = h.query(kind, node=node or None, since=since or None, limit=limit or 500)
+        rows = h.query(kind, node=node or None, since=since or None, limit=limit or 500, over_air=over_air is True)
         return {"kind": kind, "node": node, "since": since, "rows": rows, "count": len(rows)}
 
     def op_history_summary(self, **_):
@@ -779,7 +838,21 @@ class Bridge(TAKMeshtasticGateway):
     def _on_lost(self, interface):
         self._emit("connection", state="lost")
 
+    # Spec 103: the writes a device answers by rebooting. Noted where they are announced, after they
+    # succeed, so every path that makes one is covered and a failed write is not.
+    REBOOT_ASKS = {("node", "node_set"), ("node", "node_set_region"), ("node", "node_channel_push"), ("node", "node_reboot"),
+                   ("bench", "restore"), ("bench", "onboard")}
+    ASKED_WINDOW_S = 900
+
     def _emit(self, kind, **fields):
+        nid = fields.get("id")
+        if nid and ((kind, fields.get("action")) in self.REBOOT_ASKS or (kind == "flash" and fields.get("stage"))):
+            # every ask in the last hour is kept: a flash announces several stages, and the device
+            # restarts between them, so the latest alone can come after the restart it caused
+            now_ = time.time()
+            store = getattr(self, "_asked_reboot", None)
+            if store is not None:
+                store[str(nid)] = [t for t in store.get(str(nid), []) if now_ - t < 3600][-19:] + [now_]
         ev = {"kind": kind, "ts": utc(time.time()), **fields}
         line = json.dumps(ev) + "\n"
         with self._subs_lock:
@@ -4228,7 +4301,7 @@ class Bridge(TAKMeshtasticGateway):
                 "counts": {"expected": len(rec.get("expected") or {}), "back": len(back), "waiting": len(waiting)}}
 
     # ---- alerts (Spec 026) ----------------------------------------------------------------
-    ALERT_DEFAULTS = {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True}
+    ALERT_DEFAULTS = {"silent_min": 30, "battery_pct": 20, "unknown": True, "fence_m": 0, "to_tak": True, "reboots_day": 3}
 
     def _alerts_path(self):
         return os.path.join(self.state_dir, "alerts.json")
@@ -4348,7 +4421,7 @@ class Bridge(TAKMeshtasticGateway):
             st["to_tak"] = False  # Spec 050: no TAK on this box, whatever the file says
         return st
 
-    def op_alert_set(self, silent_min=None, battery_pct=None, unknown=None, fence_m=None, to_tak=None, **_):
+    def op_alert_set(self, silent_min=None, battery_pct=None, unknown=None, fence_m=None, to_tak=None, reboots_day=None, **_):
         if self.box_mode in ("server", "hub", "desktop") and to_tak is not None and to_tak != "" and str(to_tak).strip().lower() in ("1", "true", "on", "yes"):
             return {"error": "TAK is off on this box (MODE=server): alerts stay on this screen"}
         a = self._alerts_load(); st = a["settings"]
@@ -4365,6 +4438,11 @@ class Bridge(TAKMeshtasticGateway):
                 v = int(fence_m)
                 if not 0 <= v <= 100000: return {"error": "fence_m must be 0 (off) to 100000 metres"}
                 st["fence_m"] = v
+            if reboots_day is not None and reboots_day != "":
+                if isinstance(reboots_day, bool): return {"error": "thresholds must be numbers"}
+                v = int(reboots_day)
+                if not 0 <= v <= 50: return {"error": "reboots_day must be 0 (off) to 50 reboots in 24 h"}
+                st["reboots_day"] = v
         except (TypeError, ValueError):
             return {"error": "thresholds must be numbers"}
         for k, v in (("unknown", unknown), ("to_tak", to_tak)):
@@ -4499,6 +4577,21 @@ class Bridge(TAKMeshtasticGateway):
                 raised += self._raise_alert(a, nid, "key", f"{nm} public key changed {str(r['key_changed'])[:16]}Z; if the radio was not reflashed, treat it as an impostor")
             else:
                 self._clear_alert(a, nid, "key")
+        # Spec 103: a node restarting of its own accord, over the last day. Every node heard is judged, from
+        # the history rather than the live list, so a node that reboots and then falls quiet is still seen.
+        try:
+            thr = int(st.get("reboots_day") or 0)
+            counts = (self.op_reboots(hours=24) or {}).get("by_node") or {}
+            judged = set(counts) | {k.rsplit(":", 1)[0] for k in list(a["open"]) + list(a.get("acked", {})) if k.endswith(":reboot")}
+            for nid in judged:
+                n_own = int((counts.get(nid) or {}).get("count") or 0)
+                if thr and n_own >= thr:
+                    nm = str(reg.get(nid, {}).get("label") or (self.meshtastic_devices.get(nid) or {}).get("long_name") or nid)
+                    raised += self._raise_alert(a, nid, "reboot", f"{nm} rebooted {n_own} time{'' if n_own == 1 else 's'} in 24 h")
+                else:
+                    self._clear_alert(a, nid, "reboot")
+        except Exception as ex:  # noqa: BLE001
+            self.logger.warning(f"the reboot check failed: {type(ex).__name__}: {ex}")
         self._alerts_save(a)
         return raised
 
@@ -4760,17 +4853,14 @@ class Bridge(TAKMeshtasticGateway):
             return {"error": "the history store is not available on this box"}
         now = time.time()
         since = utc(now - hours * 3600)
-        packets = h.query("packets", since=since, limit=5000)
-        telem = h.query("telemetry", since=since, limit=5000)
+        # Spec 104: counted in the database, so the window is the window. These once came from the newest
+        # 5000 rows of a list, which on a busy week was not the week.
         own = (self._own() or {}).get("id")
+        pc = h.packet_counts(since)
         per = {}
-        for r in packets:
-            n = r.get("node")
-            if not n:
-                continue
-            d = per.setdefault(n, {"id": n, "packets": 0, "chutil": None, "airutil": None, "battery": None, "last_telemetry": None})
-            d["packets"] += 1
-        for r in telem:
+        for n, c in pc["by_node"].items():
+            per[n] = {"id": n, "packets": int(c), "chutil": None, "airutil": None, "battery": None, "last_telemetry": None}
+        for r in h.last_telemetry(since):
             n = r.get("node")
             if not n:
                 continue
@@ -4784,20 +4874,46 @@ class Bridge(TAKMeshtasticGateway):
             d["per_hour"] = round(d["packets"] / hours, 1)
             d["own"] = (n == own)
         nodes = sorted(per.values(), key=lambda d: -d["packets"])
-        # the gateway's own figures: its telemetry rows first, the library's record as the fallback
-        own_rows = [r for r in telem if r.get("node") == own]
+        # the gateway's own figures: its newest telemetry row first, the library's record as the fallback
+        own_last = (per.get(own) or {}) if own else {}
         own_ch = own_air = None
-        if own_rows:
-            own_ch, own_air = own_rows[-1].get("chutil"), own_rows[-1].get("airutil")
+        if own_last.get("last_telemetry"):
+            own_ch, own_air = own_last.get("chutil"), own_last.get("airutil")
         else:
             dm = ((db.get(own) if isinstance(db, dict) and own else None) or {}).get("deviceMetrics") or {}
             own_ch, own_air = dm.get("channelUtilization"), dm.get("airUtilTx")
-        # hourly means of the gateway's channel utilisation for the chart
-        buckets = {}
-        for r in own_rows:
-            key = r["ts"][:13]
-            buckets.setdefault(key, []).append(float(r.get("chutil") or 0))
-        hourly = [{"hour": k + ":00Z", "chutil": round(sum(v) / len(v), 1)} for k, v in sorted(buckets.items())]
+        # Spec 104: the window hour by hour, oldest first, ending with this hour
+        start = (int(now) // 3600) * 3600 - (hours - 1) * 3600
+        tb = h.telemetry_by_hour(utc(start), own)
+        pb = h.packets_by_hour(utc(start))
+        def rnd(v, k=1):
+            return None if v is None else round(float(v), k)
+        series = []
+        for i in range(hours):
+            key = utc(start + i * 3600)[:13]
+            t, p = tb.get(key) or {}, pb.get(key) or {}
+            series.append({"hour": key + ":00Z", "chutil": rnd(t.get("chutil")), "airutil": rnd(t.get("airutil"), 2), "mesh_chutil": rnd(t.get("mesh_chutil")),
+                           "packets": int(p.get("packets") or 0), "via_broker": int(p.get("via_broker") or 0), "unmarked": int(p.get("unmarked") or 0)})
+        # the existing chart: the hours this radio reported, their mean channel utilisation (Spec 026)
+        tb_all = h.telemetry_by_hour(since[:13] + ":00:00Z", own)   # from the hour the window starts in, as the chart always did
+        hourly = [{"hour": k + ":00Z", "chutil": round(float(v.get("chutil") or 0), 1)} for k, v in sorted(tb_all.items()) if "chutil" in v]
+        # Spec 104: how the box's own messages fared
+        acks = {"sent": 0, "delivered": 0, "failed": 0, "no_word": 0, "waiting": 0, "reasons": {}, "rate": None}
+        for ts, ack in (h.sent_since(own, since) if own else []):
+            acks["sent"] += 1
+            a_ = str(ack) if ack not in (None, "", "None") else None
+            if a_ == "delivered":
+                acks["delivered"] += 1
+            elif a_:
+                acks["failed"] += 1; acks["reasons"][a_] = acks["reasons"].get(a_, 0) + 1
+            else:
+                try:
+                    young = now - calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")) < 600
+                except (TypeError, ValueError):
+                    young = False
+                acks["waiting" if young else "no_word"] += 1
+        answered = acks["delivered"] + acks["failed"]
+        acks["rate"] = round(acks["failed"] / answered * 100, 1) if answered else None
         region = None
         try:
             lora = self._lora()
@@ -4808,8 +4924,9 @@ class Bridge(TAKMeshtasticGateway):
         return {"hours": hours, "since": since, "region": region, "budget_pct": budget,
                 "chutil": own_ch, "airutil": own_air, "verdict": self._verdict(own_ch),
                 "air_share": (round(float(own_air) / budget * 100, 1) if (own_air is not None and budget) else None),
-                "packets": len(packets), "packets_per_hour": round(len(packets) / hours, 1),
-                "nodes_heard": len([d for d in nodes if not d["own"]]), "nodes": nodes, "hourly": hourly}
+                "packets": pc["total"], "packets_per_hour": round(pc["total"] / hours, 1),
+                "nodes_heard": len([d for d in nodes if not d["own"]]), "nodes": nodes, "hourly": hourly,
+                "via_broker": pc["via_broker"], "series": series, "hops": h.hop_spread(since), "acks": acks}
 
     def op_node_forget(self, id=None, register="keep", **_):
         nid = str(id or "").strip()

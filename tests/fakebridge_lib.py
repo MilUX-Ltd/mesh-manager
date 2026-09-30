@@ -180,7 +180,9 @@ class FakeBridge:
                    "health": {"hours": int(req.get("hours") or 24), "region": "EU_868", "budget_pct": 10.0, "chutil": 12.5, "airutil": 0.8, "verdict": "normal", "air_share": 8.0, "packets": 240, "packets_per_hour": 10.0, "nodes_heard": 2,
                               "nodes": [{"id": "!aa000001", "name": "Tracker9", "packets": 200, "per_hour": 8.3, "chutil": 11.0, "airutil": 0.5, "battery": 77, "last_telemetry": "2026-09-03T21:50:00Z", "own": False},
                                         {"id": "!ee000025", "name": "this box", "packets": 40, "per_hour": 1.7, "chutil": 12.5, "airutil": 0.8, "battery": 101, "last_telemetry": "2026-09-03T21:55:00Z", "own": True}],
-                              "hourly": [{"hour": "2026-09-03T19:00Z", "chutil": 8.0}, {"hour": "2026-09-03T20:00Z", "chutil": 14.5}, {"hour": "2026-09-03T21:00Z", "chutil": 12.5}]},
+                              "hourly": [{"hour": "2026-09-03T19:00Z", "chutil": 8.0}, {"hour": "2026-09-03T20:00Z", "chutil": 14.5}, {"hour": "2026-09-03T21:00Z", "chutil": 12.5}],
+                              **HEALTH_104},
+                   "reboots": reboots_now(req),   # Spec 103
                    "history_summary": {"ok": True, "path": "/var/lib/vantage-mesh/history.db", "days": 30, "bytes": 24576,
                                        "tables": {k: {"rows": len(v), "oldest": (v[0]["ts"] if v else None), "newest": (v[-1]["ts"] if v else None)} for k, v in HISTORY.items()}}}.get(op, {"error": f"unknown op {op}"})
         c.sendall((json.dumps(rep) + "\n").encode()); c.close()
@@ -191,6 +193,31 @@ class FakeBridge:
                 c.sendall((json.dumps(ev) + "\n").encode())
             except OSError:
                 self.clients.remove(c)
+
+
+# Spec 104: what op_health adds for the window: every hour, the hop spread and the box's own sends.
+HEALTH_104 = {"series": [{"hour": "2026-09-03T19:00Z", "chutil": 8.0, "airutil": 0.6, "mesh_chutil": 6.5, "packets": 9, "via_broker": 2},
+                         {"hour": "2026-09-03T20:00Z", "chutil": 14.5, "airutil": 0.9, "mesh_chutil": 12.0, "packets": 14, "via_broker": 3},
+                         {"hour": "2026-09-03T21:00Z", "chutil": 12.5, "airutil": 0.8, "mesh_chutil": 11.0, "packets": 11, "via_broker": 1}],
+              "hops": {"0": 21, "1": 9, "2": 3, "3+": 1, "unknown": 0},
+              "acks": {"sent": 12, "delivered": 9, "failed": 2, "no_word": 1, "reasons": {"MAX_RETRANSMIT": 2}, "rate": 18.2},
+              "via_broker": 6}
+
+# Spec 103: what the bridge's reboots op answers. Tracker9 rebooted three times on its own and once
+# because the box asked; the others not at all.
+REBOOTS = [{"ts": "2026-09-03T08:10:00Z", "node": "!aa000001", "booted": "2026-09-03T08:02:00Z", "uptime": 480, "asked": 0},
+           {"ts": "2026-09-03T12:40:00Z", "node": "!aa000001", "booted": "2026-09-03T12:31:00Z", "uptime": 540, "asked": 1},
+           {"ts": "2026-09-03T17:05:00Z", "node": "!aa000001", "booted": "2026-09-03T16:58:00Z", "uptime": 420, "asked": 0},
+           {"ts": "2026-09-03T21:30:00Z", "node": "!aa000001", "booted": "2026-09-03T21:26:00Z", "uptime": 240, "asked": 0}]
+
+
+def reboots_now(req):
+    rows = [r for r in REBOOTS if not req.get("node") or r["node"] == req.get("node")]
+    by = {}
+    for r in rows:
+        b = by.setdefault(r["node"], {"count": 0, "asked": 0})
+        b["asked" if r["asked"] else "count"] += 1
+    return {"hours": int(req.get("hours") or 24), "node": req.get("node"), "rows": rows, "by_node": by}
 
 
 HISTORY = {
