@@ -62,7 +62,7 @@ s, page = get("/health")
 check_true("AC3 the Health page renders the cards, the chart and the table", s == 200 and "Channel utilisation" in page and "12.5%" in page and "of a 10% budget" in page and "<svg class='chart'" in page and "Tracker9" in page and "this radio" in page)
 s, frag = get("/fragment/health")
 check_true("AC3 the fragment renders the same cards", s == 200 and "Packets per hour" in frag and "<h2>Per node</h2>" in frag)
-s, home = get("/")
+s, home = get("/radio")   # Spec 110 (LESSONS 30): the overview's cards are on This radio now
 # 5 Sep 2026 UX reviews: the card says what the number is, channel utilisation, the name the Health page uses
 check_true("AC3 the overview carries the channel utilisation card", s == 200 and "Channel utilisation" in home and "href='/health'" in home)
 srv.shutdown()

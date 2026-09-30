@@ -18,6 +18,8 @@ import mimetypes
 import re
 import secrets
 import socket
+import tempfile
+import unicodedata
 import sqlite3
 import struct
 import sys
@@ -47,15 +49,51 @@ STATUS_TICK = 15
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
 # ---- the operator password ---------------------------------------------------------------------
+def _replace_file(path, data, mode):
+    """Write a file whole: an exclusive temporary file under an unpredictable name beside it, then a rename
+    over it (Spec 109). On a box the screen cannot open passwd for writing but may rename in its directory,
+    and nothing is ever opened by a fixed name another account could have planted."""
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".mm-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())   # on disk before the rename, so a power cut never leaves an empty file (review)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        try:
+            dfd = os.open(d, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_password(path, password, iterations=200_000):
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
-    with open(path, "w") as fh:
-        fh.write(f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}\n")
-    try:
-        os.chmod(path, 0o640)
-    except OSError:
-        pass
+    _replace_file(path, f"pbkdf2_sha256${iterations}${salt.hex()}${digest.hex()}\n".encode(), 0o640)
+
+
+NAME_MAX = 40
+
+
+def clean_name(raw):
+    """Spec 109, D3: the name typed at sign-in is attribution, not an account. 1 to 40 characters, trimmed,
+    no control characters; None when it is not one."""
+    name = str(raw or "").strip()
+    if not 1 <= len(name) <= NAME_MAX or any(unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp") for ch in name):
+        return None
+    return name
 
 
 def client_ip(h):
@@ -110,31 +148,62 @@ def reset_throttle():
 class Sessions:
     def __init__(self, etc_dir):
         self.path = os.path.join(etc_dir, "web.secret")
-        if os.path.exists(self.path):
-            self.secret = open(self.path, "rb").read().strip()
-        else:
+        try:
+            self.secret = open(self.path, "rb").read()
+        except FileNotFoundError:
+            self.secret = b""
+        # Spec 109 review: a short or empty secret would sign with a key anyone can guess, so it is never used.
+        # The file is raw random bytes, as the installer writes it; nothing is stripped from it.
+        if len(self.secret) < 32:
             self.secret = secrets.token_bytes(32)
-            with open(self.path, "wb") as fh:
-                fh.write(self.secret)
-            try:
-                os.chmod(self.path, 0o600)
-            except OSError:
-                pass
+            _replace_file(self.path, self.secret, 0o600)
+
+        self.revoked_path = os.path.join(etc_dir, "sessions-revoked.json")
+        self._lock = threading.Lock()
 
     def _sign(self, body):
         return base64.urlsafe_b64encode(hmac.new(self.secret, body.encode(), hashlib.sha256).digest()).decode().rstrip("=")
 
-    def issue(self):
-        body = f"{secrets.token_hex(12)}.{int(time.time()) + SESSION_HOURS * 3600}"
+    def issue(self, name="operator"):
+        """Spec 109: sid.exp.name.sig, the name base64url inside what is signed."""
+        n = base64.urlsafe_b64encode(str(name).encode()).decode().rstrip("=")
+        body = f"{secrets.token_hex(12)}.{int(time.time()) + SESSION_HOURS * 3600}.{n}"
         return f"{body}.{self._sign(body)}"
 
     def verify(self, value):
+        """The session's {sid, exp, name}, or None: a bad signature, an expired or revoked session, or the old
+        three-part shape (a 1.4.x cookie signs in again)."""
         try:
-            sid, exp, sig = value.split(".")
-            body = f"{sid}.{exp}"
-            return hmac.compare_digest(self._sign(body), sig) and int(exp) > time.time()
-        except (ValueError, AttributeError):
-            return False
+            sid, exp, n, sig = str(value).split(".")
+            if not hmac.compare_digest(self._sign(f"{sid}.{exp}.{n}"), sig) or int(exp) <= time.time():
+                return None
+            if sid in self._revoked():
+                return None
+            name = base64.urlsafe_b64decode(n + "=" * (-len(n) % 4)).decode()
+            return {"sid": sid, "exp": int(exp), "name": name}
+        except (ValueError, AttributeError, UnicodeDecodeError, TypeError):
+            return None
+
+    def _revoked(self):
+        try:
+            return json.load(open(self.revoked_path))
+        except (OSError, ValueError):
+            return {}
+
+    def revoke(self, sid, exp):
+        """Sign-out ends the session on the server; the list keeps ids until they would have expired."""
+        with self._lock:
+            now = time.time()
+            r = {k: v for k, v in self._revoked().items() if float(v) > now}
+            r[sid] = int(exp)
+            _replace_file(self.revoked_path, json.dumps(r).encode(), 0o600)
+
+    def rotate(self):
+        """A password change ends every session: a new secret, written whole."""
+        with self._lock:
+            new = secrets.token_bytes(32)
+            _replace_file(self.path, new, 0o600)   # the file first: if it cannot be written, nothing has changed
+            self.secret = new
 
 
 def bind_from_config(conf):
@@ -373,7 +442,7 @@ def run_action(web, aid, args, who):
     if aid == "channels":
         res = {k: v for k, v in res.items() if k != "url"}
     if aid in ("nodes", "links"):
-        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web),
+        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web), battery_pct=_battery_pct(web),
                                                 availability=_availability(web) if aid == "nodes" else None,
                                                 reboots=_reboots(web) if aid == "nodes" else None)
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
@@ -457,6 +526,14 @@ def _silent_min(web):
         return 30
 
 
+def _battery_pct(web):
+    """The Health threshold a battery is low under (Spec 110); 20 per cent when the bridge cannot say."""
+    try:
+        return int(web.client.ask("alert_settings", timeout=2).get("battery_pct") or 20)
+    except (BridgeDown, AttributeError, TypeError, ValueError):
+        return 20
+
+
 # ---- Spec 087: the brief this box actually shipped with ----------------------------------------
 # Not a mirror of GitHub and not a copy the operator keeps in step by hand: the files linked into
 # the package, so what the screen hands over is what the running code came with. On edge at 1.0.2
@@ -508,8 +585,8 @@ def brief_zip():
     # Named for us, because this unzips into the operator's own ~/.claude and a bare VERSION
     # dropped in someone else's directory is litter at best.
     entries.append(("mesh-manager-brief.txt",
-                    f"Mesh Manager {__version__}\nThe role and skills this box was running when you "
-                    f"downloaded them.\nIf the box now shows a later version, download them again.\n".encode()))
+                    f"Mesh Manager {__version__}\nThe role and skills {this_box()} was running when you "
+                    f"downloaded them.\nIf {the_box()} now shows a later version, download them again.\n".encode()))
     return _zip_of(entries, f"Mesh Manager {__version__}")
 
 
@@ -545,7 +622,7 @@ def brief_resources(web):
     for n in brief_skills():
         out.append({"uri": f"{BRIEF_SCHEME}://brief/skills/{n}/SKILL.md",
                     "name": f"{n}/SKILL.md", "title": f"Skill: {n}",
-                    "description": f"The {n} skill, as this box is running it.",
+                    "description": f"The {n} skill, as {this_box()} is running it.",
                     "mimeType": "text/markdown",
                     "_path": os.path.join(BRIEF_DIR, "skills", n, "SKILL.md"),
                     "annotations": {"audience": ["assistant"], "priority": 0.8}})
@@ -701,11 +778,26 @@ def qr_png(url, scale=6, quiet=4):
 # ---- the pages ------------------------------------------------------------------------------------
 # Spec 007: one token block, a dark theme on the same tokens, the state strip on every page, and
 # nothing that reloads under the operator's finger.
-CSS = """
-:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--edge:#586F7C;--node-1:#586F7C;--node-2:#4A6FA5;--node-3:#6A5D8F;--node-4:#2F6F6A;--node-5:#3F5E7A;--node-6:#7A5C99;--node-7:#356B78;--node-8:#5C6E9B;--node-none:#8A8F93;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"Roboto Mono",ui-monospace,Menlo,Consolas,monospace}
+CSS = """@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/static/fonts/IBMPlexSans-Regular.woff2') format('woff2')}@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/static/fonts/IBMPlexSans-Medium.woff2') format('woff2')}@font-face{font-family:'IBM Plex Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/static/fonts/IBMPlexSans-SemiBold.woff2') format('woff2')}@font-face{font-family:'IBM Plex Sans Condensed';font-style:normal;font-weight:500;font-display:swap;src:url('/static/fonts/IBMPlexSansCondensed-Medium.woff2') format('woff2')}@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/static/fonts/IBMPlexMono-Regular.woff2') format('woff2')}@font-face{font-family:'IBM Plex Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/static/fonts/IBMPlexMono-Medium.woff2') format('woff2')}
+.frame{display:flex;min-height:100vh}.frame>.content{flex:1;min-width:0;display:flex;flex-direction:column}.frame>.content>main{flex:1}
+nav.rail{flex:0 0 13.5rem;background:var(--accent);color:var(--accent-ink);display:flex;flex-direction:column;padding:var(--s3) var(--s2);gap:2px;position:sticky;top:0;height:100vh;overflow-y:auto}
+nav.rail .ident{padding:var(--s2) var(--s3) var(--s3);margin-bottom:var(--s2);border-bottom:1px solid rgba(247,246,235,.25)}nav.rail .ident b{display:block;font-size:1rem;word-break:break-word}nav.rail .ident span{font-size:.8rem;opacity:.85}
+nav.rail a{color:var(--accent-ink);text-decoration:none;padding:var(--s2) var(--s3);border-radius:999px;min-height:var(--tap);display:flex;align-items:center;gap:var(--s1)}nav.rail a:hover{background:rgba(247,246,235,.12)}
+nav.rail a[aria-current=page]{background:var(--accent-ink);color:var(--accent);font-weight:600}nav.rail a.foot{margin-top:auto}
+nav.rail .person{border-top:1px solid rgba(247,246,235,.25);margin-top:var(--s2);padding:var(--s2) var(--s3);display:flex;flex-direction:column;gap:var(--s1)}nav.rail .person a{padding:0;min-height:0;font-size:.85rem}nav.rail .person button{align-self:flex-start}
+nav.tabs{display:flex;flex-wrap:wrap;gap:var(--s1);margin:0 0 var(--s3);border-bottom:1px solid var(--line)}nav.tabs a{padding:var(--s2) var(--s3);text-decoration:none;color:var(--ink);border-bottom:3px solid transparent}nav.tabs a[aria-current=page]{border-bottom-color:var(--accent);font-weight:600}
+nav.phone{display:none}
+@media (max-width:700px){.frame{flex-direction:column}nav.rail{display:none}.frame>.content{padding-bottom:calc(var(--tap) + var(--s3))}
+nav.phone{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:1100;background:var(--accent);border-top:1px solid rgba(247,246,235,.25)}
+nav.phone>a,nav.phone summary{flex:1;min-height:calc(var(--tap) + 8px);display:flex;align-items:center;justify-content:center;color:var(--accent-ink);text-decoration:none;font-size:.85rem;list-style:none;cursor:pointer}
+nav.phone>a[aria-current=page]{font-weight:700;box-shadow:inset 0 3px 0 var(--accent-ink)}nav.phone details.phone-more{flex:1;display:flex}nav.phone summary::-webkit-details-marker{display:none}
+nav.phone .phone-rest{position:absolute;right:0;bottom:100%;background:var(--surface-raised);border:1px solid var(--line);border-radius:var(--r) var(--r) 0 0;display:flex;flex-direction:column;min-width:14rem}
+nav.phone .phone-rest a{padding:var(--s3);color:var(--ink);text-decoration:none;min-height:var(--tap)}nav.phone .phone-rest a[aria-current=page]{font-weight:700}}
+
+:root{--surface:#F7F6EB;--surface-raised:#FFFFFF;--surface-sunken:#EDEBDD;--ink:#1C2418;--ink-muted:#4F5A4B;--ink-muted-strong:#3B4538;--line:#D2C78D;--line-strong:#B5B171;--accent:#113308;--accent-ink:#F7F6EB;--gold:#B5B171;--ok:#2E6B30;--warn:#8A5300;--bad:#9E2A22;--live:#D2C78D;--edge:#586F7C;--node-1:#586F7C;--node-2:#4A6FA5;--node-3:#6A5D8F;--node-4:#2F6F6A;--node-5:#3F5E7A;--node-6:#7A5C99;--node-7:#356B78;--node-8:#5C6E9B;--node-none:#8A8F93;--tap:32px;--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s6:24px;--r:8px;--mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace}
 [data-theme=dark]{--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6;--node-none:#9AA0A4}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--surface:#0F1A0C;--surface-raised:#182416;--surface-sunken:#0B140A;--ink:#EEF0E6;--ink-muted:#B9C0B2;--ink-muted-strong:#CBD2C4;--line:#2E3F2A;--line-strong:#586F7C;--accent:#1F4A16;--accent-ink:#F7F6EB;--gold:#D2C78D;--ok:#7FC982;--warn:#F0B35A;--bad:#F08C84;--live:#D2C78D;--edge:#8FA1AC;--node-1:#8FA1AC;--node-2:#8FA9D4;--node-3:#AB9CC9;--node-4:#79B0AA;--node-5:#8CA5C4;--node-6:#BFA3DC;--node-7:#7FAEBB;--node-8:#9CACD6;--node-none:#9AA0A4}}
-*{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);font:14px/1.45 Manrope,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--surface);color:var(--ink);font:14px/1.45 "IBM Plex Sans",-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 input,select,textarea,button{font:inherit}
 header{background:var(--accent);color:var(--accent-ink);padding:0 var(--s4);display:flex;align-items:center;gap:var(--s4);min-height:var(--tap);position:relative;z-index:1100}
 header .brand{font-weight:700;letter-spacing:.02em;white-space:nowrap}header .brand small{font-weight:400;opacity:.8;margin-left:var(--s2)}
@@ -776,6 +868,22 @@ header .brand small{display:none}}
 # The primary bar is where the operator lives (5 Sep 2026 reviews): the mesh, the nodes, the
 # messages, the channels, the health. Radio is a set-up page, pressed once a deployment, and sits
 # in More with the rest, grouped by what they are about.
+# Spec 107, decision D1: eight places down the left, the same on every kind of computer, and most of
+# 1.2.2's pages as tabs under one of them. Each tab is its own address.
+RAIL = [("Home", "/"), ("Map", "/map"), ("Nodes", "/nodes"), ("Devices and channels", "/register"), ("Messages", "/messages"),
+        ("Connect", "/connections"), ("Health", "/health"), ("This computer", "/radio")]
+TABS = {"Map": [("Map", "/map"), ("Full screen", "/map/full")],
+        "Nodes": [("All nodes", "/nodes"), ("Neighbours", "/graph")],
+        "Devices and channels": [("My devices", "/register"), ("Add a device", "/devices/add"), ("Bench", "/bench"), ("Channels", "/channels")],
+        "Messages": [("Chats", "/messages"), ("Quick messages", "/messages/quick")],
+        "Connect": [("Other Mesh Managers", "/connections"), ("MQTT", "/connect/mqtt"), ("TAK", "/connect/tak"), ("AI agents", "/connect/agents")],
+        "Health": [("Alerts and airtime", "/health"), ("Log", "/log"), ("Packets", "/packets")],
+        "This computer": [("This radio", "/radio"), ("Where it is", "/computer/where"), ("Updates", "/computer/updates"), ("About", "/about")]}
+# the page map: every route to the section it now lives under; /help belongs to none
+SECTION_OF = {"/": "Home", "/node": "Nodes", "/activity": "Connect", "/settings": "This computer"}
+for _sec, _tabs in TABS.items():
+    for _name, _href in _tabs:
+        SECTION_OF.setdefault(_href, _sec)
 NAV_PRIMARY = [("/", "Mesh"), ("/nodes", "Nodes"), ("/messages", "Messages"), ("/channels", "Channels"), ("/health", "Health")]
 NAV_GROUPS = [("The fleet", [("/register", "Register"), ("/bench", "Bench"), ("/graph", "Neighbours"), ("/packets", "Packets")]),
               ("The mesh", [("/map", "Map"), ("/log", "Log"), ("/activity", "Activity")]),
@@ -860,7 +968,7 @@ def state_strip(st):
         lamp, word = "bad", "Bridge not answering"
     elif st.get("mode") == "hub":
         n = int(st.get("peers") or 0)
-        lamp, word = ("ok" if st.get("peer_port") else "warn"), f"Hub · {n} peer{'' if n == 1 else 's'}"   # Spec 052: a site with no radio
+        lamp, word = ("ok" if st.get("peer_port") else "warn"), f"Hub · {n} site{'' if n == 1 else 's'}"   # Spec 052: a site with no radio
     elif st.get("bootloader"):
         lamp, word = "bad", "Radio in bootloader"
     elif not st.get("radio_present"):
@@ -916,7 +1024,7 @@ def state_strip(st):
         broker = str(mq.get("broker") or "")
         why_ = str(mq.get("error") or "")
         parts.append(f"<a href='/radio' class='word' data-tip='{e(('MQTT: ' + broker) if ok_ else ('MQTT not connected' + (': ' + why_ if why_ else '')))}'"
-                     f" data-tip-more='This box carries the radio&#39;s MQTT. Manage it on Radio.'>"
+                     f" data-tip-more='{this_box(True)} carries the radio&#39;s MQTT. Manage it on Radio.'>"
                      f"<i class='lamp lamp--{'ok' if ok_ else 'bad'}'></i>"
                      f"{e('MQTT ' + (broker.split(':')[0] if ok_ and broker else 'not connected'))}</a>")
 
@@ -974,6 +1082,64 @@ def this_box(cap=False):
     return w[0].upper() + w[1:] if cap else w
 
 
+def the_box(cap=False):
+    """The same, with the definite article (Spec 108, D2): the box is the Linux mini computer, never a laptop."""
+    w = "the laptop" if is_desktop() else "the box"
+    return w[0].upper() + w[1:] if cap else w
+
+
+def identity(st):
+    """Spec 107: which computer this is, for the block above the rail. name: the site name, else the host name;
+    kind: Laptop, Box or Hub from the bridge's mode, else the web shape; radio: in the Spec 062 and Spec 100 words."""
+    st = st if isinstance(st, dict) else {}
+    site = st.get("site") if isinstance(st.get("site"), dict) else {}
+    name = str(site.get("name") or "").strip() or socket.gethostname()
+    mode = st.get("mode")
+    kind = {"desktop": "Laptop", "server": "Box", "tak-server": "Box", "hub": "Hub"}.get(mode) or ("Laptop" if is_desktop() else "Box")
+    if kind == "Hub":
+        radio = "no radio"
+    elif st.get("radio_present"):
+        radio = "radio connected"
+    else:
+        radio = "watching for a radio"
+    return {"name": name, "kind": kind, "radio": radio}
+
+
+def rail_html(active, st, pending=0, person=""):
+    """Spec 107: the menu rail, the identity block at its head and Help at its foot."""
+    sec = SECTION_OF.get(active)
+    me = identity(st)
+    items = "".join(f"<a href='{h}'{' aria-current=' + chr(39) + 'page' + chr(39) if n == sec else ''}>{e(n)}"
+                    + (f" <span class='pill'>{int(pending)}</span>" if n == "Connect" and pending else "") + "</a>" for n, h in RAIL)
+    return (f"<nav class='rail' aria-label='Menu'><div class='ident' data-identity><b>{e(me['name'])}</b>"
+            f"<span>{e(me['kind'])} · {e(me['radio'])}</span></div>{items}"
+            f"<a class='foot' href='/help'{' aria-current=' + chr(39) + 'page' + chr(39) if active == '/help' else ''}>Help</a>"
+            + (f"<div class='person'><b>{e(person)}</b><a href='/password'>Change the password</a>"
+               "<button type='submit' form='mm-logout' class='quiet'>Sign out</button></div>" if person else "")
+            + "</nav>")
+
+
+def phone_html(active, pending=0):
+    """Spec 108: on a phone, five bottom tabs; More holds the other four and Help."""
+    sec = SECTION_OF.get(active)
+    cur = lambda n: " aria-current='page'" if n == sec else ""
+    lead = "".join(f"<a href='{h}'{cur(n)}>{e(n)}</a>" for n, h in RAIL if n in ("Home", "Map", "Nodes", "Messages"))
+    rest = "".join(f"<a href='{h}'{cur(n)}>{e(n)}" + (f" <span class='pill'>{int(pending)}</span>" if n == "Connect" and pending else "") + "</a>"
+                   for n, h in RAIL if n not in ("Home", "Map", "Nodes", "Messages"))
+    return (f"<nav class='phone' aria-label='Phone menu'>{lead}<details class='phone-more'><summary>More</summary>"
+            f"<div class='phone-rest'>{rest}<a href='/help'>Help</a></div></details></nav>")
+
+
+def tabs_html(active):
+    """Spec 107: the section's tabs, by their D1 names, each its own address."""
+    sec = SECTION_OF.get(active)
+    tabs = TABS.get(sec) or []
+    if len(tabs) < 2:
+        return ""
+    return ("<nav class='tabs' aria-label='" + e(sec or "") + "'>" + "".join(
+        f"<a href='{h}'{' aria-current=' + chr(39) + 'page' + chr(39) if h == active else ''}>{e(n)}</a>" for n, h in tabs) + "</nav>")
+
+
 def the_kit():
     return "laptop" if is_desktop() else "box"
 
@@ -982,7 +1148,7 @@ def where_the_log_is():
     """Where to look when something is wrong, on this shape. A laptop has no systemd and no SSH."""
     if is_desktop():
         return "open <code>log/app.log</code> in the application's own folder; the menu by the clock has Show the files"
-    return "read <code>journalctl -u mesh-manager-bridge -n 200</code> over SSH"
+    return "open <a class='plain' href='/log'>Health, Log</a>"
 
 
 def audit_detail(row):
@@ -1005,24 +1171,19 @@ def audit_detail(row):
     return " · ".join(out)
 
 
-def page(title, body, active="", own="", st=None, pending=0, head="", update=None, notice=""):
-    prim = "".join(f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}</a>" for p, t in NAV_PRIMARY)
-    more = ""
-    for group, items in NAV_GROUPS:
-        more += f"<div class='k'>{e(group)}</div>" + "".join(
-            f"<a href='{p}' class='{'on' if p == active else ''}'>{e(t)}{(' <span class=pill>' + str(pending) + '</span>') if (p == '/activity' and pending) else ''}</a>" for p, t in items)
-    more_on = any(p == active for p, _ in NAV_MORE)
+def page(title, body, active="", own="", st=None, pending=0, head="", update=None, notice="", menu=True, person=""):
+    rail = (rail_html(active, st, pending, person) + phone_html(active, pending)) if menu else ""
     theme = ("<button type='button' class='theme head icon' data-theme-toggle aria-label='Light or dark' data-tip='Light or dark'>"
              f"<span data-sun>{ICONS['sun']}</span><span data-moon style='display:none'>{ICONS['moon']}</span></button>")
     return f"""<!doctype html><html lang='en-GB'><head><meta charset='utf-8'>{VIEWPORT}
 <title>{e(title)} · Mesh Manager</title>{APP_HEAD}<style>{CSS}</style>{head}</head><body data-own='{e(own)}'>
-<header><span class='brand'>Mesh Manager<small>{e(__version__)}</small></span><nav class='primary'>{prim}</nav>
-<details class='more'><summary aria-label='More pages'>{ICONS['menu']}<span class='word'>{'<b>More</b>' if more_on else 'More'}</span>{(' <span class=pill>' + str(pending) + '</span>') if pending else ''}</summary><nav>{more}</nav></details>
+<div class='frame{"" if menu else " bare-frame"}'>{rail}<div class='content'>
+<header><span class='brand'>Mesh Manager<small>{e(__version__)}</small></span>
 {("<a class='pill upd' href='/about'>update available: " + e(str(update)) + "</a>") if update else ""}<span class='headctl'>{icon_button("type", "Words on buttons", "Words on buttons", "Show a word beside every icon", cls="head icon", attrs="data-labels-toggle aria-pressed='false'")}{theme}</span></header>
-<div class='state' role='status'><span class='body' id='state-body'>{state_strip(st)}</span>{("<span class='pill' style='background:var(--warn);color:#fff;border-color:var(--warn)' data-tip='Sign-in is off' data-tip-more='Anyone who can reach this address is the operator'>" + e(notice) + "</span>") if notice else ""}<span id='live' class='live' data-tip='How long since the box last spoke to this page'>live <b>…</b></span></div>
-<main><h1>{e(title)}</h1>{body}</main>
+<div class='state' role='status'><span class='body' id='state-body'>{state_strip(st)}</span>{("<span class='pill' style='background:var(--warn);color:#fff;border-color:var(--warn)' data-tip='Sign-in is off' data-tip-more='Anyone who can reach this address is the operator'>" + e(notice) + "</span>") if notice else ""}<span id='live' class='live' data-tip='How long since {the_box()} last spoke to this page'>live <b>…</b></span></div>
+<main><h1>{e(title)}</h1>{tabs_html(active) if menu else ""}{body}</main>
 <footer>Mesh Manager by MilUX Ltd · GPL-3.0-or-later · the mesh as it is now, from the {the_kit()} that carries the radio</footer>
-{LIVE_JS}{TIP_JS}</body></html>"""
+</div></div>{"<form id='mm-logout' method='post' action='/logout' hidden></form>" if (menu and person) else ""}{LIVE_JS}{TIP_JS}</body></html>"""
 
 
 TIP_JS = r"""<script>
@@ -1090,9 +1251,9 @@ def overview_cards(st):
     act = st.get("last_activity")
     heard, db = int(st.get("nodes_seen") or 0), st.get("nodes_db")
     face = "".join([
-        (card("Radio", "none: this site is a hub<div class='meta'>peers join it by an invite; their pictures show here</div>", "ok") if st.get("mode") == "hub"
+        (card("Radio", "none: this site is a hub<div class='meta'>other sites join it by an invite; their pictures show here</div>", "ok") if st.get("mode") == "hub"
          else card("Radio", ("watching for a radio<div class='meta'>none chosen yet. "
-                             "<a href='/radio'>Plug one in and choose it</a>, and this box is on the air.</div>")
+                             f"<a href='/radio'>Plug one in and choose it</a>, and {this_box()} is on the air.</div>")
                    if not st.get("radio") else
                    (f"{e(radio_txt)}<div class='meta'>{e(radio)}"
                     + ("<br><a href='/radio'>Choose a different radio</a>" if not present else "")
@@ -1116,7 +1277,7 @@ def overview_cards(st):
         card("Watchdog", e(st.get("watchdog") or "?"), "ok" if st.get("watchdog") == "pinging" else "warn"),
         card("Up for", e(dur(st.get("uptime")))),
     ])
-    return (f"<div class='cards'>{face}</div><details class='fold' data-keep='box-detail'><summary>The box in detail</summary><div class='cards'>{rest}</div></details>")
+    return (f"<div class='cards'>{face}</div><details class='fold' data-keep='box-detail'><summary>{the_box(True)} in detail</summary><div class='cards'>{rest}</div></details>")
 
 
 def position_words(own):
@@ -1137,7 +1298,7 @@ def _position_words(own):
         return "the position set on Settings"
     if src == "gps":
         sats = own.get("sats")
-        return f"the box's own GPS receiver ({sats} satellites, fix at {hhmm(own.get('time'))})" if sats else f"the box's own GPS receiver (fix at {hhmm(own.get('time'))})"
+        return f"{the_box()}'s own GPS receiver ({sats} satellites, fix at {hhmm(own.get('time'))})" if sats else f"{the_box()}'s own GPS receiver (fix at {hhmm(own.get('time'))})"
     if src == "radio_gps":
         return f"the gateway radio's own GPS (fix at {hhmm(own.get('time'))})"
     if src == "devices":
@@ -1155,7 +1316,7 @@ def map_body(L, tiles=None, disk=None, added=None, folder="", tak_on=True):
     js = """<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='route'||d.kind==='status'||d.kind==='forwarded'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}}if(d.kind==='survey'&&window.mmSurvey){window.mmSurvey(d);}if((d.kind==='position'||(d.kind==='survey'&&d.state==='asked'))&&window.mmCoverTick){setTimeout(window.mmCoverTick,1500);}};</script>"""
     own = L.get("own") or {}
     how = position_words(own)
-    return (f"<p class='meta'>This box at the centre, every node heard since the bridge started about it; a solid link is coloured by the SNR of the last packet that came straight from that node, a dashed one has only ever come through a relay, a database-only node is not drawn. Box position: {e(how)}.</p>"
+    return (f"<p class='meta'>{this_box(True)} at the centre, every node heard since the bridge started about it; a solid link is coloured by the SNR of the last packet that came straight from that node, a dashed one has only ever come through a relay, a database-only node is not drawn. Box position: {e(how)}.</p>"
             f"{mesh_views(L, tiles or tile_sources({}), 800, tak_on=tak_on)}{survey_form(L)}{map_sources_form(tiles, disk, added, folder)}{js}{WRITE_JS}")
 
 
@@ -1172,7 +1333,7 @@ def map_sources_form(t, disk=None, added=None, folder=""):
         rows += f"<tr><td><b>{e(src.get('name'))}</b><div class='sub'>{e(src.get('id'))}</div></td><td class='meta'>{e(src.get('where') or '')}</td><td class='meta'>{e(zooms)}</td><td>{drop}</td></tr>"
     built = ", ".join(e(x["name"]) for x in (t or {}).get("sources", []) if not str(x.get("id", "")).startswith(("tak-", "own-")))
     return (f"<details class='fold' id='map-sources' style='margin-top:var(--s3)'><summary>Map sources</summary>"
-            f"<p class='meta'>The layer control offers {built}. Add the imagery you already carry in TAK: drop an ATAK <code>&lt;customMapSource&gt;</code> XML into the box's map folder{(' (' + e(folder) + ')') if folder else ''} and it appears here, or paste one below. Tiles load in the viewer's browser; the box sends nothing.</p>"
+            f"<p class='meta'>The layer control offers {built}. Add the imagery you already carry in TAK: drop an ATAK <code>&lt;customMapSource&gt;</code> XML into {the_box()}'s map folder{(' (' + e(folder) + ')') if folder else ''} and it appears here, or paste one below. Tiles load in the viewer's browser; {the_box()} sends nothing.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Source</th><th>From</th><th>Detail</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>Nothing beyond the built-in sources yet.</td></tr>'}</tbody></table></div>"
             f"<form data-action='map_source_add' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:760px;margin-top:var(--s3)'>"
             f"<h2 style='margin-top:0'>{e(a['title'])}</h2><p class='meta'>{e(a['description'])}</p>"
@@ -1205,20 +1366,210 @@ def survey_form(L):
 MAP_HEAD = "<link rel='stylesheet' href='/static/leaflet/leaflet.css'><script src='/static/leaflet/leaflet.js'></script>"
 
 
-def overview_body(st, bind, auth_on=True, nodes=None, links=None, tiles=None):
-    closed = (f"<h2>What is open</h2><p class='meta'>This screen answers on <b>{e(bind[0])}:{bind[1]}</b> and nothing else. "
+def closed_statement(st, bind, auth_on=True):
+    return (f"<h2>What is open</h2><p class='meta'>This screen answers on <b>{e(bind[0])}:{bind[1]}</b> and nothing else. "
               + ("" if auth_on else "<b>Sign-in is off</b>: anyone who can reach this address is the operator. ")
               + ("The bridge binds no port of its own; it owns the radio and speaks to nothing else. " if (st or {}).get("tak") == "off"
                  else "The bridge binds no port of its own; it owns the radio and speaks to TAK Server over the multicast input. ")
-              + (f"The bridge also listens for peers on <b>{e(str(st.get('peer_bind')))}:{e(str(st.get('peer_port')))}</b>, TLS, paired sites only (Spec 052). " if (st or {}).get("peer_port") else "")
-              + "Everything else on this box is closed until the operator opens it.</p>")
-    js = """<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='forwarded'||d.kind==='connection'){var o=document.querySelector('#overview-cards details'),was=!!(o&&o.open);window.mmFrag('overview','overview-cards',function(){var n=document.querySelector('#overview-cards details');if(n&&was){n.open=true;}});}
-if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}var h=document.getElementById('home-heard');if(h&&d.kind==='status'&&d.nodes_seen!==undefined){h.textContent=d.nodes_seen;}}};</script>"""
+              + (f"It also listens for other sites on <b>{e(str(st.get('peer_bind')))}:{e(str(st.get('peer_port')))}</b>, over TLS, joined sites only. " if (st or {}).get("peer_port") else "")
+              + f"Everything else on {this_box()} is closed until the operator opens it.</p>")
+
+
+# ---- Spec 110: Home, and the first run ---------------------------------------------------------
+HOME_TASKS = {
+    "Laptop": [("map", "See where everyone is", "/map", "The map, with every node that has a fix"),
+               ("add-device", "Add a device", "/devices/add", "Put a tracker or a radio on this mesh"),
+               ("message", "Message the mesh", "/messages", "Send to a channel or to one node"),
+               ("join", "Join a hub", "/connections#join", "Paste an invite from a hub or another site"),
+               ("health", "Check the mesh is healthy", "/health", "Alerts, airtime and what this radio heard"),
+               ("this-radio", "Look after this radio", "/radio", "Which radio this computer uses, and its settings")],
+    "Box": [("map", "See where everyone is", "/map", "The map, with every node that has a fix"),
+            ("add-device", "Add a device", "/devices/add", "Put a tracker or a radio on this mesh"),
+            ("message", "Message the mesh", "/messages", "Send to a channel or to one node"),
+            ("invite-or-join", "Invite or join a site", "/connections", "Link this box to a hub or another site"),
+            ("health", "Check the mesh is healthy", "/health", "Alerts, airtime and what this radio heard"),
+            ("this-radio", "Look after this radio", "/radio", "Which radio this box uses, and its settings")],
+    "Hub": [("map", "See where everyone is", "/map", "Every node the sites share with this hub"),
+            ("invite", "Invite a site", "/connections#invite", "Make an invite for a box or a laptop to join"),
+            ("sites", "Check the sites", "/connections", "Which sites are linked, and when each was last heard"),
+            ("groups", "Groups", "/nodes", "Who belongs with whom, across the sites"),
+            ("sign-in", "Who can sign in", "/password", "The operator password for this hub"),
+            ("agents", "Agents", "/connect/agents", "The AI agents that may use this hub")],
+}
+
+
+def home_counts(st, nodes, settings):
+    """The four tiles: heard, quiet and low by the Health thresholds, and the airtime."""
+    st, settings = st or {}, settings or {}
+    silent = int(settings.get("silent_min") or 30)
+    pct = int(settings.get("battery_pct") or 20)
+    here = [n for n in (nodes or []) if reached(n)]   # Spec 113: counted as the Nodes page counts
+    now = time.time()
+
+    def quiet(n):
+        try:
+            t = latest_contact(n)
+            return bool(t) and (now - _utc_secs(t)) > silent * 60
+        except (TypeError, ValueError):
+            return False
+
+    def low(n):
+        try:
+            return n.get("battery") is not None and not n.get("charging") and float(n["battery"]) < pct
+        except (TypeError, ValueError):
+            return False
+
+    heard = st.get("nodes_heard")
+    return {"heard": int(heard) if isinstance(heard, (int, float)) else len(here),
+            "quiet": sum(1 for n in here if quiet(n)), "low": sum(1 for n in here if low(n)),
+            "airtime": None if st.get("chutil") is None else int(round(float(st["chutil"]))),
+            "verdict": str(st.get("verdict") or "unknown"), "silent": silent, "pct": pct}
+
+
+def home_tiles(c, kind):
+    def t(key, label, sub, href):
+        return (f"<a class='card tile' href='{href}' data-tile='{key}' data-count='{int(c[key])}'>"
+                f"<span class='k'>{e(label)}</span><span class='v'>{int(c[key])}</span><span class='sub'>{e(sub)}</span></a>")
+    if kind == "Hub" or c.get("airtime") is None:
+        air = (f"<div class='card tile' data-tile='airtime' data-verdict='{e(c['verdict'])}'><span class='k'>Airtime</span>"
+               f"<span class='v'>{'no radio here' if kind == 'Hub' else 'no reading yet'}</span></div>")
+    else:
+        air = (f"<a class='card tile' href='/health' data-tile='airtime' data-count='{int(c['airtime'])}' data-verdict='{e(c['verdict'])}'>"
+               f"<span class='k'>Airtime</span><span class='v'>{int(c['airtime'])}%</span><span class='sub'>{e(c['verdict'])}</span></a>")
+    return ("<div class='cards tiles' id='home-tiles'>"
+            + t("heard", "Heard", "nodes heard here", "/nodes")
+            + t("quiet", "Quiet", f"nothing for over {c['silent']} min", "/nodes")
+            + t("low", "Low battery", f"under {c['pct']} per cent", "/nodes")
+            + air + "</div>")
+
+
+def home_tasks(kind, st):
+    out = []
+    for key, title, href, sub in HOME_TASKS.get(kind, HOME_TASKS["Box"]):
+        if key == "this-radio" and not (st or {}).get("radio_present"):
+            sub = "Watching for a radio: choose the one to use"
+        out.append(f"<a class='card task' href='{href}' data-task='{key}'><span class='v'>{e(title)}</span><span class='sub'>{e(sub)}</span></a>")
+    return "<h2>What you can do</h2><div class='cards tasks'>" + "".join(out) + "</div>"
+
+
+def needs_attention(alerts, props):
+    """Every open alert and every agent proposal waiting, each with the one thing to do about it."""
+    items = []
+    for a in (alerts or []):
+        nid = str(a.get("node") or "")
+        where = f" <span class='sub'>from {e(str(a.get('origin_name')))}</span>" if a.get("origin_name") else ""
+        todo = f"<a href='/node?id={urllib.parse.quote(nid)}'>Look at the node</a>" if nid else "<a href='/health'>Open Health</a>"
+        items.append(f"<li><b>{e(str(a.get('text') or a.get('kind') or 'alert'))}</b>{where} · {todo}</li>")
+    for p in (props or []):
+        items.append(f"<li><b>{e(str(p.get('rationale') or p.get('action') or 'a proposal'))}</b> "
+                     f"<span class='sub'>proposed by {e(str(p.get('who') or 'an agent'))}</span> · <a href='/connect/agents'>Approve or turn it down</a></li>")
+    body = f"<ul>{''.join(items)}</ul>" if items else "<p class='meta'>Nothing needs you now.</p>"
+    return f"<section id='needs-attention'><h2>Needs attention</h2>{body}</section>"
+
+
+HOME_JS = ("<script>window.onMesh=function(d){if(d.kind==='status'||d.kind==='alert'||d.kind==='packet'){"
+           "window.mmFrag('home','home-live');}"
+           "if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'||d.kind==='route'){window.mmFrag('map','map-box');if(window.mmOverlay){window.mmOverlay();}}};</script>")
+
+
+def home_live(st, nodes, settings, alerts, props):
+    kind = identity(st)["kind"]
+    return home_tiles(home_counts(st, nodes, settings), kind) + needs_attention(alerts, props)
+
+
+def home_body(st, nodes, settings, alerts, props, links=None, tiles=None):
+    """Spec 110: the tiles, the map (see where everyone is, Spec 113 draws the sites' nodes on it), what needs
+    attention and the six things to do."""
+    kind = identity(st)["kind"]
     L = links or {"own": {}, "nodes": nodes or [], "routes": {}}
-    heard = len([n for n in (L.get("nodes") or []) if n.get("heard_here", True)])
-    return (f"{mesh_views(L, tiles or tile_sources({}), tak_on=(st or {}).get('tak') != 'off')}"
-            f"<p class='meta'><a href='/nodes'>Nodes</a>: <span id='home-heard'>{heard}</span> heard here since the bridge started. Who is where, who has gone quiet and who is low on battery is on the Nodes page, one press away.</p>"
-            f"<h2>This box</h2><div id='overview-cards'>{overview_cards(st)}</div>{closed}{js}")
+    return (f"<div id='home-live'>{home_live(st, nodes, settings, alerts, props)}</div>"
+            f"{mesh_views(L, tiles or tile_sources({}), tak_on=(st or {}).get('tak') != 'off')}"
+            f"{home_tasks(kind, st)}{HOME_JS}")
+
+
+def computer_status_body(st, bind, auth_on=True):
+    """What the old overview held about this computer (Spec 110 moves it to This computer): the radio, the
+    bridge, the last packet heard, and what is open."""
+    return (f"<h2>{this_box(True)}</h2><div id='overview-cards'>{overview_cards(st)}</div>"
+            + closed_statement(st, bind, auth_on))
+
+
+def first_run_state(etc):
+    """Spec 110: the first-run mark. None when the file is absent (an upgrade), else its contents."""
+    try:
+        got = json.load(open(os.path.join(etc, "first-run.json")))
+        return got if isinstance(got, dict) else {"state": "pending"}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"state": "pending"}
+
+
+def first_run_due(etc):
+    return (first_run_state(etc) or {}).get("state") == "pending"
+
+
+def first_run_body(kind, st, channels, gateway=None, peers=None, person="", err="", values=None):
+    """Spec 110: one form, the steps in order for this kind of computer."""
+    st, v = st or {}, values or {}
+    site = st.get("site") if isinstance(st.get("site"), dict) else {}
+    steps = [f"<p>Welcome to Mesh Manager. A few questions and this {'hub' if kind == 'Hub' else 'computer'} is ready; "
+             "you can change any of it later.</p>"]
+    if err:
+        steps.append(f"<p class='bad' role='alert'>{e(err)}</p>")
+    steps.append("<h2>Name this computer</h2><p class='meta'>Other sites see it by this name.</p>"
+                 f"<label>Name<input type='text' name='site_name' maxlength='60' required value='{e(str(v.get('site_name') or site.get('name') or ''))}'></label>")
+    if kind == "Laptop":
+        steps.append("<h2>Your name</h2><p class='meta'>What you change here is recorded under it.</p>"
+                     f"<label>Your name<input type='text' name='name' maxlength='{NAME_MAX}' autocomplete='name' required value='{e(str(v.get('name') or ''))}'></label>")
+    elif person:
+        steps.append(f"<p class='meta'>Signed in as <b>{e(person)}</b>; this first run is recorded under that name.</p>")
+    if kind != "Hub":
+        if kind == "Box" and gateway and gateway.get("candidates"):
+            cur = str(gateway.get("serial") or "")
+            opts = "".join(f"<label class='choice'><input type='radio' name='radio' value='{e(c['path'])}'{' checked' if c['path'] == cur else ''}> "
+                           f"<code>{e(c['path'])}</code></label>"
+                           for c in gateway["candidates"] if c.get("kind") != "gps")
+            steps.append(f"<h2>The radio</h2><p class='meta'>The radio this box uses to reach the mesh.</p>{opts}")
+        elif st.get("radio_present") and st.get("radio"):
+            steps.append(f"<h2>The radio</h2><p>Found <code>{e(str(st['radio']))}</code>"
+                         + (f", region <b>{e(str(st['region']))}</b>" if st.get("region") else "") + ".</p>")
+        else:
+            steps.append("<h2>The radio</h2><p>No radio yet: this computer is watching for a radio. Plug one in and it is found; "
+                         "you can finish now and it joins when it arrives.</p>")
+        chans = [c for c in (channels or {}).get("channels") or [] if c.get("role") != "DISABLED"]
+        if chans:
+            want = str(v.get("channel", "0"))
+            opts = "".join(f"<label class='choice'><input type='radio' name='channel' value='{int(c.get('index') or 0)}'"
+                           f"{' checked' if str(int(c.get('index') or 0)) == want else ''}> {e(str(c.get('name') or 'unnamed'))} "
+                           f"<span class='sub'>{e(str(c.get('role') or '').lower())}</span></label>" for c in chans)
+            steps.append(f"<h2>The channel</h2><p class='meta'>The channel this computer's messages go out on.</p>{opts}")
+        if kind == "Box" and str(st.get("mode")) == "tak-server":
+            steps.append("<h2>TAK</h2><p class='meta'>This box passes the mesh to TAK Server; the input and filter group are on Connect, TAK.</p>")
+        if kind == "Laptop":
+            steps.append("<h2>Join a hub</h2><p class='meta'>If someone has sent you an invite, you can join a hub from "
+                         "<a href='/connections#join'>Connect</a> once this is done. It is optional.</p>")
+        else:
+            steps.append("<h2>Invite or join a site</h2><p class='meta'>Link this box to a hub or another site from "
+                         "<a href='/connections'>Connect</a> once this is done. It is optional.</p>")
+    else:
+        me = (peers or {}).get("site") or {}
+        where = (f"Listening for sites at <b>{e(str(me.get('address') or 'no address set'))}</b>, port <b>{e(str(me.get('port')))}</b>."
+                 if me.get("listening") else "Not listening for sites yet: set a port on This computer.")
+        steps.append(f"<h2>Being reachable</h2><p>{where}</p><p class='meta'>This is what the hub knows about itself; "
+                     "nothing has been tried from outside.</p>"
+                     "<h2>Invite the first site</h2><p class='meta'>Once this is done, make an invite on "
+                     "<a href='/connections#invite'>Connect</a> and send it to the site.</p>")
+    return (f"<form method='post' action='/first-run' class='firstrun'>{''.join(steps)}"
+            "<p><button type='submit'>Finish</button></p></form>")
+
+
+def first_run_done_body(rec):
+    got = [f"the radio <code>{e(str(rec.get('radio')))}</code>" if rec.get("radio") else "no radio yet, watching for one",
+           f"region <b>{e(str(rec['region']))}</b>" if rec.get("region") else "",
+           f"channel <b>{e(str(rec['channel']))}</b>" if rec.get("channel") else ""]
+    return (f"<p>Done. {e(str(rec.get('site_name') or 'This computer'))} is set up with "
+            f"{', '.join(x for x in got if x)}.</p><p><a class='button' href='/'>Go to Home</a></p>")
 
 
 # -- nodes
@@ -1237,7 +1588,7 @@ def sig(snr, hops, via_mqtt=False):
         hop = " <span class='pill'>" + ("direct" if int(hops) == 0 else f"{int(hops)} hop" + ("s" if int(hops) != 1 else "")) + "</span>"
     if via_mqtt and snr is None:
         return ("<span class='sig sig--0' data-tip='Reached over MQTT' "
-                "data-tip-more='This node is arriving through a broker over the network, not over this box"
+                f"data-tip-more='This node is arriving through a broker over the network, not over {this_box()}"
                 "&#39;s radio. There is no signal reading because this radio did not hear it.'>"
                 "<span class='sub'>over MQTT</span></span>" + hop)
     if snr is None:
@@ -1396,9 +1747,9 @@ def disk_map_sources(d):
         except OSError as ex:
             src, err = None, f"unreadable: {type(ex).__name__}"
         if src:
-            out.append(dict(src, id="tak-" + sid, where="the box's map folder", internet=True, removable=False))
+            out.append(dict(src, id="tak-" + sid, where=f"{the_box()}'s map folder", internet=True, removable=False))
         else:
-            out.append({"id": "tak-" + sid, "name": sid, "error": err, "where": "the box's map folder", "removable": False})
+            out.append({"id": "tak-" + sid, "name": sid, "error": err, "where": f"{the_box()}'s map folder", "removable": False})
     return out
 
 
@@ -1461,7 +1812,7 @@ def map_source_remove(etc_dir, sid):
     have = saved_map_sources(etc_dir)
     keep = [x for x in have if x["id"] != sid]
     if len(keep) == len(have):
-        return None, f"no source {sid} was added on this screen; the built-in ones and the box's own files cannot be removed here"
+        return None, f"no source {sid} was added on this screen; the built-in ones and {the_box()}'s own files cannot be removed here"
     save_map_sources(etc_dir, keep)
     return {"removed": sid}, None
 
@@ -1508,6 +1859,10 @@ OVERLAY_JS = r"""<script>
      where it is still gets a map: it is built, given a view from whatever has a position, and told to say so
      when nothing does. A hub has no position of its own and its map used to be an empty box. */
   if(!window.L){show('plan');return;}
+  // Review of 1.5.0: Leaflet puts a tooltip's string into innerHTML, and node names, waypoint names and a site's rows
+  // are anyone's words on the air or the internet. Every tooltip given a string gets it as text instead.
+  if(!L.Layer.prototype.mmTextTips){var _bt=L.Layer.prototype.bindTooltip;L.Layer.prototype.mmTextTips=true;
+    L.Layer.prototype.bindTooltip=function(c,o){if(typeof c==='string'||typeof c==='number'){var s=document.createElement('span');s.textContent=String(c);c=s;}return _bt.call(this,c,o);};}
   var map=L.map('map-geo',{zoomControl:true,attributionControl:true});window.mmMap=map;
   /* Spec 068: a Leaflet map with no centre and zoom renders nothing at all, not even imagery, and every call
      that would have set one was behind a check that the container already had a size. A map built while its
@@ -1770,7 +2125,7 @@ OVERLAY_JS = r"""<script>
   function bandTok(b){return b>=3?'--ok':b===2?'--warn':'--bad';}
   function dist(m){return m>=1000?(m/1000).toFixed(m>=10000?0:1)+' km':Math.round(m)+' m';}
   function draw(J){lastJ=J;GROUPED=!!J.grouped;(J.nodes||[]).forEach(function(n){names_[n.id]=n.label||n.name||n.id;});if(J.own&&J.own.id)names_[J.own.id]=J.own.name||'this box';overlay.clearLayers();fetchGraph();var own=J.own||{};if(own.lat===null||own.lat===undefined||own.lon===null||own.lon===undefined){ownLL=null;centreBtn(false);drawWithoutOwn(J);return;}var c=[own.lat,own.lon];ownLL=L.latLng(c[0],c[1]);centreBtn(true);readout(ownLL,'this box');
-    var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(n.heard_here===false)return;if(!shownHere(n.group||''))return;if(n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return;pts.push(n);});
+    var byId={},pts=[];(J.nodes||[]).forEach(function(n){byId[n.id]=n;groups_[n.id]=n.group||'';if(!plotted(n))return;if(!shownHere(n.group||''))return;pts.push(n);});
     centre=c;rings();
     pts.forEach(function(n){var ll=[n.lat,n.lon],ds=n.direct_snr;
       if(ds!==null&&ds!==undefined){L.polyline([c,ll],{color:tok(bandTok(band(ds))),weight:3}).bindTooltip(ds+' dB',{permanent:true,direction:'center',className:'mm-link'}).addTo(overlay);}
@@ -1788,7 +2143,7 @@ OVERLAY_JS = r"""<script>
      does, still give the map a view so the imagery loads, and say why there is nothing on it. Before this the
      draw returned here and the map was never given a view at all, so Leaflet rendered an empty container: that
      is what a hub's map looked like. */
-  function drawWithoutOwn(J){var pts=(J.nodes||[]).filter(function(n){return n.lat!==null&&n.lat!==undefined&&n.lon!==null&&n.lon!==undefined;});
+  function drawWithoutOwn(J){var pts=(J.nodes||[]).filter(function(n){return plotted(n);});
     drawNodes(pts,overlay);
     if(!fitted&&sized()){
       if(pts.length){var b=L.latLngBounds(pts.map(function(n){return [n.lat,n.lon];}));map.fitBounds(b.pad(0.35),{maxZoom:17});}
@@ -1842,6 +2197,14 @@ OVERLAY_JS = r"""<script>
   // and it is worth saying which route, because a node only the broker is carrying cannot be
   // reached if the network goes
   function overMqtt(n){return !!(n&&n.via_mqtt);}
+  // Spec 113: what the map draws, one rule for both draw paths. A node with a position that was heard here, reached
+  // over MQTT, or came from a site that heard it; never one only in the radio's database.
+  function plotted(n){if(!n||n.lat===null||n.lat===undefined||n.lon===null||n.lon===undefined)return false;
+    return n.heard_here!==false||(!!n.via_mqtt&&!!n.mqtt_at);}
+  // and how it got here, in the words the Nodes page uses
+  function routeWord(n){if(!n)return '';var mq=!!n.via_mqtt&&n.heard_here===false;
+    if(n.remote){return mq?'via MQTT, through '+(n.origin_name||'a site'):'via '+(n.origin_name||'a site');}
+    return mq?'over MQTT':'';}
   // Spec 083: radios on top of each other become one marker at their centre of mass. The threshold is in
   // screen pixels because the clutter is a screen problem: the same field is one blob at zoom 10 and eight
   // separate radios at zoom 18. Greedy against each cluster's first member, so the seed never drifts and the
@@ -1920,8 +2283,8 @@ OVERLAY_JS = r"""<script>
   var UNGROUPED='var(--node-none)';   // the fixed grey; not one of the eight, and not settable
   function groupColour(n){
     if(!n)return nodeColour('');
-    var gc=n.group_colour||'';
-    if(gc)return 'var(--'+gc+')';        // its group's colour
+    var gc=String(n.group_colour||'');   // a site sends this; only a colour token's name is used, never raw CSS
+    if(gc&&/^[a-z0-9-]{1,24}$/.test(gc))return 'var(--'+gc+')';        // its group's colour
     if(GROUPED)return UNGROUPED;         // ungrouped, or a group with no colour, on a box that groups
     var id=n.id;return nodeColour(id);   // no group anywhere on this box: its own identity colour
   }
@@ -1936,7 +2299,7 @@ OVERLAY_JS = r"""<script>
   function timesFor(id){var t=[];lastRows.forEach(function(r){if(r.node===id&&r.lat!==null&&r.lon!==null)t.push(Date.parse(r.ts));});
     t.sort(function(a,b){return a-b;});return t;}
   function staleNow(n){return nodeStale(n,Date.now(),timesFor(n.id),STALE_FLOOR);}
-  function escH(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML;}
+  function escH(t){return (t==null?'':String(t)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}   // quotes too: it also fills attributes
   function clusterIcon(c){return L.divIcon({className:'mm-pin mm-cl'+(c.allStale?' stale':''),
     html:"<span class='mm-pin-in mm-cl-in'>"+c.count+"</span>",iconSize:[34,34],iconAnchor:[17,17],tooltipAnchor:[0,17]});}
   // Drilling down is the list: who is in the pile, in their own colours, and how long since each was heard.
@@ -1946,7 +2309,7 @@ OVERLAY_JS = r"""<script>
       var when=Math.max(t,Date.parse(n.mqtt_at||'')||0);
       return "<button type='button' class='mm-cl-row"+(st?' stale':'')+"' data-id='"+escH(n.id)+"'>"
         +"<i style='background:"+groupColour(n)+"'></i><span class='nm'>"+escH(names_[n.id]||n.label||n.name||n.id)+"</span>"
-        +"<span class='age'>"+(when?escH(fmtAge(now-when))+(st?' · not heard lately':(overMqtt(n)?' · over MQTT':'')):'never heard')+"</span></button>";}).join('')+"</div>";}
+        +"<span class='age'>"+(when?escH(fmtAge(now-when))+(st?' · not heard lately':(routeWord(n)?' · '+escH(routeWord(n)):'')):'never heard')+"</span></button>";}).join('')+"</div>";}
   function soloCluster(n){var st=staleNow(n);
     return {group:String(n.group||''),members:[n],count:1,fresh:st?0:1,stale:st?1:0,allStale:st,lat:n.lat,lon:n.lon};}
   function drawNodes(pts,layer){
@@ -2073,14 +2436,14 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
     own = L.get("own") or {}
     has = own.get("lat") is not None and own.get("lon") is not None
     attr = json.dumps(tiles).replace("&", "&amp;").replace("'", "&#39;").replace('"', "&quot;")
-    why = "" if has else "<p class='meta'>No position for this box, so the map view is off and the plan view places nodes by hops. Give the box its position on <a href='/settings#position'>Settings</a>, or plug in a GPS receiver.</p>"
+    why = "" if has else f"<p class='meta'>No position for {this_box()}, so the map view is off and the plan view places nodes by hops. Give {the_box()} its position on <a href='/settings#position'>Settings</a>, or plug in a GPS receiver.</p>"
     groups = sorted({str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
     gcolour = {str(n.get("group")): str(n.get("group_colour") or "")
                for n in (L.get("nodes") or []) if n.get("group")}
     # Spec 091: many at once, and the ungrouped as a category of their own. The summary says what is
     # on without opening it, because a filtered map that looks like an empty one is a trap.
     gsel = ("<details class='fold ctl' id='gfilter' style='margin-top:0'>"
-            "<summary data-tip='Groups shown' data-tip-more='Any combination, and the ungrouped in their own right. This screen only: nothing is sent to the box and nobody else&#39;s view changes'>"
+            f"<summary data-tip='Groups shown' data-tip-more='Any combination, and the ungrouped in their own right. This screen only: nothing is sent to {the_box()} and nobody else&#39;s view changes'>"
             "Groups: <b id='gf-word'>everyone</b></summary><div class='controls' style='margin:var(--s2) 0 0'>"
             + "".join(f"<label class='meta check'><input type='checkbox' class='gf' value='{e(g)}'> "
                       f"<span class='swatch' style='background:var(--{e(gcolour.get(g) or 'node-none')})'></span>{e(g)}</label>"
@@ -2090,7 +2453,7 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
               "<button type='button' class='line' id='gf-all'>Show all</button>"
               "</div></details>") if groups else ""
     layers = ("<details class='fold ctl' id='layers' style='margin-top:0'><summary data-tip='Layers, trails, rings and grid' data-tip-more='What the map draws besides the nodes'>" + ICONS["layers"] + "Map layers</summary><div class='controls' style='margin:var(--s2) 0 0'>" + gsel +
-              "<label class='meta' for='map-dim' data-tip='Dim the overlay' data-tip-more='The range rings, the node markers and the tracks together, from solid to invisible, so you can see the map underneath'>Dim <input type='range' id='map-dim' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:120px;margin:0'></label><span class='meta' id='ring-step'></span><label class='meta' for='map-label-dim' data-tip='Fade the name boxes' data-tip-more='The box behind each name only, never the name itself, so a crowded map stays readable'>Names <input type='range' id='map-label-dim' min='0' max='100' step='5' value='100' style='vertical-align:middle;width:120px;margin:0'></label>"
+              f"<label class='meta' for='map-dim' data-tip='Dim the overlay' data-tip-more='The range rings, the node markers and the tracks together, from solid to invisible, so you can see the map underneath'>Dim <input type='range' id='map-dim' min='0' max='100' step='5' value='60' style='vertical-align:middle;width:120px;margin:0'></label><span class='meta' id='ring-step'></span><label class='meta' for='map-label-dim' data-tip='Fade the name boxes' data-tip-more='{the_box(True)} behind each name only, never the name itself, so a crowded map stays readable'>Names <input type='range' id='map-label-dim' min='0' max='100' step='5' value='100' style='vertical-align:middle;width:120px;margin:0'></label>"
               "<label class='meta' for='trail-hours' data-tip='Trails' data-tip-more='Each node&#39;s track over the window, fading with age'>Trails <select id='trail-hours'><option value='0'>off</option><option value='1'>1 h</option><option value='3' selected>3 h</option><option value='12'>12 h</option><option value='24'>24 h</option><option value='72'>3 d</option></select></label>"
               "<label class='meta check' data-tip='Combine' data-tip-more='Radios on top of each other draw as one marker at their centre of mass; press it to see who is in it. A radio not heard lately is still on the map and still counted, but never moves the centre of mass'><input type='checkbox' id='combine-on' checked> Combine</label>"
               "<label class='meta check' data-tip='Neighbours' data-tip-more='Who hears whom, from the neighbour reports nodes broadcast'><input type='checkbox' id='graph-on'> Neighbours</label>"
@@ -2107,13 +2470,13 @@ def mesh_views(L, tiles, size=640, bare=False, tak_on=True):
     # Spec 068: the map is the view this opens on, whether or not the box knows where it is. A hub has no radio
     # and no position, and the map used never to be built at all: the Map button revealed an empty box.
     return (f"<div id='mesh-views' data-default-view='map' data-has-position='{'1' if has else '0'}' data-tiles='{attr}'>"
-            f"<div class='controls views'><button type='button' class='line' data-view='map' aria-label='Map view' data-tip='The map with imagery'>{ICONS['map']}Map</button><button type='button' class='line' data-view='plan' aria-label='Plan view' data-tip='Range rings from this box' data-tip-more='The mesh drawn round this box, without imagery'>{ICONS['plan']}Plan</button>"
+            f"<div class='controls views'><button type='button' class='line' data-view='map' aria-label='Map view' data-tip='The map with imagery'>{ICONS['map']}Map</button><button type='button' class='line' data-view='plan' aria-label='Plan view' data-tip='Range rings from {this_box()}' data-tip-more='The mesh drawn round {this_box()}, without imagery'>{ICONS['plan']}Plan</button>"
             + ("" if bare else icon_button("popout", "Open the map in a window", "Open the map in a window", "The map on its own, in a window of its own", attrs="id='map-pop'"))
             + layers + "<span class='meta' id='tiles-now'></span><span class='meta warn' id='tiles-note'></span></div>"
             f"<div data-view='map' hidden><div id='map-geo' class='geo'></div>"
             "<dialog id='local-maps' style='border:1px solid var(--line);border-radius:var(--r);background:var(--surface-raised);color:var(--ink);max-width:520px;width:92vw;padding:var(--s4)'>"
             "<h2 style='margin:0 0 var(--s2)'>Load a local map</h2>"
-            "<p class='meta' style='margin-top:0'>The map sets carried on this box. They work with no internet, and each covers only where it was made for.</p>"
+            f"<p class='meta' style='margin-top:0'>The map sets carried on {this_box()}. They work with no internet, and each covers only where it was made for.</p>"
             "<div class='local-list'></div>"
             "<div class='row-actions' style='margin-top:var(--s3)'><button type='button' class='line' data-close>Close</button></div></dialog>"
             f"<p class='meta' id='map-empty' hidden style='margin:var(--s2) 0 0'></p>{playback_bar()}{why}<div class='meta' id='nopos' style='margin-top:var(--s2)'></div>{fence_forms(L)}{wp}</div>"
@@ -2234,7 +2597,7 @@ def map_svg(L, size=640):
                 a = math.atan2(py, px) if d else math.radians(-90)
                 px, py = 40 * math.cos(a), 40 * math.sin(a)
             pos[nid] = (cx + px, cy + py, "fix")
-        legend = f"rings every {rings[0][1]}; range rings are geometry, not propagation; the box: {position_words(own).split(':')[0]}"
+        legend = f"rings every {rings[0][1]}; range rings are geometry, not propagation; {the_box()}: {position_words(own).split(':')[0]}"
     else:
         maxh = max([int(n["hops"]) for n in nodes if n.get("hops") is not None] + [0])
         count = max(1, min(3, maxh + 1))
@@ -2249,7 +2612,7 @@ def map_svg(L, size=640):
                 a = math.radians(-90 + 360.0 * i / len(ids))
                 r = rings[k - 1][0]
                 pos[nid] = (cx + r * math.cos(a), cy + r * math.sin(a), "hops")
-        legend = "no position for this box: rings are by hops, not distance (give the radio a fix, or set MAP_LAT and MAP_LON at install)"
+        legend = f"no position for {this_box()}: rings are by hops, not distance (give the radio a fix, or set MAP_LAT and MAP_LON at install)"
     # whoever is left (no fix, unknown hops, or a route hop we have never heard) sits on the outer ring
     need = [n["id"] for n in nodes if n["id"] not in pos]
     for rt in routes.values():
@@ -2284,7 +2647,7 @@ def map_svg(L, size=640):
     for rt in routes.values():
         for h in (rt.get("towards") or []) + (rt.get("back") or []):
             names.setdefault(h.get("id"), str(h.get("name") or h.get("id") or ""))
-    out = [f"<svg class='map' viewBox='0 0 {size} {size}' role='img' aria-label='The mesh about this box'>"]
+    out = [f"<svg class='map' viewBox='0 0 {size} {size}' role='img' aria-label='The mesh about {this_box()}'>"]
     for r, lbl in rings:
         out.append(f"<circle class='ring' cx='{cx:.1f}' cy='{cy:.1f}' r='{r:.1f}'/><text x='{cx + 4:.1f}' y='{cy - r - 3:.1f}'>{e(lbl)}</text>")
     for n in nodes:
@@ -2312,7 +2675,7 @@ def map_svg(L, size=640):
         out.append(f"<circle class='node{' nopos' if how == 'none' else ''}' data-id='{e(nid)}' data-pos='{e(how)}' cx='{x:.1f}' cy='{y:.1f}' r='9'/>"
                    f"<text class='name' x='{x:.1f}' y='{y + 22:.1f}' text-anchor='middle'>{e(names.get(nid, nid))}</text>")
     out.append(f"<circle class='own' data-own='{e(str(own.get('id') or ''))}' cx='{cx:.1f}' cy='{cy:.1f}' r='10'/>"
-               f"<text class='name' x='{cx:.1f}' y='{cy + 24:.1f}' text-anchor='middle'>{e(str(own.get('name') or 'this box'))}</text>")
+               f"<text class='name' x='{cx:.1f}' y='{cy + 24:.1f}' text-anchor='middle'>{e(str(own.get('name') or f'{this_box()}'))}</text>")
     out.append(f"<text x='12' y='{size - 12}'>{e(legend)}</text></svg>")
     return "".join(out)
 
@@ -2451,16 +2814,18 @@ ASK_MORE = {"traceroute": "Asks for the hops out and back; a minute is normal", 
             "request_telemetry": "Asks for battery, voltage and uptime now", "request_nodeinfo": "Brings back a name changed over the air"}
 
 
-def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots=None):
+def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20):
     nid = str(n.get("id") or "")
     name = dname(n)
     own_name = str(n.get("name") or "") if n.get("label") and n.get("name") else ""
     has_fix = n.get("lat") is not None and n.get("lon") is not None
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if has_fix else "no fix")
     sub = " · ".join(x for x in (own_name, str(n.get("hw") or ""), pos) if x)
-    if n.get("remote"):  # Spec 052: a node from a peer's picture
-        sub = f"via {n.get('origin_name') or str(n.get('origin') or '')[:12]}" + (" · " + sub if sub else "")
-    heard = n.get("heard") or n.get("last_heard_db")
+    reached_mqtt = bool(n.get("via_mqtt")) and n.get("heard_here") is False
+    if n.get("remote"):  # Spec 052: a node from a peer's picture; Spec 113: and how that site reached it
+        site_ = n.get('origin_name') or str(n.get('origin') or '')[:12]
+        sub = (f"via MQTT, through {site_}" if reached_mqtt else f"via {site_}") + (" · " + sub if sub else "")
+    heard = latest_contact(n) or n.get("last_heard_db")
     quiet = False
     try:
         quiet = bool(heard) and not db and (time.time() - _utc_secs(heard)) > int(silent_min) * 60
@@ -2484,7 +2849,7 @@ def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots
         batt_html = f"<span class='ok'>on charge</span>{under}"
     elif batt is None:
         batt_html = "<span class='sub'>no reading</span>"
-    elif float(batt) < 20:
+    elif float(batt) < int(battery_pct):
         low = True
         batt_html = f"<span class='batt batt--low'>{int(batt)}%</span>{under}"
     else:
@@ -2503,7 +2868,7 @@ def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots
     glyph = f"<span class='nodeicon' data-tip='{e(str(n.get('icon') or 'radio'))}{(' · ' + e(str(n.get('group')))) if n.get('group') else ''}'>{NODE_ICON_SVG.get(str(n.get('icon') or 'radio'), NODE_ICON_SVG['radio'])}</span>"
     gtags = " ".join([f"<span class='pill'>{e(str(n.get('group')))}</span>"] if n.get("group") else []) + "".join(f" <span class='pill' style='opacity:.8'>{e(str(t))}</span>" for t in (n.get("tags") or [])[:4])
     return (f"<tr data-id='{e(nid)}' class='{'db' if db else ''}' {attrs}><td>{glyph}<b><a href='/node?id={e(nid)}' class='plain' data-tip='This node over time' data-tip-more='Battery, voltage, hours heard and messages'>{e(name)}</a></b>{(' ' + gtags) if gtags else ''}<div class='sub'>{e(nid)}{('<span class=hide-narrow> · ' + e(sub) + '</span>') if sub else ''}</div></td>"
-            f"<td>{sig(n.get('snr'), n.get('hops'), n.get('via_mqtt'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
+            f"<td>{sig(None, None, True) if reached_mqtt else sig(n.get('snr'), n.get('hops'), n.get('via_mqtt'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
             f"<td><div class='row-actions'>{asks}"
             + ("" if db else node_name_fold(n))
             + f"</div><div class='res meta' role='status'></div>"
@@ -2514,12 +2879,12 @@ def node_name_fold(n):
     """The row's own control for what the box knows about the device: a name, a group, tags and a map
     icon (Spec 044), kept on the box, never written to the radio."""
     nid = str(n.get("id") or "")
-    return (f"<details class='fold ctl icon'><summary data-tip='Name, group and icon' data-tip-more='Kept on the box, not the radio' aria-label='Name, group and icon'>{ICONS['name']}<span class='lbl'>Name</span></summary><form data-action='register_set' class='regform' data-refresh='' style='grid-template-columns:1fr 1fr'><input type='hidden' name='id' value='{e(nid)}'>"
+    return (f"<details class='fold ctl icon'><summary data-tip='Name, group and icon' data-tip-more='Kept on {the_box()}, not the radio' aria-label='Name, group and icon'>{ICONS['name']}<span class='lbl'>Name</span></summary><form data-action='register_set' class='regform' data-refresh='' style='grid-template-columns:1fr 1fr'><input type='hidden' name='id' value='{e(nid)}'>"
             f"<input type='text' name='label' value='{e(str(n.get('label') or ''))}' maxlength='80' placeholder='display name' aria-label='display name'>"
             f"<input type='text' name='group' value='{e(str(n.get('group') or ''))}' maxlength='40' placeholder='group (e.g. Recce)' aria-label='group' list='groups'>"
             f"<input type='text' name='tags' value='{e(', '.join(n.get('tags') or []))}' maxlength='300' placeholder='tags, comma separated' aria-label='tags' style='grid-column:1/-1'>"
             f"<div style='grid-column:1/-1'><span class='meta'>Map icon</span>{icon_picker('icon', str(n.get('icon_own') or ''), inherit=True)}</div>"
-            "<button type='submit' class='line'>Save</button><span class='meta' style='align-self:center'>kept on the box, not the radio</span><div class='res meta' role='status'></div></form></details>")
+            f"<button type='submit' class='line'>Save</button><span class='meta' style='align-self:center'>kept on {the_box()}, not the radio</span><div class='res meta' role='status'></div></form></details>")
 
 
 NODES_JS = r"""<script>
@@ -2581,32 +2946,52 @@ NODES_JS = r"""<script>
 </script>"""
 
 
-def nodes_tables(nodes, routes=None, silent_min=30, availability=None, reboots=None):
-    heard = [n for n in nodes if n.get("heard_here", True)]
-    db = [n for n in nodes if not n.get("heard_here", True)]
-    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability, reboots=reboots) for n in heard) or "<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into this box and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
-    db_rows = "".join(node_row(n, db=True, silent_min=silent_min) for n in db)
+def reached(n):
+    """Spec 113: heard on this or a site's air, or reached over MQTT with a time to show for it."""
+    return bool(n.get("heard_here", True)) or (bool(n.get("via_mqtt")) and bool(n.get("mqtt_at")))
+
+
+def latest_contact(n):
+    """The later of heard on the air and the last packet over MQTT, as the text it came in."""
+    best, when, limit = 0.0, None, time.time() + 300
+    for k in ("heard", "mqtt_at"):
+        v = n.get(k)
+        if v:
+            try:
+                t = _utc_secs(v)
+            except (TypeError, ValueError):
+                continue
+            if best < t <= limit:   # never a time from the future (review of 1.5.0)
+                best, when = t, v
+    return when
+
+
+def nodes_tables(nodes, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20):
+    heard = [n for n in nodes if reached(n)]
+    db = [n for n in nodes if not reached(n)]
+    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct) for n in heard) or f"<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into {this_box()} and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
+    db_rows = "".join(node_row(n, db=True, silent_min=silent_min, battery_pct=battery_pct) for n in db)
     return rows, db_rows, len(heard), len(db)
 
 
-def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None, reboots=None):
-    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability, reboots=reboots)
-    live = [n for n in nodes if n.get("heard_here", True)]
+def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None, reboots=None, battery_pct=20):
+    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct)
+    live = [n for n in nodes if reached(n)]
     head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Last heard</th><th>Ask</th></tr></thead>"
-    lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here since the bridge started, "
+    lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here or over MQTT since the bridge started, "
             f"<span id='nodes-db-count'>{db}</span> more in the radio's database. Joined on radio id; names are labels, never identity.</p>") if intro else ""
     def cnt(k):
         if k == "quiet":
-            return sum(1 for n in live if n.get("heard") and (time.time() - _utc_secs(n["heard"])) > int(silent_min) * 60)
+            return sum(1 for n in live if latest_contact(n) and (time.time() - _utc_secs(latest_contact(n))) > int(silent_min) * 60)
         if k == "low":
-            return sum(1 for n in live if n.get("battery") is not None and not n.get("charging") and float(n["battery"]) < 20)
+            return sum(1 for n in live if n.get("battery") is not None and not n.get("charging") and float(n["battery"]) < int(battery_pct))
         return sum(1 for n in live if n.get("lat") is None or n.get("lon") is None)
     gsel = ""
     if groups:
         gsel = "<label class='meta'>Group <select id='group-filter'><option value=''>every group</option>" + "".join(f"<option value='{e(g)}'>{e(g)}</option>" for g in groups) + "</select></label>"
     filters = ("<div class='filters' id='node-filters'><input type='search' id='nf-q' placeholder='Find a node' aria-label='Find a node by name, id or hardware'>"
                f"<button type='button' class='chip' data-nf='quiet' aria-pressed='false' data-tip='Only the quiet ones' data-tip-more='Nothing heard for longer than the silent threshold on Health'>quiet <b>{cnt('quiet')}</b></button>"
-               f"<button type='button' class='chip' data-nf='low' aria-pressed='false' data-tip='Only low batteries' data-tip-more='Under 20 per cent'>battery low <b>{cnt('low')}</b></button>"
+               f"<button type='button' class='chip' data-nf='low' aria-pressed='false' data-tip='Only low batteries' data-tip-more='Under {int(battery_pct)} per cent, the battery threshold on Health'>battery low <b>{cnt('low')}</b></button>"
                f"<button type='button' class='chip' data-nf='nofix' aria-pressed='false' data-tip='Only nodes without a fix'>no fix <b>{cnt('nofix')}</b></button>"
                f"{gsel}<label class='meta'>Show <select id='nf-sort'><option value=''>as heard</option><option value='quiet'>quiet first</option><option value='low'>low battery first</option></select></label></div>")
     fold = (f"<details class='fold'><summary><span id='nodes-db-count'>{db}</span>&nbsp;in the radio's database only, not heard since this bridge started <span class='pill'>database only</span></summary>"
@@ -2781,6 +3166,11 @@ WRITE_JS = r"""<script>
 </script>"""
 
 
+# Reads whose argument carries a secret (an invite's code, a channel code's key): the screen sends them in the
+# body of a POST, so the secret is never in a URL, a proxy's log or the browser's history (Specs 111 and 112).
+BODY_READS = frozenset(("site_invite_read", "channel_decode"))
+
+
 def _act(aid):
     return C.by_id(aid) or {"confirm": "", "risk": "read", "description": "", "inputs": [], "title": aid}
 
@@ -2868,6 +3258,76 @@ def channels_body(ch, own_id="?", st=None, rotation=None):
             f"<p class='meta'>Every write is shown only once the radio has answered with it.</p>"
             + (rot_block if rot_open else "") + qr
             + f"<div class='cards' style='margin-top:1rem'>{create}{adopt}</div>" + ("" if rot_open else rot_block) + f"{ROTATION_JS}{FLEET_PUSH_JS}{WRITE_JS}")
+
+
+# ---- Spec 112: Add a device ----------------------------------------------------------------------------------
+ONBOARD_STEPS = (("exported", "Its settings saved, before anything is written"), ("names", "Names"), ("role", "Role: tracker"),
+                 ("channel", "This mesh's channel and key"), ("lora", "Region and preset"), ("admin_key", "This radio's admin key"),
+                 ("group", "The register: label, holder and group"))
+
+
+def add_device_body(kind, bench, groups, st, own_id="?"):
+    """Spec 112: one place to put a device on this mesh. A tracker by USB, a phone by the channel code, or a code
+    somebody gave you. A hub has no radio, so none of the three is offered there."""
+    if kind == "Hub":
+        return ("<p>Adding a device needs a radio next to it, at a laptop or box. This hub has none: add the device at a site "
+                "that has a radio, and it shows here through that site.</p>")
+    st = st or {}
+    devs = [d for d in (bench or {}).get("devices") or [] if not d.get("bootloader") and d.get("kind") != "gps"]
+    opts = "".join(f"<option value='{e(str(d.get('path')))}'>{e(bench_name(str(d.get('path') or '')))} · {e(os.path.basename(str(d.get('path') or '')))}</option>" for d in devs)
+    names = sorted({str(g.get("name")) for g in (groups or {}).get("groups") or [] if g.get("name")})
+    gsel = ("<select name='group'><option value=''>No group</option>"
+            + "".join(f"<option value='{e(n)}'>{e(n)}</option>" for n in names) + "</select>")
+    onb = _act("bench_onboard")
+    usb = (f"<form class='card' data-action='bench_onboard' data-risk='change' data-confirm=\"{e(onb.get('confirm') or '')}\" id='add-usb'>"
+           "<h2 style='margin-top:0'>A tracker, by USB <span class='pill'>Recommended</span></h2>"
+           "<p class='meta'>Name it first, then plug it in and press Start. Each step shows as the tracker itself confirms it.</p>"
+           "<label>Name (39 bytes at most)<input type='text' name='long_name' maxlength='39' required autocomplete='off'></label>"
+           "<label>Short name (4 at most)<input type='text' name='short_name' maxlength='4' required autocomplete='off'></label>"
+           f"<label>Group{gsel}</label>"
+           f"<label>Label (kept on {the_box()})<input type='text' name='label' maxlength='80'></label>"
+           "<label>Who holds it<input type='text' name='holder' maxlength='80'></label>"
+           "<input type='hidden' name='role' value='TRACKER'>"
+           + (f"<label>The tracker on the cable<select name='path' required>{opts}</select></label>" if opts else
+              "<p class='meta' data-no-device>No tracker on a cable yet: plug one in, then read this page again.</p>")
+           + "<ol class='steps' id='onboard-steps'>" + "".join(f"<li data-step='{k}'>{e(w)}</li>" for k, w in ONBOARD_STEPS) + "</ol>"
+           f"<button type='submit'{'' if opts else ' disabled'}>Start</button><div class='res meta' role='status'></div></form>")
+    primary = str(st.get("primary_channel") or "the primary channel")
+    phone = ("<div class='card' id='add-phone'><h2 style='margin-top:0'>A phone</h2>"
+             "<p><b>Channel code</b> <span class='pill warn'>contains the key</span></p>"
+             "<p class='meta'>It contains the channel key. Anyone who scans it can read and send on this mesh. Show it only to a phone you mean to join, "
+             "and scan it in the Meshtastic app.</p>"
+             f"<button type='button' data-qr-open data-qr-index='0' data-qr-name='{e(primary)}'>Show the channel code</button>"
+             f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Channel code' hidden><img src='/channels/qr.png' alt='Channel code for {e(primary)}' width='320' height='320'>"
+             f"<div><b data-qr-name>{e(primary)}</b> · {e(str(st.get('region') or '?'))} · {e(str(st.get('modem_preset') or '?'))}</div>"
+             "<span class='meta' data-qr-count></span>" + icon_button("close", "Close the channel code", "Close the channel code", cls="line icon close", attrs="data-qr-close")
+             + "</div></div>")
+    ado = _act("channel_adopt")
+    given = (f"<form class='card' data-action='channel_adopt' data-risk='change' data-confirm=\"{e(ado['confirm'])}\" id='add-code'>"
+             "<h2 style='margin-top:0'>A code you were given</h2><p class='meta'>Paste the channel code another unit gave you, then read it. "
+             "It is read here first; the key in it is never shown.</p>"
+             "<label>Code<input type='text' name='url' required autocomplete='off' spellcheck='false'></label>"
+             "<button type='button' class='line' data-code-read>Read it</button><div class='meta' data-code-out style='margin:.4rem 0'></div>"
+             f"<p class='warn' data-code-differs data-primary='{e(primary)}' hidden></p>"
+             "<div><span class='meta'>Put it</span><br>" + seg("mode", (("add", "Beside this radio's channels"), ("replace", "Replace them, and the region")), "add", danger=("replace",)) + "</div>"
+             f"<label class='check' hidden><input type='checkbox' name='confirm_tick'><span>I understand replacing moves this radio to the code's channels, region and preset; devices on the old ones will not hear it. This radio is {e(own_id)}.</span></label>"
+             "<button type='submit' disabled>Add it</button><div class='res meta' role='status'></div></form>")
+    js = ("<script>(function(){"
+          "var f=document.getElementById('add-usb');"
+          "if(f){var ln=f.elements.long_name,sn=f.elements.short_name,touched=false;sn.addEventListener('input',function(){touched=true;});"
+          "ln.addEventListener('input',function(){if(touched)return;var w=ln.value.trim().split(/\\s+/).filter(Boolean);var s=w.length>1?(w[0].charAt(0)+w[w.length-1]).slice(0,4):ln.value.replace(/\\s/g,'').slice(0,4);sn.value=s.toUpperCase();});}"
+          "var prev=window.onMesh;window.onMesh=function(d){if(prev){prev(d);}if(d.kind==='onboard'){var li=document.querySelector('#onboard-steps [data-step=\"'+d.step+'\"]');"
+          "if(li){li.className=d.confirmed?'ok':'bad';li.setAttribute('data-done',d.confirmed?'read back':'did not read back');}}};"
+          "var g=document.getElementById('add-code');if(g){var out=g.querySelector('[data-code-out]'),warn=g.querySelector('[data-code-differs]'),go=g.querySelector('button[type=submit]');"
+          "g.elements.url.addEventListener('input',function(){go.disabled=true;out.textContent='';warn.hidden=true;});"
+          "g.querySelector('[data-code-read]').addEventListener('click',function(){"
+          "fetch('/api/channel_decode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:g.elements.url.value.trim()})})"
+          ".then(function(r){return r.json();}).then(function(j){if(j.error){out.textContent='cannot read it: '+j.error;out.className='meta bad';go.disabled=true;return;}"
+          "out.textContent=j.channels.map(function(n,i){return (n||'(unnamed)')+' ('+((j.roles||[])[i]||'').toLowerCase()+')';}).join(', ')+' · region '+(j.region||'not set')+' · preset '+(j.modem_preset||'not set');out.className='meta ok';"
+          "var dif=j.differs||[];if(dif.length){warn.textContent='Different from '+warn.dataset.primary+' ('+dif.join(', ')+'). A radio on it will not hear this mesh.';warn.hidden=false;}else{warn.hidden=true;}"
+          "go.disabled=false;}).catch(function(){out.textContent=window.mmNoAnswer;out.className='meta bad';});});}"
+          "})();</script>")
+    return f"<div class='cards'>{usb}{phone}{given}</div>{js}"
 
 
 def manage_forms(r):
@@ -2989,7 +3449,7 @@ def register_rows(reg, availability=None, inv=None):
         rows += (f"<tr data-id='{e(nid)}'><td><b>{e(dname(r))}</b><div class='sub'>{e(nid)}{(' · ' + e(str(r.get('name') or ''))) if r.get('label') and r.get('name') else ''}</div><a class='sub' href='/node?id={e(nid)}'>open</a></td><td>{form}</td>"
                  f"<td class='hide-narrow'>{e(str(r.get('hw') or ''))}<div class='sub'>{e(str(r.get('role') or ''))}</div></td>{_fwcell(r, inv.get(nid))}{_keycell(nid, inv.get(nid))}"
                  f"<td>{managed}</td><td>{heard_html}</td>{_avcell(availability.get(str(r.get('id') or ''))).replace('<td ', '<td class=hide-narrow ', 1)}</tr>")
-    return rows or "<tr><td colspan=8 class='meta'>No device yet. Plug one into the box by USB, then onboard it on the <a href='/bench'>Bench</a> page; it appears here.</td></tr>"
+    return rows or f"<tr><td colspan=8 class='meta'>No device yet. Plug one into {the_box()} by USB, then onboard it on the <a href='/bench'>Bench</a> page; it appears here.</td></tr>"
 
 
 def profile_files(prof=None):
@@ -3000,7 +3460,7 @@ def profile_files(prof=None):
     key, the admin keys and the channel URL. This carries none of them and cannot restore a device."""
     pe, pi = _act("profile_export"), _act("profile_import")
     return (f"<details class='fold' data-keep='profile-files' style='max-width:760px'><summary>Carry this profile between boxes</summary>"
-            "<p class='meta'>The five fields above, written the way <code>meshtastic --export-config</code> writes them, "
+            "<p class='meta'>The five fields above, written the way the Meshtastic command line exports a configuration, "
             "so the CLI can apply them and another box can read them. "
             "<b>It is a fleet profile, not a device backup:</b> how a radio should behave, never who it is. "
             "No owner, no location, no keys and no channel URL, so it is safe to send to somebody. "
@@ -3036,7 +3496,7 @@ def groups_section(gs):
               "<label>Name<input type='text' name='name' maxlength='40' required placeholder='e.g. Recce'></label><span class='meta'>Map icon</span>" + icon_picker("icon", "radio", inherit=False)
               + "<span class='meta'>Map colour</span>" + colour_picker("colour", "")
               + "<button type='submit' class='line'>Create the group</button><div class='res meta' role='status'></div></form>")
-    return (f"<details class='fold' data-keep='groups'><summary>Groups</summary><p class='meta'>A group is a word you give devices (a section, a vehicle, the routers). Its icon is what its devices carry on the map unless one has its own; the map, the lists, the alerts and the exports filter by group. Kept on the box; nothing is written to any radio.</p>"
+    return (f"<details class='fold' data-keep='groups'><summary>Groups</summary><p class='meta'>A group is a word you give devices (a section, a vehicle, the routers). Its icon is what its devices carry on the map unless one has its own; the map, the lists, the alerts and the exports filter by group. Kept on {the_box()}; nothing is written to any radio.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Group</th><th>Devices</th><th>Icon and colour</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>No group yet. Give a device a group on the Nodes page, or create one below.</td></tr>'}</tbody></table></div>{create}</details>")
 
 
@@ -3113,7 +3573,7 @@ def drift_section(d):
 def stale_form():
     a = _act("nodes_forget_stale")
     return (f"<details class='fold ctl' style='margin-top:var(--s3)'><summary>Forget the stale</summary><form data-action='nodes_forget_stale' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" data-refresh='register:register-rows'>"
-            "<p class='meta'>Every node the radio has not heard for a number of days leaves its database and the box's lists: dead radios, old ids, duplicates. Nothing is sent; a node comes back if it is heard again, and labels and holders are kept.</p>"
+            f"<p class='meta'>Every node the radio has not heard for a number of days leaves its database and {the_box()}'s lists: dead radios, old ids, duplicates. Nothing is sent; a node comes back if it is heard again, and labels and holders are kept.</p>"
             "<label>not heard for <input type='number' name='days' value='7' min='1' max='365' style='width:5em'> days</label> <button class='line'>Forget them</button><div class='res meta' role='status'></div></form></details>")
 
 
@@ -3125,7 +3585,7 @@ def shelf_card(sh):
         rows += (f"<tr><td><b>{e(str(i.get('version') or ''))}</b> {'<span class=pill>recommended</span>' if i.get('recommended') else ''}<div class='sub'>{e(', '.join(i.get('hw') or []))} · {e(str(i.get('method') or ''))}</div></td>"
                  f"<td><span class='{cls}'>{e(st)}</span><div class='sub'>{e(str(i.get('file') or ''))}</div>{('<div class=sub>put it at ' + e(str(i.get('path') or '')) + '</div>') if st != 'verified' else ''}</td>"
                  f"<td class='meta'>{e(str(i.get('note') or ''))}</td></tr>")
-    return (f"<div class='card' style='grid-column:1/-1'><div class='k'>Shelf</div><div class='v'>Firmware pinned for the fleet</div><p class='meta'>Images live on the box under {e(str(sh.get('dir') or ''))}, put there by the installer or by you; the bridge flashes only a file whose sha256 matches its pin.</p>"
+    return (f"<div class='card' style='grid-column:1/-1'><div class='k'>Shelf</div><div class='v'>Firmware pinned for the fleet</div><p class='meta'>Images live on {the_box()} under {e(str(sh.get('dir') or ''))}, put there by the installer or by you; the bridge flashes only a file whose sha256 matches its pin.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Image</th><th>On {this_box()}</th><th>Note</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No firmware pinned in this release.</td></tr>'}</tbody></table></div></div>")
 
 
@@ -3171,7 +3631,7 @@ def bench_cards(d, shelf=None):
             cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='bad'>In bootloader mode: it answers nothing.</p>{recovery_steps(path, shelf)}</div>"
             continue
         if dev.get("kind") == "gps":
-            cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='meta'>The box's own GPS receiver on the same USB bus: not a radio, so nothing here opens it.</p></div>"
+            cards += f"<div class='card' data-path='{e(path)}'>{head}<p class='meta'>{the_box(True)}'s own GPS receiver on the same USB bus: not a radio, so nothing here opens it.</p></div>"
             continue
         cards += (f"<div class='card' data-path='{e(path)}'>{head}"
                   "<div class='row-actions' style='margin:.5rem 0'>"
@@ -3182,13 +3642,13 @@ def bench_cards(d, shelf=None):
                   "<label>Long name (39 bytes at most)<input type='text' name='long_name' maxlength='39' required></label>"
                   "<label>Short name (4 bytes at most)<input type='text' name='short_name' maxlength='4' required></label>"
                   f"<label>Role<select name='role' data-hints='{hints}' data-tip='What this device does'>" + "".join(f"<option value='{e(str(rv))}'{' selected' if rv == 'TRACKER' else ''}>{e(str(rv))}</option>" for rv in roles) + "</select></label><div class='meta role-hint' style='margin:-6px 0 var(--s2)'>" + e(ROLE_HINTS.get("TRACKER", "")) + "</div>"
-                  "<label>Label (kept on the box)<input type='text' name='label' maxlength='80' placeholder='e.g. Recce lead'></label>"
+                  f"<label>Label (kept on {the_box()})<input type='text' name='label' maxlength='80' placeholder='e.g. Recce lead'></label>"
                   "<label>Who holds it<input type='text' name='holder' maxlength='80'></label>"
                   "<button type='submit'>Onboard it</button><div class='res meta' role='status'></div></form></details>"
                   f"<details class='fold ctl' style='margin-top:var(--s2)'><summary>More for this device</summary>"
-                  f"<form data-action='bench_export' data-method='get' style='margin-top:var(--s2)'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line' data-tip='Export' data-tip-more='Saves its settings and keys on the box, readable only by root'>{ICONS['export']} Export its configuration</button></form>"
+                  f"<form data-action='bench_export' data-method='get' style='margin-top:var(--s2)'><input type='hidden' name='path' value='{e(path)}'><button type='submit' class='line' data-tip='Export' data-tip-more='Saves its settings and keys on {the_box()}, readable only by root'>{ICONS['export']} Export its configuration</button></form>"
                   + restore_flash_forms(path, shelf) + "</details></div>")
-    return cards or "<p class='meta'>No device on the bench: plug one into the box by USB. This box's own radio is never listed here.</p>"
+    return cards or f"<p class='meta'>No device on the bench: plug one into {the_box()} by USB. {this_box(True)}'s own radio is never listed here.</p>"
 
 
 def restore_flash_forms(path, shelf):
@@ -3199,12 +3659,12 @@ def restore_flash_forms(path, shelf):
     gate = "<div class='meta' data-read-first>Read the device first.</div>"
     restore = (f"<details class='fold ctl' style='margin-top:var(--s2)'><summary data-tip='Restore' data-tip-more='Put a saved configuration back'>{ICONS['restore']}Restore</summary><form data-action='bench_restore' data-risk='unreachable' data-confirm=\"{e(res.get('confirm') or '')}\">"
                f"<input type='hidden' name='path' value='{e(path)}'>"
-               "<label>Export on the box<select name='export' data-exports><option value=''>Read the device first, then pick one of its exports</option></select></label>"
+               f"<label>Export on {the_box()}<select name='export' data-exports><option value=''>Read the device first, then pick one of its exports</option></select></label>"
                "<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand the device's names, channels and settings are replaced by the export's; its own keys stay. Ticked, this also allows an export made from a different device (a clone).</span></label>"
                f"<button type='submit' data-needs-read disabled>Restore it</button>{gate}<div class='res meta' role='status'></div></form></details>")
     flash = (f"<details class='fold ctl bad' style='margin-top:var(--s2)'><summary data-tip='Flash' data-tip-more='Writes new firmware; the device is off the mesh while it does'>{ICONS['flash']}Flash</summary><form data-action='bench_flash' data-risk='unreachable' data-flash='1' data-confirm=\"{e(fl.get('confirm') or '')}\" style='border-left:4px solid var(--bad);padding-left:var(--s2)'>"
              f"<input type='hidden' name='path' value='{e(path)}'>"
-             f"<label>Firmware from the shelf<select name='image' data-pins data-tip='Firmware from the shelf' data-tip-more='Only images this release pins and this box has verified, for this hardware'>{opts or NO_IMAGE_OPT}</select></label>"
+             f"<label>Firmware from the shelf<select name='image' data-pins data-tip='Firmware from the shelf' data-tip-more='Only images this release pins and {this_box()} has verified, for this hardware'>{opts or NO_IMAGE_OPT}</select></label>"
              "<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand: the configuration is exported first, then the device is flashed and reboots; a factory image loses every setting; a flash that does not come back needs the recovery step. This device is the one named on Read.</span></label>"
              f"<button type='submit' class='danger' data-needs-read disabled>Flash it</button>{gate}<div class='res meta' role='status'></div><div class='stages meta'></div></form></details>")
     return restore + flash
@@ -3228,7 +3688,7 @@ def bench_body(d, shelf=None):
   document.addEventListener('change',function(ev){var sel=ev.target.closest('select[name=role][data-hints]');if(!sel)return;var h=sel.closest('form').querySelector('.role-hint');if(!h)return;try{h.textContent=(JSON.parse(sel.dataset.hints)||{})[sel.value]||'';}catch(e){}});
 })();
 </script>"""
-    return (f"<p class='meta'>Radios plugged into this box by USB. This box's own radio ({e(bench_name(d.get('gateway') or '') or 'none')}) is set on the Radio page and never opened here. "
+    return (f"<p class='meta'>Radios plugged into {this_box()} by USB. {this_box(True)}'s own radio ({e(bench_name(d.get('gateway') or '') or 'none')}) is set on the Radio page and never opened here. "
             "Read first, then Onboard; Export, Restore and Flash are under More. Every write is shown only once the device has answered with it.</p>"
             f"<div class='cards' id='bench-cards'>{bench_cards(d, shelf)}</div><div class='cards' style='margin-top:1rem'>{shelf_card(shelf or {})}</div>{js}{WRITE_JS}")
 
@@ -3330,7 +3790,7 @@ def update_box(web):
     mode = web.update_mode()
     tok = bool(web.github_token())
     if not rec:
-        last = "never checked" if tok else "never checked: add a GitHub token on Settings when the box has internet"
+        last = "never checked" if tok else f"never checked: add a GitHub token on Settings when {the_box()} has internet"
     elif rec.get("error"):
         last = f"checked {hhmm(rec.get('checked'))}: {rec['error']}"
     elif U.is_available(rec):
@@ -3345,7 +3805,7 @@ def update_box(web):
     logbox = f"<details class='fold ctl'><summary>The last update's log</summary><pre class='log' style='max-height:40vh'>{e(chr(10).join(log))}</pre></details>" if log else ""
     return (f"<div class='card' id='update-box'><div class='k'>Updates from GitHub · {e(mode)}</div><div class='v'>{last}</div>"
             f"<p class='meta'>Running {e(__version__)}. {e(str(rec.get('repo') or web.config.get('UPDATE_REPO') or U.DEFAULT_REPO))}, channel {e(str(rec.get('channel') or web.config.get('UPDATE_CHANNEL') or 'prerelease'))}. "
-            "Update now fetches the release, checks its hash, then the box installs it with the settings it already has; the bridge and this screen restart, so the mesh is off TAK for about a minute.</p>"
+            f"Update now fetches the release, checks its hash, then {the_box()} installs it with the settings it already has; the bridge and this screen restart, so the mesh is off TAK for about a minute.</p>"
             f"<div class='row-actions'><button type='button' class='line' data-update-check>Check now</button>{apply_btn}</div><div class='res meta' id='update-res' role='status'></div>{notes}{logbox}</div>")
 
 
@@ -3372,7 +3832,7 @@ def series_chart(pts, key, unit="", lo=None, hi=None, guides=(), label=""):
     """A line over time from history rows (ts, key), drawn server-side; guides are (value, class) lines."""
     pts = [p for p in (pts or []) if p.get(key) is not None]
     if len(pts) < 2:
-        return f"<p class='meta'>Not enough readings yet for a chart of {e(label or key)}; the box records each one it hears.</p>"
+        return f"<p class='meta'>Not enough readings yet for a chart of {e(label or key)}; {the_box()} records each one it hears.</p>"
     vals = [float(p[key]) for p in pts]
     lo = min(vals) if lo is None else lo
     hi = max(vals) if hi is None else hi
@@ -3447,7 +3907,7 @@ def manage_section(n):
     if not nid:
         return ""
     if not n.get("managed"):
-        return ("<h2 id='manage'>Manage</h2><p class='meta'>This device is not managed by this box, so nothing "
+        return (f"<h2 id='manage'>Manage</h2><p class='meta'>This device is not managed by {this_box()}, so nothing "
                 "here can be written to it over the air. Bring it to the <a href='/bench'>Bench</a> to manage it.</p>")
     fg = _act("node_forget")
     forget = ("<details class='fold ctl' style='margin-top:var(--s4)'><summary>Forget this device</summary>"
@@ -3560,7 +4020,7 @@ def health_cards(h):
              + card("Nodes heard", f"{h.get('nodes_heard', 0)}<div class='meta'>last {h.get('hours')} h, from the history</div>"))
     rows = ""
     for d in h.get("nodes") or []:
-        rows += (f"<tr><td><b>{e(d.get('name') or d.get('id'))}</b>{' <span class=pill>this radio</span>' if d.get('own') else ''}<div class='sub'>{e(d.get('id') or '')}</div></td>"
+        rows += (f"<tr><td><b>{'This radio' if d.get('own') else e(d.get('name') or d.get('id'))}</b><div class='sub'>{e(d.get('id') or '')}</div></td>"
                  f"<td>{d.get('packets', 0)}</td><td>{d.get('per_hour', 0)}</td>"
                  f"<td>{('%.1f%%' % float(d['chutil'])) if d.get('chutil') is not None else '<span class=sub>none</span>'}</td>"
                  f"<td>{('%.2f%%' % float(d['airutil'])) if d.get('airutil') is not None else '<span class=sub>none</span>'}</td>"
@@ -3583,7 +4043,7 @@ def rotation_section(rs):
             f"<p class='meta'>{e(m['description'])}</p><label>Slot <input type='number' name='index' value='0' min='0' max='7' style='width:5em'></label> <label>Note <input type='text' name='note' maxlength='120' placeholder='e.g. rotated in the app'></label> <button class='line'>Mark it</button><div class='res meta' role='status'></div></form></details>")
     rot = rs.get("rotation")
     if not rot:
-        return f"<h2 id='rotation'>Since the key rotation</h2><p class='meta'>No rotation marked on this box. A rotation from this screen marks itself; one done elsewhere is marked below, and the checklist then counts every device back on the new key.</p>{form}"
+        return f"<h2 id='rotation'>Since the key rotation</h2><p class='meta'>No rotation marked on {this_box()}. A rotation from this screen marks itself; one done elsewhere is marked below, and the checklist then counts every device back on the new key.</p>{form}"
     c = rs.get("counts") or {}
     # Spec 094: two kinds, and the difference is what counts a device back. A rotation changed the
     # key under the whole mesh, so hearing a device at all proves it took it. A new channel proves
@@ -3635,7 +4095,7 @@ def beacon_section(bc):
             "<div></div><div></div></div>"
             "<button class='line' style='margin-top:var(--s2)'>Save the beacon</button><div class='res meta' role='status'></div></form>")
     return (f"<details class='fold' data-keep='beacon'><summary>Beacon: {e(state)}</summary>"
-            "<p class='meta'>A message the box sends on its own, on a timer, so that a quiet mesh and a dead one stop looking the same. "
+            f"<p class='meta'>A message {the_box()} sends on its own, on a timer, so that a quiet mesh and a dead one stop looking the same. "
             "Off by default: every beacon is airtime on the shared channel, and a beacon aimed at a channel is seen by every handset on it. "
             "It never appears in Messages.</p>"
             f"<p class='meta'>Aimed at <b>{e(tgt)}</b>: {e(proves)}.</p>{warn}"
@@ -3671,7 +4131,7 @@ def alerts_section(al, tak_on=True, bc=None):
             f"<div class='regform' style='grid-template-columns:1fr 1fr 1fr'><label>Silent after (minutes)<input type='number' name='silent_min' value='{int(st.get('silent_min', 30))}' min='1' max='1440'></label>"
             f"<label>Battery under (%)<input type='number' name='battery_pct' value='{int(st.get('battery_pct', 20))}' min='1' max='90'></label>"
             f"<label data-tip='Reboots in a day' data-tip-more='A node restarting of its own accord this many times in 24 h raises an alert; 0 is off'>Reboots in a day (0 is off)<input type='number' name='reboots_day' value='{int(st.get('reboots_day', 3))}' min='0' max='50'></label>"
-            f"<label data-tip='Fence around this box' data-tip-more='A radius from the box&#39;s own position; drawn fences live on the map'>Fence around this box (metres, 0 is off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
+            f"<label data-tip='Fence around {this_box()}' data-tip-more='A radius from {the_box()}&#39;s own position; drawn fences live on the map'>Fence around {this_box()} (metres, 0 is off)<input type='number' name='fence_m' value='{int(st.get('fence_m', 0))}' min='0' max='100000'></label>"
             f"<div><span class='meta'>Unknown nodes</span><br>{seg('unknown', onoff, 'on' if st.get('unknown', True) else 'off')}</div>"
             + (f"<div><span class='meta'>To TAK chat</span><br>{seg('to_tak', onoff, 'on' if st.get('to_tak', True) else 'off')}</div>" if tak_on else "<div></div>") +
             "<div></div></div><button class='line' style='margin-top:var(--s2)'>Save the thresholds</button><div class='res meta' role='status'></div></form>")
@@ -3709,11 +4169,11 @@ def history_box(web):
     except Exception:  # noqa: BLE001
         h = None
     if not isinstance(h, dict) or not h.get("ok"):
-        return "<h2>History</h2><p class='meta'>The history store is not available on this box.</p>"
+        return f"<h2>History</h2><p class='meta'>The history store is not available on {this_box()}.</p>"
     t = h.get("tables") or {}
     rows = "".join(f"<tr><td>{e(k)}</td><td>{int(v.get('rows') or 0)}</td><td class='meta'>{e(str(v.get('oldest') or ''))}</td><td class='meta'>{e(str(v.get('newest') or ''))}</td></tr>" for k, v in t.items())
     mb = (h.get("bytes") or 0) / 1048576
-    return (f"<h2>History</h2><p class='meta'>What the box has heard, kept {int(h.get('days') or 30)} days at {e(h.get('path') or '')} ({mb:.1f} MB), so trails, telemetry and messages survive a restart.</p>"
+    return (f"<h2>History</h2><p class='meta'>What {the_box()} has heard, kept {int(h.get('days') or 30)} days at {e(h.get('path') or '')} ({mb:.1f} MB), so trails, telemetry and messages survive a restart.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Table</th><th>Rows</th><th>Oldest</th><th>Newest</th></tr></thead><tbody>{rows}</tbody></table></div>")
 
 
@@ -3788,8 +4248,8 @@ def export_section():
     words = {"positions": "positions", "messages": "messages", "packets": "packets", "telemetry": "battery and voltage", "environment": "temperature, humidity, pressure"}
     kinds = "".join(f"<option value='{k}'>{e(words.get(k, k))}</option>" for k in EXPORT_KINDS)
     return ("<h2 id='export'>Export</h2><p class='meta'>The history as a file, for a report or for Pinecone: positions as GPX, KML or CSV; messages, packets, battery and environment as CSV. "
-            "Only what the box already holds: ids, your labels, times, positions and the text already on the channels.</p>"
-            f"<form class='controls' id='export-form'><label data-tip='What' data-tip-more='Comes from the box&#39;s history, as far back as the window'>What <select id='ex-kind'>{kinds}</select></label>"
+            f"Only what {the_box()} already holds: ids, your labels, times, positions and the text already on the channels.</p>"
+            f"<form class='controls' id='export-form'><label data-tip='What' data-tip-more='Comes from {the_box()}&#39;s history, as far back as the window'>What <select id='ex-kind'>{kinds}</select></label>"
             "<label>Window <select id='ex-hours'><option value='24'>24 h</option><option value='168'>7 d</option><option value='720'>30 d</option></select></label>"
             "<span><span class='meta'>Format</span> " + seg("fmt", (("gpx", "GPX"), ("kml", "KML"), ("csv", "CSV")), "gpx", attrs="id='ex-fmt'") + "</span>"
             "<button type='submit' class='line'>Download</button><span class='res meta' id='ex-res' role='status'></span></form>"
@@ -3894,7 +4354,7 @@ def graph_body(nb, hours):
         f"<g data-node='{e(nid)}'><circle cx='{pos[nid][0]:.0f}' cy='{pos[nid][1]:.0f}' r='{11 if nid == own else 8}' fill='var({'--gold' if nid == own else '--surface-raised'})' stroke='var(--accent)' stroke-width='2'/>"
         f"<text x='{pos[nid][0]:.0f}' y='{pos[nid][1] + 24:.0f}' text-anchor='middle'>{e(names[nid])}</text></g>"
         for nid in ids)
-    return (form + f"<p class='meta'>{len(edges)} edge{'s' if len(edges) != 1 else ''} from {len({x.get('from') for x in edges})} reporting node{'s' if len({x.get('from') for x in edges}) != 1 else ''}. An edge points from the node that reported to the neighbour it heard, weighted by the SNR it heard it at; green is a comfortable link, amber marginal, red about to fail. The gold node is this box.</p>"
+    return (form + f"<p class='meta'>{len(edges)} edge{'s' if len(edges) != 1 else ''} from {len({x.get('from') for x in edges})} reporting node{'s' if len({x.get('from') for x in edges}) != 1 else ''}. An edge points from the node that reported to the neighbour it heard, weighted by the SNR it heard it at; green is a comfortable link, amber marginal, red about to fail. The gold node is {this_box()}.</p>"
             f"<svg class='chart graph' viewBox='0 0 {W_} {H_}' width='{W_}' height='{H_}' role='img' aria-label='the mesh as a graph' style='max-width:100%;height:auto'>{lines}{dots}</svg>")
 
 
@@ -3928,10 +4388,10 @@ def rollback_box(web):
     warn = ("<p class='meta' style='color:var(--warn)'>Updates are on <b>auto</b>, so the checker will apply the newest "
             "release again within the day. Put updates on manual in Settings if a roll back is to stand.</p>") if auto else ""
     return (f"<div class='card' id='rollback-box'><div class='k'>Roll back</div><div class='v'>{len(back)} release"
-            f"{'s' if len(back) != 1 else ''} still on this box</div>"
-            "<p class='meta'>Re-applies a release the box already has, checking its hash first. It returns the "
-            "<b>code</b> and not the box's config, which the installer keeps either way. The bridge and this screen "
-            "restart, so the mesh is off TAK for about a minute. Spec 067: one release is kept behind the "
+            f"{'s' if len(back) != 1 else ''} still on {this_box()}</div>"
+            f"<p class='meta'>Re-applies a release {the_box()} already has, checking its hash first. It returns the "
+            f"<b>code</b> and not {the_box()}'s config, which the installer keeps either way. The bridge and this screen "
+            "restart, so the mesh is off TAK for about a minute. One release is kept behind the "
             "running one, so there is always a way back and nothing else takes up the disk.</p>"
             f"{stuck}{warn}{items}<div class='res meta' id='rollback-res' role='status'></div></div>")
 
@@ -3962,7 +4422,7 @@ def about_body(st, web):
     return (f"{update_box(web)}{rollback_box(web)}{WRITE_JS}{UPDATE_JS}{ROLLBACK_JS}<div class='cards' style='margin-top:1rem'>{card('Mesh Manager', e(__version__))}{card('Bridge', e(str(st.get('version') or 'not answering')))}"
             f"{card('Licence', 'GPL-3.0-or-later')}{card('Heartbeat file', e(st.get('state_dir') or '/var/lib/vantage-mesh') + '/heartbeat.json')}"
             f"{card('Bridge socket', e(st.get('socket') or web.client.socket_path))}{card('Screen bound to', e(web.bind[0]) + ':' + str(web.bind[1]))}"
-            + (card('Reached at', 'https://' + e(str(web.config.get('ROUTE_HOST'))) + ' (the TLS route, Spec 057)') if (web.config or {}).get('ROUTE_HOST') else '') + "</div>"
+            + (card('Reached at', 'https://' + e(str(web.config.get('ROUTE_HOST'))) + ' (the TLS route)') if (web.config or {}).get('ROUTE_HOST') else '') + "</div>"
             f"{history_box(web)}"
             "<h2>Third-party work</h2><p class='meta'>TAK-Meshtastic-Gateway (OpenTAKServer / brian7704) and the Meshtastic Python library and protobufs, GPL-3.0-or-later; "
             "the TAKPacket-SDK dictionaries (Meshtastic), GPL-3.0-or-later. Attributions and licence texts travel in the release under LICENSES/.</p>")
@@ -4027,7 +4487,7 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
     glist = [dict(g, members=[n.get("id") for n in nodes if str(n.get("group") or "") == str(g.get("name"))]) for g in ((groups or {}).get("groups") or [])]
     nmap = {str(n.get("id")): {"name": dname(n), "icon": str(n.get("icon") or "radio"), "group": str(n.get("group") or ""), "db": not n.get("heard_here", True)} for n in nodes if n.get("id")}
     chips = "".join(f"<button type='button' class='line' data-quick='{e(m)}'>{e(m)}</button>" for m in quick)
-    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or "this box", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role"), "has_key": bool(c.get("has_key")), "precise": (c.get("position_precision") in (None, 32))} for c in live],
+    data = json.dumps({"own": own.get("id") or "", "own_name": own.get("name") or f"{this_box()}", "channels": [{"index": int(c.get("index", 0)), "name": c.get("name") or f"slot {c.get('index')}", "role": c.get("role"), "has_key": bool(c.get("has_key")), "precise": (c.get("position_precision") in (None, 32))} for c in live],
                        "groups": [{"name": g.get("name"), "icon": g.get("icon") or "radio", "count": int(g.get("count") or 0), "members": g.get("members") or []} for g in glist],
                        "nodes": nmap, "heard": len(heard), "icons": {k: NODE_ICON_SVG[k] for k in NODE_ICON_SVG}, "users": ICONS["users"], "hash": ICONS["menu"], "lock": ICONS["lock"], "lockopen": ICONS["lockopen"],
                        "dots": ICONS["dots"], "muted": ICONS["bell_off"], "pin": ICONS["pin"]}).replace("&", "&amp;").replace("'", "&#39;")
@@ -4301,7 +4761,7 @@ def mqtt_card(m, cfg=None):
     elif running:
         lamp, word = "bad", "Not connected to the broker"
     else:
-        lamp, word = "warn", "No MQTT proxy on this box"
+        lamp, word = "warn", f"No MQTT proxy on {this_box()}"
     why = str(m.get("error") or m.get("reason") or "")
     counts = ""
     if running:
@@ -4331,11 +4791,11 @@ def mqtt_card(m, cfg=None):
             "<button type='submit'>Write to the radio</button><div class='res meta' role='status'></div></form>")
     return ("<div class='card'><h2 style='margin-top:0'>MQTT</h2>"
             "<p class='meta'>The settings live on the <b>radio</b>, which is why a phone paired to it picks them "
-            "up. This radio has no network of its own, so this box carries its MQTT for it; nothing here needs "
+            f"up. This radio has no network of its own, so {this_box()} carries its MQTT for it; nothing here needs "
             "wifi on the radio. Turning MQTT off writes that to the radio too.</p>"
             + state + form
-            + "<p class='meta'>Joining this box to another Mesh Manager is a different thing and lives on "
-              "<a class='plain' href='/connections'>Connections</a>.</p></div>")
+            + f"<p class='meta'>Joining {this_box()} to another Mesh Manager is a different thing and lives on "
+              "<a class='plain' href='/connections'>Connect</a>.</p></div>")
 
 
 def gateway_card(gw):
@@ -4348,17 +4808,17 @@ def gateway_card(gw):
     cur = str(gw.get("serial") or "")
     cands = [c for c in (gw.get("candidates") or []) if isinstance(c, dict) and c.get("path")]
     if gw.get("watching"):
-        head = ("<p class='meta'>This box has no radio yet, so it is <b>watching for one</b>. "
+        head = (f"<p class='meta'>{this_box(True)} has no radio yet, so it is <b>watching for one</b>. "
                 "Plug the gateway radio into a USB socket and choose it below; nothing else needs doing.</p>")
     elif not gw.get("present"):
-        head = (f"<p class='bad'>The radio this box is set to use is not plugged in.</p>"
+        head = (f"<p class='bad'>The radio {this_box()} is set to use is not plugged in.</p>"
                 f"<p class='meta'>It is set to <code>{e(cur)}</code>. Either plug that one back in, or choose "
-                "one of the radios below and the box will use that instead.</p>")
+                f"one of the radios below and {the_box()} will use that instead.</p>")
     else:
-        head = (f"<p class='meta'>This box is using <code>{e(cur)}</code>. "
+        head = (f"<p class='meta'>{this_box(True)} is using <code>{e(cur)}</code>. "
                 "Choose a different one only if you are changing the radio: the mesh is down while the bridge restarts.</p>")
     if not cands:
-        rows = ("<p class='meta'>No radio is plugged in that this box can see. Plug one into a USB socket and "
+        rows = (f"<p class='meta'>No radio is plugged in that {this_box()} can see. Plug one into a USB socket and "
                 "this list fills in. If it is already plugged in, try a different cable: some carry power and no data.</p>")
     else:
         rows = "<div class='tablewrap'><table><thead><tr><th>Radio</th><th></th></tr></thead><tbody>"
@@ -4385,7 +4845,7 @@ def gateway_card(gw):
             f"<button type='submit' class='line'>{e(ex['title'])}</button>"
             "<div class='out meta' role='status'></div></form>")
     if kept:
-        saved = (f"<p class='meta'>A copy of this radio's configuration and channels was kept on the box "
+        saved = (f"<p class='meta'>A copy of this radio's configuration and channels was kept on {the_box()} "
                  f"<time datetime='{e(str(kept))}' data-age>{e(age(str(kept)))}</time>. Restore it onto a "
                  "replacement on the <a href='/bench'>Bench</a>, then choose that radio here.</p>")
     else:
@@ -4467,7 +4927,7 @@ def proposal_form(pr):
     return (f"<form class='card proposal{' danger' if risk == 'unreachable' else ''}' data-action='{e(pr['action'])}' data-proposal='{e(pr['id'])}' data-risk='{e(risk)}' data-confirm=\"{e(a.get('confirm') or 'Run this now?')}\">"
             f"<div class='k'>{e(pr.get('who') or '')} proposes · <time datetime='{e(str(pr.get('created') or ''))}' data-age>{e(age(pr.get('created') or ''))}</time></div>"
             f"<div class='v'>{e(a.get('title', pr['action']))} <span class='pill'>{e(pr['action'])}</span></div><p>{e(pr.get('rationale') or '')}</p>{fields}"
-            + ("<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand the consequence named above; this radio is {own}.</span></label>".replace("{own}", "the one on this box") if risk == "unreachable" else "")
+            + ("<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand the consequence named above; this radio is {own}.</span></label>".replace("{own}", f"the one on {this_box()}") if risk == "unreachable" else "")
             + f"<div class='row-actions'><button type='submit'>Run as shown</button><button type='button' class='quiet' data-dismiss='{e(pr['id'])}'>Dismiss</button></div><div class='res meta' role='status'></div></form>")
 
 
@@ -4479,7 +4939,7 @@ def activity_body(web):
                          f"<td>{e(str(x.get('action') or x.get('name') or ''))}</td><td class='meta'>{e(audit_detail(x))}</td></tr>"
                          for x in reversed(tail)) or "<tr><td colspan=5 class='meta'>No audit lines yet.</td></tr>"
     return (f"<h2>Proposals waiting for you</h2><p class='meta'>Each is the catalogue's own form, filled in by the agent; change a field before you run it if you like. Running it reads back from the radio like any other write.</p><div class='cards'>{forms}</div>"
-            "<h2>Audit</h2><p class='meta'>Every agent call, proposal, run and dismissal, newest first, under the connection's name.</p>"
+            "<h2>Audit</h2><p class='meta'>Every agent call, proposal, run and dismissal, newest first, under the agent's name.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>When</th><th>Who</th><th>Event</th><th>Action</th><th>Detail</th></tr></thead><tbody>{audit_rows}</tbody></table></div>{WRITE_JS}")
 
 
@@ -4496,43 +4956,135 @@ def sharing_fold(q, hub=False):
         rows += (f"<tr><td><b>{title}</b><div class='meta'>{what}</div></td>"
                  f"<td><form data-action='peer_sharing_set' class='share-form'><input type='hidden' name='site' value='{sid}'><input type='hidden' name='cls' value='{cls}'>"
                  f"<div class='row-actions'><span class='meta'>Out</span>{seg('out', onoff, 'on' if row.get('out') else 'off')}<span class='meta'>In</span>{seg('in', onoff, 'on' if row.get('in', True) else 'off')}{chans}"
-                 + (("<span class='meta' data-tip='Air' data-tip-more='What arrives from this peer is transmitted on this mesh, prefixed with the peer&#39;s name; it costs airtime here'>Air</span>" + seg('air', onoff, 'on' if row.get('air') else 'off')
+                 + (("<span class='meta' data-tip='Air' data-tip-more='What arrives from this site is transmitted on this mesh, prefixed with the site&#39;s name; it costs airtime here'>Air</span>" + seg('air', onoff, 'on' if row.get('air') else 'off')
                      + ("<input type='text' name='air_channel' value='" + e("" if row.get("air_channel") is None else str(row.get("air_channel"))) + "' placeholder='same' size='4' aria-label='air channel' data-tip='Air channel' data-tip-more='The local channel index aired messages go out on; empty keeps the arriving index'>" if cls == "messages" else ""))
                     if (cls in ("messages", "waypoints") and not hub) else ("<span class='meta'>Air: no radio here</span>" if hub and cls in ("messages", "waypoints") else "<span class='meta'>Air: not for this class</span>"))
                  + f"<button class='line'>Save</button></div><div class='res meta' role='status'></div></form></td></tr>")
     aired_words = f" · aired {int(aired.get('count') or 0)} for it" + (f", last {e(age(aired.get('last')))}" if aired.get("last") else "") if not hub else ""
-    return (f"<details class='fold'><summary>Sharing with {e(str(q.get('name') or ''))}{aired_words}</summary><p class='meta'>What leaves this site for that peer (Out), what this site shows from it (In), and what goes onto this mesh from it (Air, a radio site only; a hub has no radio). Channel keys, join URLs, admin traffic and direct messages are not on this table: they never cross.</p>"
+    return (f"<details class='fold'><summary>Sharing with {e(str(q.get('name') or ''))}{aired_words}</summary><p class='meta'>What leaves this site for that one (Out), what this site shows from it (In), and what goes onto this mesh from it (Air, a radio site only; a hub has no radio). Channel keys, join URLs, admin traffic and direct messages are not on this table: they never cross.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Class</th><th>Switches</th></tr></thead><tbody>{rows}</tbody></table></div></details>")
 
 
-def peers_section(p, hub=False):
-    """Spec 052: this site, its peers, an invite and a join, on the Connections page."""
+def peers_section(p, kind="Box"):
+    """Spec 111: Other Mesh Managers, as a journey. The kind of computer decides the direction: a laptop joins, a
+    box joins and invites when it listens, a hub invites. An invite is read before anything dials."""
     p = p or {}
     if p.get("error"):
-        return f"<h2 id='peers'>Peers</h2><p class='meta bad'>{e(str(p['error']))}</p>"
+        return f"<h2 id='peers'>Other Mesh Managers</h2><p class='meta bad'>{e(str(p['error']))}</p>"
     site = p.get("site") or {}
-    listening = (f"listening on port {e(str(site.get('port')))}" if site.get("listening") else "not listening: peers cannot join this site until the installer's --peer-bind is set")
-    head = (f"<h2 id='peers'>Peers</h2><p class='meta'>Mesh Managers joined to this one over the internet. Each side sends its picture, nodes, positions and battery, and shows the other's, marked with where it came from. Nothing goes on the air, and channel keys never cross.</p>"
-            f"<div class='cards'>{card('This site', e(str(site.get('name') or '?')) + ' <span class=pill>' + e(str(site.get('short') or '')) + '</span><div class=meta>' + e(str(site.get('address') or 'no address set: the invite names this machine by its hostname')) + ' · ' + e(listening) + '</div>', 'ok' if site.get('listening') else '')}</div>")
+    listening = bool(site.get("listening"))
+    can_invite = listening and kind != "Laptop"
+    can_join = True   # every kind can dial out; a hub may join another hub
+    head = ("<h2 id='peers'>Other Mesh Managers</h2><p class='meta'>Mesh Managers linked to this one over the internet. Each side sends "
+            "its picture, nodes, positions and battery, and shows the other's, marked with the site it came from. Nothing goes on the air, "
+            "and channel keys never cross.</p>")
+    if kind == "Laptop":
+        why = "<p class='meta' id='direction'>A laptop dials out; nothing can reach it. Join a hub or a listening box with the invite it gives you.</p>"
+    elif kind == "Box" and not listening:
+        why = "<p class='meta' id='direction'>This box is not listening for other sites, so it cannot invite one. It can join a hub or a listening box.</p>"
+    else:
+        where = str(site.get("address") or "no address set, so the invite names this computer by its host name")
+        why = (f"<p class='meta' id='direction'>Listening for other sites at <b>{e(where)}</b>, port <b>{e(str(site.get('port')))}</b>. "
+               "That is what this computer knows about itself; whether the internet can reach that port is not tested from here.</p>")
+    # the sites, and the invites still open
     rows = ""
     for q in p.get("peers") or []:
-        lamp = "ok" if q.get("state") == "connected" else "warn"
-        note = f" <span class='meta'>{e(str(q.get('note')))}</span>" if q.get("note") else ""
-        rows += (f"<tr><td><i class='lamp lamp--{lamp}'></i> {e(str(q.get('name')))}<div class='meta'>{e(str(q.get('id') or '')[:12])} · {e(str(q.get('direction') or ''))}</div></td>"
-                 f"<td>{e(str(q.get('state')))}{note}</td><td class='meta'>{('<time datetime=' + chr(39) + e(str(q.get('last_seen'))) + chr(39) + ' data-age>' + e(age(q.get('last_seen'))) + '</time>') if q.get('last_seen') else 'never'}</td>"
-                 f"<td>{int(q.get('nodes') or 0)}</td><td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: its pin, its link and its picture leave this site.' style='display:inline'><input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>"
-                 f"<tr class='share-row'><td colspan='5'>{sharing_fold(q, hub)}</td></tr>")
-    table = (f"<div class='tablewrap'><table><thead><tr><th>Peer</th><th>State</th><th>Last seen</th><th>Nodes</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=5 class=meta>No peers yet. Invite one from here, or join another site with its invite.</td></tr>'}</tbody></table></div>")
-    a_inv, a_join = _act("peer_invite"), _act("peer_join")
-    invite = (f"<form data-action='peer_invite' class='card' data-risk='change' data-confirm=\"{e(a_inv.get('confirm') or '')}\" id='peer-invite'><h3 style='margin-top:0'>{e(a_inv['title'])}</h3><p class='meta'>{e(a_inv['description'])}</p>"
-              f"<button class='line'{'' if site.get('listening') else ' disabled'}>Invite a peer</button><div class='res meta' role='status'></div><div class='invite-out' aria-live='polite'></div></form>")
-    join = (f"<form data-action='peer_join' class='card' data-risk='change' data-confirm=\"{e(a_join.get('confirm') or '')}\" id='peer-join'><h3 style='margin-top:0'>{e(a_join['title'])}</h3><p class='meta'>{e(a_join['description'])}</p>"
-            f"<label>Invite<input type='text' name='invite' required placeholder='host:port/code/fingerprint' autocomplete='off' spellcheck='false'></label><button class='line'>Join</button><div class='res meta' role='status'></div></form>")
-    js = ("<script>document.addEventListener('mm-written',function(ev){var d=ev.detail||{},a=d.action,r=d.result||{};"
-          "if(a==='peer_invite'){var o=document.querySelector('#peer-invite .invite-out');if(!o)return;o.innerHTML='';var pre=document.createElement('pre');pre.className='fleet-out';pre.style.userSelect='all';pre.textContent=r.invite||'';o.appendChild(pre);"
-          "var m=document.createElement('p');m.className='meta';m.textContent=(r.note||'')+(r.expires?' · expires '+r.expires:'');o.appendChild(m);if(r.qr_svg){var q=document.createElement('div');q.style.maxWidth='240px';q.innerHTML=r.qr_svg;o.appendChild(q);}}"
-          "if(a==='peer_join'||a==='peer_forget'||a==='peer_sharing_set'){setTimeout(function(){fetch('/connections').then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');var n=d.getElementById('peers-section'),o=document.getElementById('peers-section');if(n&&o){o.replaceWith(n);}});},1200);}});</script>")
-    return f"<section id='peers-section'>{head}{table}<div class='cards'>{invite}{join}</div>{js}</section>"
+        up = q.get("state") == "connected"
+        note = f"<div class='meta'>{e(str(q.get('note')))}</div>" if q.get("note") else ""
+        seen = (f"<time datetime='{e(str(q.get('last_seen')))}' data-age>{e(age(q.get('last_seen')))}</time>") if q.get("last_seen") else "never"
+        rows += (f"<tr><td><i class='lamp lamp--{'ok' if up else 'warn'}'></i> {e(str(q.get('name')))}<div class='meta'>{e(str(q.get('id') or '')[:12])}</div></td>"
+                 f"<td>{'Connected' if up else 'Away'}{note}</td><td class='meta'>{seen}</td><td>{int(q.get('nodes') or 0)}</td>"
+                 f"<td><form data-action='peer_forget' data-risk='change' data-confirm='Forget {e(str(q.get('name')))}: the link, and its picture, leave this computer.' style='display:inline'>"
+                 f"<input type='hidden' name='site' value='{e(str(q.get('id')))}'><button class='danger line'>Forget</button><div class='res meta' role='status'></div></form></td></tr>"
+                 f"<tr class='share-row'><td colspan='5'>{sharing_fold(q, kind == 'Hub')}</td></tr>")
+    waiting = ""
+    for v in (p.get("invites") or []) if can_invite else []:
+        la = v.get("last_attempt") or {}
+        tried = (f"<div class='meta bad'>Last attempt <time datetime='{e(str(la.get('at')))}' data-age>{e(age(la.get('at')))}</time>: {e(str(la.get('fault')))}</div>"
+                 if la.get("fault") else "")
+        exp = _utc_secs(v.get("expires")) if v.get("expires") else 0
+        waiting += (f"<tr><td><i class='lamp'></i> {e(str(v.get('label') or 'an invite with no name'))}<div class='meta'>invite {e(str(v.get('id') or ''))}</div></td>"
+                    f"<td>Waiting <span class='meta' data-left='{int(exp)}'></span>{tried}</td><td class='meta'>not yet</td><td></td>"
+                    f"<td><form data-action='peer_invite_cancel' data-risk='change' data-confirm='Cancel this invite? Its code stops working now.' style='display:inline'>"
+                    f"<input type='hidden' name='id' value='{e(str(v.get('id') or ''))}'><button class='line'>Cancel</button><div class='res meta' role='status'></div></form></td></tr>")
+    refused = p.get("last_refused") or {}
+    refused_line = (f"<p class='meta'>Last refused attempt with a code no invite here was made with, "
+                    f"<time datetime='{e(str(refused.get('at')))}' data-age>{e(age(refused.get('at')))}</time>: {e(str(refused.get('fault')))}</p>"
+                    if refused.get("fault") and can_invite else "")
+    empty = "No other sites yet." + (" Invite one from here." if can_invite else "") + (" Join one with the invite it gives you." if can_join else "")
+    table = (f"<div class='tablewrap'><table><thead><tr><th>Site</th><th>State</th><th>Last seen</th><th>Nodes</th><th></th></tr></thead>"
+             f"<tbody>{rows}{waiting}{'' if rows or waiting else '<tr><td colspan=5 class=meta>' + empty + '</td></tr>'}</tbody></table></div>{refused_line}")
+    invite = join = ""
+    if can_invite:
+        invite = ("<form data-action='peer_invite' class='card' data-risk='change' id='peer-invite'><h3 style='margin-top:0'>Invite a site</h3>"
+                  "<p class='meta'>A code that works once, for ten minutes, for one other site to join this one.</p>"
+                  "<label>Who is it for?<input type='text' name='label' maxlength='60' placeholder='for example: Brize laptop' autocomplete='off'></label>"
+                  "<button>Make an invite</button><div class='res meta' role='status'></div><div class='invite-out' aria-live='polite'></div></form>")
+    if can_join:
+        join = ("<form data-action='peer_join' class='card' data-risk='change' id='peer-join'><h3 style='margin-top:0'>Join a site</h3>"
+                "<p class='meta'>Paste the invite the other site gave you, or open the file it was saved as. It is read first: nothing dials until you press Join.</p>"
+                "<label>Invite<textarea name='invite' rows='2' required placeholder='host:port/code/fingerprint/expires' autocomplete='off' spellcheck='false'></textarea></label>"
+                "<div class='row-actions'><button type='button' class='line' data-read>Read the invite</button>"
+                "<label class='line button'>Open a file<input type='file' accept='.mminvite,text/plain' data-open hidden></label></div>"
+                "<div class='join-read' hidden><p class='meta' data-where></p><p class='words' data-words></p>"
+                "<p class='meta'>Ask the person at the other site to read their three words aloud. If they are not these, do not join.</p>"
+                "<fieldset><legend>What this computer sends that site</legend>"
+                + "".join(f"<label class='choice'><input type='checkbox' data-share='{c}' checked> {w}</label>"
+                          for c, w in (("nodes", "Nodes, positions and battery"), ("waypoints", "Waypoints"), ("alerts", "Alerts")))
+                + "<label class='choice'><input type='checkbox' data-share='messages'> Messages</label></fieldset>"
+                "<button data-join disabled>Join</button></div><div class='res meta' role='status'></div></form>")
+    # a hub leads with Invite, then its sites; everything else leads with its sites
+    body = (f"{head}{why}<div class='cards'>{invite}</div>{table}<div class='cards'>{join}</div>" if kind == "Hub"
+            else f"{head}{why}{table}<div class='cards'>{invite}{join}</div>")
+    return f"<section id='peers-section'>{body}{_peers_js(can_invite, can_join)}</section>"
+
+
+def _peers_js(can_invite, can_join):
+    js = ["<script>(function(){function left(){var now=Date.now()/1000;document.querySelectorAll('[data-left]').forEach(function(el){"
+          "var s=Math.round(parseFloat(el.dataset.left)-now);el.textContent=s>0?Math.floor(s/60)+':'+('0'+s%60).slice(-2)+' left':'expired';});}"
+          "left();setInterval(left,1000);"
+          "function reload(){setTimeout(function(){fetch(location.pathname).then(function(r){return r.text();}).then(function(h){var d=new DOMParser().parseFromString(h,'text/html');"
+          "var n=d.getElementById('peers-section'),o=document.getElementById('peers-section');if(n&&o){o.replaceWith(n);n.querySelectorAll('script').forEach(function(s){var x=document.createElement('script');x.textContent=s.textContent;s.replaceWith(x);});}});},1200);}"]
+    if can_invite:
+        js.append("document.addEventListener('mm-written',function(ev){var d=ev.detail||{},r=d.result||{};"
+                  "if(d.action==='peer_invite'&&r.invite){var o=document.querySelector('#peer-invite .invite-out');if(!o)return;o.innerHTML='';"
+                  "function el(t,c,x){var n=document.createElement(t);if(c)n.className=c;if(x!==undefined)n.textContent=x;o.appendChild(n);return n;}"
+                  "var exp=Date.parse(r.expires)/1000;var t=el('p','meta');t.appendChild(document.createTextNode('Works once · '));var l=document.createElement('span');l.dataset.left=exp;t.appendChild(l);left();"
+                  "if(r.words){el('p','meta','Read these three words to the person joining; theirs must match:');el('p','words',r.words.join(' '));}"
+                  "if(r.qr_svg){var q=el('div');q.style.maxWidth='240px';q.innerHTML=r.qr_svg;}"
+                  "var pre=el('pre','fleet-out',r.invite);pre.style.userSelect='all';"
+                  "var row=el('div','row-actions');function b(txt,fn){var x=document.createElement('button');x.type='button';x.className='line';x.textContent=txt;x.addEventListener('click',fn);row.appendChild(x);}"
+                  "b('Copy',function(){if(navigator.clipboard){navigator.clipboard.writeText(r.invite);}});"
+                  "b('Save as a file',function(){var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([r.invite+'\\n'],{type:'text/plain'}));a.download=((r.label||'invite').replace(/[^A-Za-z0-9 _-]/g,'').trim()||'invite')+'.mminvite';a.click();});"
+                  "b('Show full screen',function(){var f=document.createElement('div');f.className='invite-full';f.setAttribute('role','dialog');f.tabIndex=-1;"
+                  "if(r.qr_svg){var q2=document.createElement('div');q2.innerHTML=r.qr_svg;f.appendChild(q2);}var p2=document.createElement('p');p2.className='words';p2.textContent=(r.words||[]).join(' ');f.appendChild(p2);"
+                  "var c=document.createElement('button');c.type='button';c.textContent='Close';c.addEventListener('click',function(){f.remove();});f.appendChild(c);document.body.appendChild(f);c.focus();});"
+                  "if(navigator.share){b('Share',function(){navigator.share({title:'Mesh Manager invite',text:r.invite}).catch(function(){});});}"
+                  "reload();}"
+                  "if(d.action==='peer_invite_cancel'||d.action==='peer_forget'||d.action==='peer_sharing_set'){reload();}});")
+    else:
+        js.append("document.addEventListener('mm-written',function(ev){var a=(ev.detail||{}).action;if(a==='peer_forget'||a==='peer_sharing_set'){reload();}});")
+    if can_join:
+        js.append("var f=document.getElementById('peer-join');if(f){var box=f.querySelector('.join-read'),res=f.querySelector('.res'),go=f.querySelector('[data-join]');"
+                  "function say(t,c){res.textContent=t;res.className='res meta '+(c||'');}"
+                  "function api(a,body){return fetch('/api/'+a,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json();});}"
+                  "function read(){var inv=f.elements.invite.value.trim();box.hidden=true;go.disabled=true;if(!inv){say('Paste an invite first.','bad');return;}"
+                  "api('site_invite_read',{invite:inv}).then(function(j){if(j.error){say(j.error,'bad');return;}"
+                  "if(j.own){say('That is this computer\\'s own invite.','bad');return;}"
+                  "var tl=j.seconds_left===null||j.seconds_left===undefined?'time left not known (an older invite)':(j.expired?'expired':Math.floor(j.seconds_left/60)+' min left');"
+                  "box.querySelector('[data-where]').textContent='It dials '+j.address+' · '+tl+(j.known?' · this computer already knows that site':'');"
+                  "box.querySelector('[data-words]').textContent=(j.words||[]).join(' ');box.hidden=false;go.disabled=!!j.expired;say('');}).catch(function(){say(window.mmNoAnswer,'bad');});}"
+                  "f.querySelector('[data-read]').addEventListener('click',read);"
+                  "f.querySelector('[data-open]').addEventListener('change',function(ev){var file=ev.target.files[0];if(!file)return;file.text().then(function(t){f.elements.invite.value=t.trim().split('\\n')[0];read();});});"
+                  "f.elements.invite.addEventListener('input',function(){box.hidden=true;go.disabled=true;});"
+                  "f.addEventListener('submit',function(ev){ev.preventDefault();ev.stopPropagation();if(go.disabled)return;"
+                  "var sh={};f.querySelectorAll('[data-share]').forEach(function(c){sh[c.dataset.share]={out:c.checked};});"
+                  "go.disabled=true;say('joining: dialling the site and proving it is the one the invite names');"
+                  "api('peer_join',{invite:f.elements.invite.value.trim(),sharing:sh}).then(function(j){if(j.error){say('not joined: '+j.error,'bad');go.disabled=false;return;}"
+                  "say('joined '+(j.name||'the site')+' at '+window.mmNow(),'ok');document.dispatchEvent(new CustomEvent('mm-written',{detail:{action:'peer_join',result:j}}));reload();})"
+                  ".catch(function(){say(window.mmNoAnswer,'bad');go.disabled=false;});});}")
+    js.append("})();</script>")
+    return "".join(js)
 
 
 def connections_body(web, minted=None, msg=""):
@@ -4551,14 +5103,14 @@ def connections_body(web, minted=None, msg=""):
         used = c.get("last_used")
         rows += (f"<tr><td>{e(c['name'])}</td><td>{aut}</td><td class='meta'><time datetime='{e(created)}' data-age>{e(age(created))}</time></td>"
                  f"<td class='meta'>{('<time datetime=' + chr(39) + e(str(used)) + chr(39) + ' data-age>' + e(age(used)) + '</time>') if used else 'never'}</td><td>{ctl}</td></tr>")
-    rows = rows or "<tr><td colspan=5 class='meta'>No connections yet. Add one below to let an agent read this mesh.</td></tr>"
+    rows = rows or "<tr><td colspan=5 class='meta'>No agents yet. Add one below to let an agent read this mesh.</td></tr>"
     shown = ""
     if minted:
         cmd = f"claude mcp add mesh-manager --transport http http://{web.bind[0]}:{web.bind[1]}/mcp --header \"Authorization: Bearer {minted['token']}\""
         shown = (f"<div class='card' style='border-color:var(--gold)'><div class='k'>Token for {e(minted['name'])} ({e(minted['autonomy'])}), shown once</div>"
                  f"<div class='v'><code>{e(minted['token'])}</code></div><div class='row-actions' style='margin:.5rem 0'><button type='button' class='line' data-copy='{e(minted['token'])}'>Copy the token</button>"
                  f"<button type='button' class='line' data-copy='{e(cmd)}'>Copy the claude mcp add command</button></div><p class='meta'>Connect with: <code>{e(cmd)}</code></p></div>")
-    form = ("<form method='post' action='/connections' class='card' id='mint'><h2 style='margin-top:0'>Add a connection</h2>"
+    form = ("<form method='post' action='/connections' class='card' id='mint'><h2 style='margin-top:0'>Add an agent</h2>"
             "<label>Name<input type='text' name='name' required maxlength='40'></label><input type='hidden' name='confirm' value=''>"
             "<label>Autonomy<select name='autonomy'><option value='observe'>observe: reads only</option><option value='propose' selected>propose: reads, on-air requests, and proposals for the rest</option><option value='act'>act: everything the screen can do</option></select></label>"
             "<button type='submit'>Add</button></form>")
@@ -4573,7 +5125,7 @@ def connections_body(web, minted=None, msg=""):
 })();
 </script>"""
     return (f"{('<p class=bad>' + e(msg) + '</p>') if msg else ''}{shown}<div class='tablewrap'><table><thead><tr><th>Name</th><th>Autonomy</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>{rows}</tbody></table></div><br>{form}"
-            "<p class='meta'>The autonomy dial is yours: observe looks and reports; propose prepares and asks; act does deterministic work without asking each time. Every call is audited under the connection's name on the Activity page.</p>"
+            "<p class='meta'>The autonomy dial is yours: observe looks and reports; propose prepares and asks; act does deterministic work without asking each time. Every call is audited under the agent's name on the Activity page.</p>"
             + brief_card(web) + f"{js}{WRITE_JS}")
 
 
@@ -4590,20 +5142,20 @@ def brief_card(web):
     both = mk + "\nclaude plugin install mesh-manager@milux"   # the button takes both, because one is no use alone
     return ("<div class='card'><h2 style='margin-top:0'>Connect an agent in one action</h2>"
             "<p class='meta'>The plugin carries the tools, the role and the skills together. It holds "
-            "<b>no token</b>: your tool asks for the box address and the token when you enable it, and "
+            f"<b>no token</b>: your tool asks for {the_box()} address and the token when you enable it, and "
             "keeps the token in its own secure storage. Revoking it here still stops it.</p>"
             f"<p><b>Claude Code:</b> <code>{e(mk)}</code> then <code>claude plugin install mesh-manager@milux</code>.</p>"
             f"<div class='row-actions' style='margin:.5rem 0'><button type='button' class='line' data-copy='{e(both)}'>Copy both commands</button></div>"
             "<p class='meta'><b>Cowork, Claude Desktop or claude.ai:</b> Customize &gt; Plugins, the + in "
             "Personal plugins, Add marketplace, then the address of this product's repository.</p>"
-            f"<p class='meta'>It will ask for this box: <code>{e('http://' + str(web.bind[0]) + ':' + str(web.bind[1]))}</code>, "
+            f"<p class='meta'>It will ask for {this_box()}: <code>{e('http://' + str(web.bind[0]) + ':' + str(web.bind[1]))}</code>, "
             "and for a token from the list above. Paste the token in; nothing writes it to a file.</p>"
             "<p class='meta'>The plugin's copy of the role and the skills is a published one, so it can fall "
-            "behind a box. The downloads below always come from this box and cannot.</p></div>"
+            f"behind a box. The downloads below always come from {this_box()} and cannot.</p></div>"
             "<div class='card'><h2 style='margin-top:0'>Or take the files yourself</h2>"
             "<p class='meta'>A token connects the tools and nothing more. An agent also needs the "
             "<b>role</b>, which says how to behave on a mesh, and the <b>skills</b> it leans on. "
-            "These are the copies this box is running, not a link to somewhere else.</p>"
+            f"These are the copies {this_box()} is running, not a link to somewhere else.</p>"
             f"<p><b>Claude Code:</b> take the one file and unzip it into <code>~/.claude</code>.</p>"
             f"<p><a href='/agent-brief.zip' download>Download the brief "
             f"(the role and {len(names)} skills, {e(__version__)})</a></p>"
@@ -4611,7 +5163,7 @@ def brief_card(web):
             "per skill, because that is what the upload expects.</p>"
             f"<p>{per}</p>"
             f"<p class='meta'>Every file is stamped <code>product_version: {e(__version__)}</code>, "
-            "which is what this box is running. If the copy in your tool says an older version, it "
+            f"which is what {this_box()} is running. If the copy in your tool says an older version, it "
             "has gone stale: download again and replace it. "
             "<a class='plain' href='https://github.com/MilUX-Ltd/mesh-manager/blob/main/docs/GUIDE.md'>"
             "Working with an agent</a>, in the guide, walks the whole thing.</p></div>")
@@ -4623,26 +5175,51 @@ def settings_body(web, saved=""):
     except OSError:
         ctx = ""
     saved = str(saved or "")
-    brief_ok = f"<p class='ok'>Saved the brief at {e(hhmm())}.</p>" if saved == "brief" else ""
-    return (f"<form method='post' action='/settings' class='card' style='max-width:none'><h2 style='margin-top:0'>Standing brief for connected agents</h2>"
-            "<p class='meta'>What this mesh is for, who runs it, the region and channel policy, standing orders. Served verbatim to every connected agent as <code>mesh_context</code>; nothing in the product knows your fleet, this is where it learns it.</p>"
-            f"<textarea name='context' rows='12' style='font:14px var(--mono)'>{e(ctx)}</textarea>"
-            f"<div style='margin-top:.6rem'><button type='submit'>Save the brief</button>{brief_ok}</div></form>"
+    return (brief_form(web, ctx, saved == "brief")
             + position_settings(web)
             + quick_settings(web, saved == "quick")
             + update_settings(web, saved == "update"))
+
+
+def tak_body(st):
+    """Spec 107: Connect, TAK. What 1.2.2 spread over the Mesh and Health pages: whether this computer bridges to
+    TAK, what it last sent, and where alerts go."""
+    st = st if isinstance(st, dict) else {}
+    if st.get("tak") == "off":
+        state = card("TAK", "not used on this computer<div class='meta'>it manages the mesh without a TAK Server</div>", "")
+    else:
+        fwd = st.get("last_forwarded")
+        state = (card("TAK", ("observing: nothing is sent" if st.get("observe") else "bridging to TAK"), "ok")
+                 + card("Last packet TAK would have had" if st.get("observe") else "Last packet sent to TAK",
+                        (f"<time datetime='{e(str(fwd))}' data-age>{e(age(fwd))}</time>" if fwd else "none yet"), "ok" if fwd else "warn"))
+    return (f"<div class='cards'>{state}</div><p class='meta'>Alerts reach TAK chat when that is on in "
+            "<a href='/health#alerts'>Health, Alerts and airtime</a>. The TAK Server this computer speaks to was set when it was installed.</p>")
+
+
+def brief_form(web, ctx=None, saved=False):
+    """The standing brief for connected agents (Spec 107: shown in Settings and under Connect, AI agents)."""
+    if ctx is None:
+        try:
+            ctx = open(os.path.join(web.etc_dir, "context.md")).read()
+        except OSError:
+            ctx = ""
+    brief_ok = f"<p class='ok'>Saved the brief at {e(hhmm())}.</p>" if saved else ""
+    return (f"<form method='post' action='/settings' class='card' style='max-width:none'><h2 style='margin-top:0'>Standing brief for connected agents</h2>"
+            "<p class='meta'>What this mesh is for, who runs it, the region and channel policy, standing orders. Served verbatim to every connected agent as <code>mesh_context</code>; nothing in the product knows your fleet, this is where it learns it.</p>"
+            f"<textarea name='context' rows='12' style='font:14px var(--mono)'>{e(ctx)}</textarea>"
+            f"<div style='margin-top:.6rem'><button type='submit'>Save the brief</button>{brief_ok}</div></form>")
 
 
 def position_settings(web):
     """Where this box is, set on the screen: the map's centre when there is no receiver (5 Sep 2026 reviews:
     a box with no position lost the map, and the only remedy was a flag on an installer already run)."""
     a = _act("box_position_set")
-    return (f"<form data-action='box_position_set' class='card' id='position' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='margin-top:1rem'><h2 style='margin-top:0'>Where this box is</h2>"
+    return (f"<form data-action='box_position_set' class='card' id='position' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='margin-top:1rem'><h2 style='margin-top:0'>Where {this_box()} is</h2>"
             f"<p class='meta'>{e(a.get('description') or '')}</p>"
             "<div class='regform' style='grid-template-columns:1fr 1fr'><label>Latitude<input type='text' name='lat' inputmode='decimal' placeholder='51.5000'></label><label>Longitude<input type='text' name='lon' inputmode='decimal' placeholder='-0.1200'></label></div>"
-            "<div class='row-actions' style='margin:var(--s2) 0'><button type='button' class='line' id='pos-from-radio' data-tip='Take it from the radio&#39;s fix' data-tip-more='Fills the fields from where the box believes it is now'>Take it from the radio's fix</button><span class='meta' id='pos-note'></span></div>"
-            "<label class='check'><input type='checkbox' name='clear' value='on'><span>Clear the declared position instead, and let the receivers and the devices place the box.</span></label>"
-            "<button type='submit'>Save where this box is</button><div class='res meta' role='status'></div></form>"
+            f"<div class='row-actions' style='margin:var(--s2) 0'><button type='button' class='line' id='pos-from-radio' data-tip='Take it from the radio&#39;s fix' data-tip-more='Fills the fields from where {the_box()} believes it is now'>Take it from the radio's fix</button><span class='meta' id='pos-note'></span></div>"
+            f"<label class='check'><input type='checkbox' name='clear' value='on'><span>Clear the declared position instead, and let the receivers and the devices place {the_box()}.</span></label>"
+            f"<button type='submit'>Save where {this_box()} is</button><div class='res meta' role='status'></div></form>"
             "<script>(function(){var b=document.getElementById('pos-from-radio');if(!b)return;b.addEventListener('click',function(){var n=document.getElementById('pos-note');n.textContent='asking the box';"
             "fetch('/api/links').then(function(r){return r.json();}).then(function(j){var o=j.own||{};if(o.lat===null||o.lat===undefined){n.textContent='the box has no position to take: no receiver fix, no declaration, nothing heard with a fix';return;}"
             "var f=document.getElementById('position');f.elements.lat.value=Number(o.lat).toFixed(5);f.elements.lon.value=Number(o.lon).toFixed(5);n.textContent='from '+(o.position_source||'the box')+'; press Save to keep it';}).catch(function(){n.textContent=window.mmNoAnswer;});});})();</script>")
@@ -4665,18 +5242,35 @@ def update_settings(web, saved=False):
     tok = bool(web.github_token())
     mode = web.update_mode()
     return (f"<form method='post' action='/settings/update' class='card' style='margin-top:1rem'><h2 style='margin-top:0'>Updates from GitHub</h2>"
-            "<p class='meta'>The box reads releases of the repository with a fine-grained personal access token limited to that repository, contents read-only. It is kept on the box at 0600 and never shown again. "
-            f"{'A token is on the box.' if tok else 'No token yet: updates cannot be checked until one is entered.'}</p>"
+            f"<p class='meta'>{the_box(True)} reads releases of the repository with a fine-grained personal access token limited to that repository, contents read-only. It is kept on {the_box()} at 0600 and never shown again. "
+            f"{f'A token is on {the_box()}.' if tok else 'No token yet: updates cannot be checked until one is entered.'}</p>"
             "<label>GitHub token (write only)<input type='password' name='token' autocomplete='off' placeholder='github_pat_…'></label>"
             "<label>Mode<select name='mode'>" + "".join(f"<option value='{m}'{' selected' if m == mode else ''}>{m}: {d}</option>" for m, d in (("manual", "check daily, install on your press"), ("auto", "check daily and install on its own"), ("off", "never talk to GitHub"))) + "</select></label>"
             f"<button type='submit'>Save the update settings</button>{('<p class=ok>Saved the update settings at ' + e(hhmm()) + '.</p>') if saved else ''}</form>")
 
 
-def login_body(err=""):
-    return (f"<form class='login card' method='post' action='/login'><h2 style='margin-top:0'>Sign in</h2>"
+def login_body(err="", site="", kind="Box", address=""):
+    """Spec 109: which computer this is, then a name and the one operator password (D3)."""
+    ident = (f"<div class='card' data-identity style='max-width:26rem'><b>{e(site)}</b><div class='meta'>{e(kind)}"
+             + (f" · {e(address)}" if address else "") + "</div></div>") if site else ""
+    return (ident + f"<form class='login card' method='post' action='/login'><h2 style='margin-top:0'>Sign in</h2>"
             f"{'<p class=bad>' + e(err) + '</p>' if err else ''}"
-            "<label>Operator password<input type='password' name='password' autocomplete='current-password' autofocus required></label>"
-            "<button type='submit'>Sign in</button><p class='meta'>Set at install; change it with install.sh --password.</p></form>")
+            f"<label>Your name<input type='text' name='name' maxlength='{NAME_MAX}' autocomplete='name' autofocus required></label>"
+            "<label>Operator password<input type='password' name='password' autocomplete='current-password' required></label>"
+            "<button type='submit'>Sign in</button><p class='meta'>Your name goes on everything you change here. "
+            "Forgotten the password? Ask whoever runs this computer.</p></form>")
+
+
+def password_body(err="", forced=False):
+    """Spec 109, D4: change the operator password from the screen."""
+    lead = ("<p class='warn'>This computer is still on the password it was installed with. Choose your own before "
+            "anything else.</p>") if forced else ""
+    return (lead + f"<form class='card' method='post' action='/password' style='max-width:26rem'>"
+            f"{'<p class=bad>' + e(err) + '</p>' if err else ''}"
+            "<label>Current password<input type='password' name='current' autocomplete='current-password' required></label>"
+            "<label>New password (8 characters or more)<input type='password' name='new' autocomplete='new-password' minlength='8' required></label>"
+            "<label>New password again<input type='password' name='again' autocomplete='new-password' minlength='8' required></label>"
+            "<button type='submit'>Change the password</button><p class='meta'>Everyone else signed in here is signed out.</p></form>")
 
 
 
@@ -4719,21 +5313,113 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 self.send_header(k, v)
             self.end_headers()
 
-        def _signed_in(self):
-            if not web.auth_on:
-                return True
+        def _session(self):
             c = self.headers.get("Cookie", "")
             for part in c.split(";"):
                 k, _, v = part.strip().partition("=")
-                if k == "mm_session" and web.sessions.verify(v):
-                    return True
-            return False
+                if k == "mm_session":
+                    got = web.sessions.verify(v)
+                    if got:
+                        return got
+            return None
+
+        def _signed_in(self):
+            if not web.auth_on:
+                return True
+            return self._session() is not None
+
+        def _who(self):
+            """Spec 109: who made a change, for the audit. With sign-in on, the name signed into the session; a
+            laptop (no sign-in) uses the name its first run asked for; before either, the bare word, as 1.4 did."""
+            if web.auth_on:
+                sess = self._session()
+                name = (sess or {}).get("name")
+            else:
+                try:
+                    name = clean_name((json.load(open(os.path.join(web.etc_dir, "first-run.json"))) or {}).get("name"))
+                except (OSError, ValueError, AttributeError):
+                    name = None
+            return f"operator: {name}" if name else "operator"
+
+        def _must_change(self):
+            """Spec 109, D4: a generated password is changed before anything else is done."""
+            return web.auth_on and os.path.exists(os.path.join(web.etc_dir, "passwd.generated"))
 
         def _ask(self, op, **args):
             try:
                 return web.client.ask(op, **args)
             except BridgeDown:
                 return {}
+
+        def _home_parts(self, st, links=None):
+            """Spec 110: what Home needs besides the status: the nodes, the Health thresholds, the open alerts and
+            the agent proposals waiting."""
+            nodes = (links if links is not None else self._links()).get("nodes") or []
+            settings = self._ask("alert_settings")
+            alerts = (self._ask("alerts") or {}).get("open") or []
+            return nodes, settings, alerts, K.proposals(web.etc_dir)
+
+        def _first_run_kind(self, st):
+            return identity(st)["kind"]
+
+        def _first_run_form(self, err="", values=None, st=None):
+            st = st if st is not None else self._ask("status")
+            kind = self._first_run_kind(st)
+            person = ((self._session() or {}).get("name") or "") if web.auth_on else ""
+            return first_run_body(kind, st, self._ask("channels") if kind != "Hub" else {},
+                                  gateway=self._ask("gateway") if kind == "Box" else None,
+                                  peers=self._ask("peers") if kind == "Hub" else None,
+                                  person=person, err=err, values=values)
+
+        def _first_run_finish(self, body):
+            """Spec 110: settle the first run. Nothing is written until every answer is good; the mark is written
+            last, whole, so a failure leaves the first run due."""
+            if not first_run_due(web.etc_dir):
+                return self._redirect("/")
+            st = self._ask("status")
+            kind = self._first_run_kind(st)
+            vals = {k: str(body.get(k) or "") for k in ("site_name", "name", "radio", "channel")}
+
+            def again(msg):
+                return self._send(400, self._page("First run", self._first_run_form(msg, vals, st), "/"))
+            if web.auth_on:
+                person = (self._session() or {}).get("name")
+            else:
+                person = clean_name(vals["name"])
+                if not person:
+                    return again(f"Give your name, 1 to {NAME_MAX} characters: what you change is recorded under it.")
+            site_name = vals["site_name"].strip()
+            if not site_name:
+                return again("Give this computer a name.")
+            radio = str(st.get("radio") or "") or None
+            if kind == "Box" and vals["radio"]:
+                gw = self._ask("gateway")
+                if vals["radio"] != str(gw.get("serial") or ""):
+                    got = self._ask("gateway_set", path=vals["radio"])
+                    if got.get("error") or not got:
+                        return again(str(got.get("error") or "the bridge is not answering, so the radio could not be chosen"))
+                    K.audit(web.etc_dir, who=f"operator: {person}" if person else "operator", event="ran", action="gateway_set", arguments={"path": vals["radio"]})
+                radio = vals["radio"]
+            got = self._ask("site_name_set", name=site_name)
+            if got.get("error") or not got:
+                return again(str(got.get("error") or "the bridge is not answering, so the name could not be kept"))
+            channel = None
+            if kind != "Hub":
+                try:
+                    idx = int(vals["channel"] or 0)
+                except ValueError:
+                    idx = 0
+                for c in (self._ask("channels") or {}).get("channels") or []:
+                    if int(c.get("index") or 0) == idx and c.get("role") != "DISABLED":
+                        channel = str(c.get("name") or "") or None
+                channel = channel or (str(st.get("primary_channel") or "") or None)
+            rec = {"state": "done", "done": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "name": person,
+                   "radio": None if kind == "Hub" else radio, "region": None if kind == "Hub" else (st.get("region") or None),
+                   "channel": channel}
+            _replace_file(os.path.join(web.etc_dir, "first-run.json"), (json.dumps(rec) + "\n").encode(), 0o640)
+            K.audit(web.etc_dir, who=f"operator: {person}" if person else "operator", event="first-run",
+                    site_name=site_name, radio=rec["radio"], region=rec["region"], channel=channel)
+            return self._send(200, self._page("First run", first_run_done_body(dict(rec, site_name=site_name)), "/"))
 
         def _members(self, group):
             """Spec 044: the ids in a group, from the nodes the bridge knows; None when no group is asked for."""
@@ -4747,7 +5433,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             fp = os.path.normpath(os.path.join(STATIC_DIR, rel))
             if rel.startswith("..") or os.path.isabs(rel) or not fp.startswith(STATIC_DIR + os.sep) or not os.path.isfile(fp):
                 return self._send(404, "no such file", "text/plain")
-            ctype = {".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml"}.get(os.path.splitext(fp)[1], "text/plain")
+            ctype = {".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2"}.get(os.path.splitext(fp)[1], "text/plain")
             with open(fp, "rb") as fh:
                 return self._send(200, fh.read(), ctype + ("; charset=utf-8" if ctype.startswith("text") else ""), {"Cache-Control": "public, max-age=86400"})
 
@@ -4760,7 +5446,8 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
         # -- routes
         def _page(self, title, body, active="", own="", st=None, head=""):
             open_note = "" if (web.auth_on or web.bind[0] in ("127.0.0.1", "localhost", "::1")) else f"open on {web.bind[0]}:{web.bind[1]}, no sign-in"
-            return page(title, body, active, own=own, st=st if st is not None else self._ask("status"), pending=len(K.proposals(web.etc_dir)), head=head, update=web.update_available(), notice=open_note)
+            person = ((self._session() or {}).get("name") or "") if web.auth_on else ""
+            return page(title, body, active, own=own, st=st if st is not None else self._ask("status"), pending=len(K.proposals(web.etc_dir)), head=head, update=web.update_available(), notice=open_note, person=person)
 
         def do_GET(self):
             set_shape(web.desktop)   # Spec 069: before anything renders a word
@@ -4770,20 +5457,37 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/login":
                 if not web.auth_on:
                     return self._redirect("/")
-                return self._send(200, page("Sign in", login_body()))
+                return self._send(200, page("Sign in", login_body(**self._signin_ident()), menu=False))
             if path == "/manifest.webmanifest":
                 # Spec 046: what makes the screen installable; nothing in it is secret, so it answers before sign-in,
                 # as the icons do, because the phone fetches both while it installs
                 return self._send(200, json.dumps(APP_MANIFEST), "application/manifest+json", {"Cache-Control": "public, max-age=3600"})
             if path.startswith("/static/icons/"):
                 return self._static(path)
+            if path.startswith("/static/fonts/"):   # Spec 108: the sign-in page is set in them; public files only
+                rel = os.path.normpath(urllib.parse.unquote(path[len("/static/"):]))
+                if not rel.startswith("fonts" + os.sep):
+                    return self._send(404, "no such file", "text/plain")
+                return self._static(path)
             api = path.startswith("/api/") or path == "/events" or path.startswith("/fragment/")
             if not self._signed_in():
                 return self._json(401, {"error": "sign in first"}) if api else self._redirect("/login")
+            if path == "/password":
+                if not web.auth_on:
+                    return self._redirect("/")
+                return self._send(200, self._page("Change the password", password_body(forced=self._must_change()), "/computer/password"))
+            if self._must_change():
+                return self._json(403, {"error": "change the password first"}) if api else self._redirect("/password")
             if path == "/":
+                if first_run_due(web.etc_dir):   # Spec 110: a fresh install opens on the first run
+                    return self._redirect("/first-run")
                 st = self._ask("status")
                 L = self._links()
-                return self._send(200, self._page("Mesh", overview_body(st, web.bind, web.auth_on, L.get("nodes"), L, tile_sources(web.config, web.etc_dir)), "/", st=st, head=MAP_HEAD))
+                return self._send(200, self._page("Home", home_body(st, *self._home_parts(st, L), links=L, tiles=tile_sources(web.config, web.etc_dir)), "/", st=st, head=MAP_HEAD))
+            if path == "/first-run":
+                if not first_run_due(web.etc_dir):
+                    return self._redirect("/")
+                return self._send(200, self._page("First run", self._first_run_form(), "/"))
             if path == "/map":
                 return self._send(200, self._page("Map", map_body(self._links(), tile_sources(web.config, web.etc_dir),
                                                                    disk_map_sources(tilesets_dir(web.config)), saved_map_sources(web.etc_dir),
@@ -4814,7 +5518,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                     name = path[len("/skill/"):-len(".zip")]
                     data = skill_zip(name)
                     if data is None:
-                        return self._send(404, "no such skill on this box", "text/plain")
+                        return self._send(404, f"no such skill on {this_box()}", "text/plain")
                     fname = f"{name}-{__version__}.zip"
                 self.send_response(200); self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
@@ -4826,7 +5530,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 res = web.client.ask("profile_export")
                 text = str((res or {}).get("yaml") or "")
                 if not text:
-                    return self._send(500, "the box did not answer with a profile", "text/plain")
+                    return self._send(500, f"{the_box()} did not answer with a profile", "text/plain")
                 data = text.encode()
                 self.send_response(200); self.send_header("Content-Type", "application/yaml; charset=utf-8")
                 self.send_header("Content-Disposition", 'attachment; filename="mesh-manager-profile.yaml"')
@@ -4916,7 +5620,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 want_group = (q.get("group", [""])[0] or "").strip()
                 nodes_ = [n for n in (L.get("nodes") or []) if not want_group or str(n.get("group") or "") == want_group]
                 groups_ = sorted({str(g.get("name")) for g in (self._ask("groups").get("groups") or []) if g.get("name")} | {str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
-                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), groups=groups_, availability=_availability(web), reboots=_reboots(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
+                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), battery_pct=_battery_pct(web), groups=groups_, availability=_availability(web), reboots=_reboots(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
             if path == "/log":
                 return self._send(200, self._page("Log", log_body(self._ask("log", n=300).get("lines", [])), "/log"))
             if path == "/channels":
@@ -4936,7 +5640,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/radio":
                 st = self._ask("status")
                 own = (st.get("own") or {}).get("id") or "?"
-                return self._send(200, self._page("This radio", radio_body(self._ask("config"), own, st.get("mqtt"), gw=self._ask("gateway")), "/radio", own=own, st=st))
+                return self._send(200, self._page("This radio", computer_status_body(st, web.bind, web.auth_on) + radio_body(self._ask("config"), own, st.get("mqtt"), gw=self._ask("gateway")), "/radio", own=own, st=st))
             if path == "/node":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 nid = (q.get("id", [""])[0] or "").strip()
@@ -4986,15 +5690,40 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/activity":
                 return self._send(200, self._page("Activity", activity_body(web), "/activity"))
             if path == "/connections":
-                return self._send(200, self._page("Connections", connections_body(web) + peers_section(self._ask("peers"), hub=(self._ask("status") or {}).get("mode") == "hub"), "/connections"))
+                st = self._ask("status")   # Spec 111: this tab is the sites alone; the agents are on their own tab
+                return self._send(200, self._page("Other Mesh Managers", peers_section(self._ask("peers"), identity(st)["kind"]) + WRITE_JS, "/connections", st=st))
             if path == "/settings":
                 return self._send(200, self._page("Settings", settings_body(web) + WRITE_JS, "/settings"))
+            # Spec 107: the tabs that were parts of other pages, each at its own address
+            if path == "/devices/add":
+                st = self._ask("status")
+                kind = identity(st)["kind"]
+                own = (st.get("own") or {}).get("id") or "?"
+                body = add_device_body(kind, self._ask("bench_devices") if kind != "Hub" else {}, self._ask("groups") if kind != "Hub" else {}, st, own)
+                return self._send(200, self._page("Add a device", body + ("" if kind == "Hub" else WRITE_JS), "/devices/add", own=own, st=st))
+            if path == "/messages/quick":
+                return self._send(200, self._page("Quick messages", quick_settings(web) + WRITE_JS, "/messages/quick"))
+            if path == "/connect/mqtt":
+                st = self._ask("status")
+                return self._send(200, self._page("MQTT", mqtt_card(st.get("mqtt"), self._ask("config")) + WRITE_JS, "/connect/mqtt", st=st))
+            if path == "/connect/tak":
+                st = self._ask("status")
+                return self._send(200, self._page("TAK", tak_body(st), "/connect/tak", st=st))
+            if path == "/connect/agents":
+                return self._send(200, self._page("AI agents", connections_body(web) + brief_form(web) + activity_body(web), "/connect/agents"))
+            if path == "/computer/where":
+                return self._send(200, self._page("Where it is", position_settings(web) + WRITE_JS, "/computer/where"))
+            if path == "/computer/updates":
+                return self._send(200, self._page("Updates", update_settings(web) + WRITE_JS, "/computer/updates"))
             if path.startswith("/fragment/"):
                 name = path[len("/fragment/"):]
                 if name == "state":
                     return self._send(200, state_strip(self._ask("status")))
                 if name == "overview":
                     return self._send(200, overview_cards(self._ask("status")))
+                if name == "home":
+                    st = self._ask("status")
+                    return self._send(200, home_live(st, *self._home_parts(st)))
                 if name == "messages":
                     return self._send(200, message_rows(web, {str(n.get("id")): str(n.get("label") or "") for n in self._ask("nodes").get("nodes", []) if n.get("label")}))
                 if name == "channels":
@@ -5030,13 +5759,13 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 action = C.by_id(aid)
                 if not action:
                     return self._json(404, {"error": f"no action {aid}"})
-                if action["risk"] != "read":
+                if action["risk"] != "read" or aid == "site_invite_read":   # an invite's code is never in a URL
                     return self._json(405, {"error": f"{aid} is a POST"})
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 args = {k: v[0] for k, v in q.items()}
                 if aid == "log" and "n" not in args:
                     args["n"] = 300
-                code, res = run_action(web, aid, args, "operator")
+                code, res = run_action(web, aid, args, self._who())
                 return self._json(code, res)
             if path == "/events":
                 return self._sse()
@@ -5070,17 +5799,25 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path != "/login":
                 if not self._signed_in():
                     return self._json(401, {"error": "sign in first"})
+                if path == "/logout":
+                    return self._logout()
+                if path == "/password":
+                    return self._change_password()
+                if self._must_change():
+                    return self._json(403, {"error": "change the password first"})
                 body = self._body()
+                if path == "/first-run":
+                    return self._first_run_finish(body)
                 if path == "/api/update/check":
                     rec = U.check(web.config, web.github_token(), web.state_dir, api=web.config.get("UPDATE_API"))
-                    K.audit(web.etc_dir, who="operator", event="update-check", version=rec.get("version"), available=rec.get("available"), error=rec.get("error"))
+                    K.audit(web.etc_dir, who=self._who(), event="update-check", version=rec.get("version"), available=rec.get("available"), error=rec.get("error"))
                     return self._json(200, rec)
                 if path == "/api/update/staged":
                     return self._json(200, {"staged": U.staged(web.state_dir, arch=web.arch, running=__version__), "running": __version__})
                 if path == "/api/update/rollback":
                     out = U.rollback(web.state_dir, str(body.get("version") or ""), running=__version__,
                                      mode=web.update_mode(), arch=web.arch, start_unit=web.start_unit)
-                    K.audit(web.etc_dir, who="operator", event="update-rollback", version=body.get("version"),
+                    K.audit(web.etc_dir, who=self._who(), event="update-rollback", version=body.get("version"),
                             started=out.get("started"), error=out.get("error"))
                     return self._json(400 if out.get("error") else 200, out)
                 if path == "/api/update/apply":
@@ -5092,17 +5829,17 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                         return self._json(400, {"error": rec.get("error") or "nothing newer to apply", "running": __version__})
                     d = U.download(rec, web.github_token(), web.state_dir)
                     if not d.get("ready"):
-                        K.audit(web.etc_dir, who="operator", event="update-refused", version=rec.get("version"), error=d.get("error"))
+                        K.audit(web.etc_dir, who=self._who(), event="update-refused", version=rec.get("version"), error=d.get("error"))
                         return self._json(400, {"error": d.get("error"), "running": __version__})
                     U.prune_staged(web.state_dir, running=__version__, arch=web.arch)
                     a = U.apply(web.state_dir, rec["version"])
-                    K.audit(web.etc_dir, who="operator", event="update-apply", version=rec.get("version"), started=a.get("started"), error=a.get("error"))
+                    K.audit(web.etc_dir, who=self._who(), event="update-apply", version=rec.get("version"), started=a.get("started"), error=a.get("error"))
                     return self._json(200 if a.get("started") else 500, dict(a, running=__version__))
                 if path == "/settings/update":
                     tok = str(body.get("token") or "").strip()
                     if tok:
                         web.set_github_token(tok)
-                        K.audit(web.etc_dir, who="operator", event="github-token-set")
+                        K.audit(web.etc_dir, who=self._who(), event="github-token-set")
                     web.set_update_mode(str(body.get("mode") or "manual"))
                     return self._send(200, self._page("Settings", settings_body(web, saved="update"), "/settings"))
                 if path.startswith("/api/proposal/"):
@@ -5123,64 +5860,126 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                                 else:
                                     args.pop(_n, None)
                         edited = args != proposed
-                        code, res = run_action(web, pr["action"], args, "operator")
-                        K.audit(web.etc_dir, who="operator", event="proposal-run", id=pid, proposed_by=pr.get("who"), action=pr["action"], edited=edited, outcome="ok" if code < 400 else "error")
+                        code, res = run_action(web, pr["action"], args, self._who())
+                        K.audit(web.etc_dir, who=self._who(), event="proposal-run", id=pid, proposed_by=pr.get("who"), action=pr["action"], edited=edited, outcome="ok" if code < 400 else "error")
                         return self._json(code, res)
-                    K.audit(web.etc_dir, who="operator", event="dismiss", id=pid, proposed_by=pr.get("who"), action=pr["action"], rationale=pr.get("rationale"))
+                    K.audit(web.etc_dir, who=self._who(), event="dismiss", id=pid, proposed_by=pr.get("who"), action=pr["action"], rationale=pr.get("rationale"))
                     return self._json(200, {"dismissed": pid})
                 if path.startswith("/api/"):
                     aid = path[len("/api/"):]
                     action = C.by_id(aid)
                     if not action:
                         return self._json(404, {"error": f"no action {aid}"})
-                    if action["risk"] == "read":
+                    if action["risk"] == "read" and aid not in BODY_READS:
                         return self._json(405, {"error": f"{aid} is a GET"})
-                    code, res = run_action(web, aid, body, "operator")
+                    code, res = run_action(web, aid, body, self._who())
                     return self._json(code, res)
                 if path == "/connections":
                     name, aut = str(body.get("name", "")).strip(), str(body.get("autonomy", "propose"))
                     if aut == "act" and str(body.get("confirm", "")) != name:
-                        return self._send(400, self._page("Connections", connections_body(web, msg="Minting at act needs the confirm: name the connection."), "/connections"))
+                        return self._send(400, self._page("AI agents", connections_body(web, msg="Adding an agent at act needs the confirm: type its name."), "/connect/agents"))
                     try:
-                        minted = K.mint(web.etc_dir, name, aut)
+                        minted = K.mint(web.etc_dir, name, aut, who=self._who())
                     except ValueError as ex:
-                        return self._send(400, self._page("Connections", connections_body(web, msg=str(ex)), "/connections"))
-                    return self._send(200, self._page("Connections", connections_body(web, minted=minted), "/connections"))
+                        return self._send(400, self._page("AI agents", connections_body(web, msg=str(ex)), "/connect/agents"))
+                    return self._send(200, self._page("AI agents", connections_body(web, minted=minted), "/connect/agents"))
                 if path == "/connections/autonomy":
                     cid = str(body.get("id", ""))
                     conn = next((c for c in K.list_connections(web.etc_dir) if c.get("id") == cid), None)
                     if not conn or str(body.get("confirm", "")) != conn.get("name"):
-                        return self._send(400, self._page("Connections", connections_body(web, msg="Changing an autonomy needs the confirm: name the connection."), "/connections"))
-                    K.set_autonomy(web.etc_dir, cid, str(body.get("autonomy", "")))
+                        return self._send(400, self._page("AI agents", connections_body(web, msg="Changing an autonomy needs the confirm: type the agent's name."), "/connect/agents"))
+                    K.set_autonomy(web.etc_dir, cid, str(body.get("autonomy", "")), who=self._who())
                     return self._redirect("/connections")
                 if path == "/connections/revoke":
-                    K.revoke(web.etc_dir, str(body.get("id", "")))
+                    K.revoke(web.etc_dir, str(body.get("id", "")), who=self._who())
                     return self._redirect("/connections")
                 if path == "/settings/quick":
                     out, err = quick_save(web.etc_dir, [ln for ln in str(body.get("quick", "")).splitlines()])
                     web._quick_err = err or ""
                     if not err:
-                        K.audit(web.etc_dir, who="operator", event="quick-saved", count=len(out))
+                        K.audit(web.etc_dir, who=self._who(), event="quick-saved", count=len(out))
                     return self._send(400 if err else 200, self._page("Settings", settings_body(web, saved="" if err else "quick"), "/settings"))
                 if path == "/settings":
                     ctx = str(body.get("context", ""))[:20000]
                     with open(os.path.join(web.etc_dir, "context.md"), "w") as fh:
                         fh.write(ctx)
-                    K.audit(web.etc_dir, who="operator", event="context-saved", bytes=len(ctx.encode()))
+                    K.audit(web.etc_dir, who=self._who(), event="context-saved", bytes=len(ctx.encode()))
                     return self._send(200, self._page("Settings", settings_body(web, saved="brief"), "/settings"))
                 return self._json(404, {"error": "no such route"})
             if not web.auth_on:
                 return self._redirect("/")
             ip = client_ip(self)
             if throttled(ip):
-                return self._send(429, page("Sign in", login_body("Too many attempts. Wait a minute.")))
+                return self._send(429, page("Sign in", login_body("Too many attempts. Wait a minute.", **self._signin_ident()), menu=False))
             form = urllib.parse.parse_qs(self._raw().decode("utf-8", "replace"))
             pw = (form.get("password") or [""])[0]
+            name = clean_name((form.get("name") or [""])[0])
+            if name is None:
+                return self._send(400, page("Sign in", login_body("Type your name: 1 to 40 characters. It goes on what you change.", **self._signin_ident()), menu=False))
             if pw and os.path.exists(web.passwd) and check_password(web.passwd, pw):
-                cookie = f"mm_session={web.sessions.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_HOURS * 3600}" + ("; Secure" if over_tls(self) else "")   # Spec 057
-                return self._redirect("/", {"Set-Cookie": cookie})
+                K.audit(web.etc_dir, who=f"operator: {name}", event="sign-in")
+                return self._redirect("/", {"Set-Cookie": self._cookie(web.sessions.issue(name))})
             note_fail(ip)
-            return self._send(401, page("Sign in", login_body("That is not the operator password.")))
+            return self._send(401, page("Sign in", login_body("That is not the operator password.", **self._signin_ident()), menu=False))
+
+        def _cookie(self, value, clear=False):
+            if clear:
+                return "mm_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0" + ("; Secure" if over_tls(self) else "")
+            return f"mm_session={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_HOURS * 3600}" + ("; Secure" if over_tls(self) else "")   # Spec 057
+
+        def _signin_ident(self):
+            """Spec 109: what the sign-in page may say before sign-in: the site's name, Hub or Box, and the address.
+            Nothing else from the bridge."""
+            st = self._ask("status")
+            site = (st or {}).get("site") if isinstance((st or {}).get("site"), dict) else {}
+            name = str(site.get("name") or "").strip() or str(web.config.get("SITE_NAME") or "").strip() or socket.gethostname()
+            kind = "Hub" if str(web.config.get("MODE") or "") == "hub" or (st or {}).get("mode") == "hub" else "Box"
+            addr = (str(web.config.get("SITE_ADDRESS") or "").strip() or str(web.config.get("ROUTE_HOST") or "").strip()
+                    or str(self.headers.get("Host") or "").strip())
+            return {"site": name, "kind": kind, "address": addr[:200]}
+
+        def _logout(self):
+            sess = self._session()
+            if not sess:
+                return self._json(401, {"error": "sign in first"})
+            web.sessions.revoke(sess["sid"], sess["exp"])
+            K.audit(web.etc_dir, who=f"operator: {sess['name']}", event="sign-out")
+            return self._redirect("/login", {"Set-Cookie": self._cookie("", clear=True)})
+
+        def _change_password(self):
+            """Spec 109, D4: current, new, again. Wrong current passwords count with sign-in's throttle."""
+            if not web.auth_on:
+                return self._json(404, {"error": "no sign-in on this computer"})
+            sess = self._session()
+            ip = client_ip(self)
+            if throttled(ip):
+                return self._send(429, self._page("Change the password", password_body("Too many attempts. Wait a minute.", forced=self._must_change()), "/computer/password"))
+            f = urllib.parse.parse_qs(self._raw().decode("utf-8", "replace"))
+            cur, new, again = ((f.get(k) or [""])[0] for k in ("current", "new", "again"))
+            if not (cur and check_password(web.passwd, cur)):
+                note_fail(ip)
+                return self._send(400, self._page("Change the password", password_body("That is not the current password.", forced=self._must_change()), "/computer/password"))
+            if len(new) < 8:
+                return self._send(400, self._page("Change the password", password_body("The new password needs 8 characters or more.", forced=self._must_change()), "/computer/password"))
+            if new != again:
+                return self._send(400, self._page("Change the password", password_body("The two new passwords are not the same.", forced=self._must_change()), "/computer/password"))
+            # Every other session ends first, so a failure can only ever leave the old password with fewer
+            # sessions, never a new password with the old sessions still good (review, 30 September 2026).
+            try:
+                web.sessions.rotate()
+                write_password(web.passwd, new)
+            except OSError as ex:
+                K.audit(web.etc_dir, who=f"operator: {sess['name']}", event="password-change-failed", error=type(ex).__name__)
+                return self._send(500, self._page("Change the password", password_body(
+                    f"The password could not be written ({type(ex).__name__}), so it has not changed. Every other session has been signed out.",
+                    forced=self._must_change()), "/computer/password"), extra={"Set-Cookie": self._cookie(web.sessions.issue(sess["name"]))})
+            try:
+                os.unlink(os.path.join(web.etc_dir, "passwd.generated"))
+            except FileNotFoundError:
+                pass
+            who = f"operator: {sess['name']}"
+            K.audit(web.etc_dir, who=who, event="password-changed")
+            return self._redirect("/", {"Set-Cookie": self._cookie(web.sessions.issue(sess["name"]))})
 
         def _mcp(self):
             ip = client_ip(self)

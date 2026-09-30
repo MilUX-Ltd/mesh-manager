@@ -94,13 +94,13 @@ check("AC1 /healthz is open and sees the bridge", (st, json.loads(data).get("ok"
 check("AC1 /login answers 200", req("GET", "/login")[0], 200)
 
 # AC2 sign-in
-st, hd, _ = req("POST", "/login", body="password=wrong")
+st, hd, _ = req("POST", "/login", body="name=Test+operator&password=wrong")
 check("AC2 wrong password: 401 and no cookie", (st, "set-cookie" in hd), (401, False))
 for _ in range(5):
-    req("POST", "/login", body="password=wrong")
-check("AC2 the sixth wrong attempt inside a minute: 429", req("POST", "/login", body="password=wrong")[0], 429)
+    req("POST", "/login", body="name=Test+operator&password=wrong")
+check("AC2 the sixth wrong attempt inside a minute: 429", req("POST", "/login", body="name=Test+operator&password=wrong")[0], 429)
 W.reset_throttle()
-st, hd, _ = req("POST", "/login", body="password=correct+horse")
+st, hd, _ = req("POST", "/login", body="name=Test+operator&password=correct+horse")
 check("AC2 right password: redirect to /", (st, hd.get("location")), (302, "/"))
 cookie = hd.get("set-cookie", "").split(";")[0]
 check_true("AC2 a session cookie is set", cookie.startswith("mm_session="))
@@ -108,7 +108,8 @@ tampered = cookie[:-4] + "zzzz"
 check("AC2 a tampered cookie is refused", req("GET", "/api/status", cookie=tampered)[0], 401)
 
 # AC3 pages
-st, _, home = req("GET", "/", cookie=cookie); home = home.decode()
+# Spec 110 (LESSONS 30): Home replaced the overview at /; what it held about this computer is on This radio
+st, _, home = req("GET", "/radio", cookie=cookie); home = home.decode()
 check("AC3 overview answers", st, 200)
 for want in ("TAK Gateway", "EU_868", "SHORT_FAST", "/dev/serial/by-id/usb-x-if00", "MILUX-TAK", "127.0.0.1"):
     check_true(f"AC3 overview carries {want}", want in home)
@@ -162,7 +163,7 @@ srv2 = W.make_server(bind="127.0.0.1", port=0, socket_path=sock_path, etc_dir=et
 port2 = srv2.server_address[1]
 threading.Thread(target=srv2.serve_forever, daemon=True).start()
 time.sleep(0.2)
-c2 = http.client.HTTPConnection("127.0.0.1", port2, timeout=5); c2.request("GET", "/"); r2 = c2.getresponse(); body2 = r2.read().decode(); c2.close()
+c2 = http.client.HTTPConnection("127.0.0.1", port2, timeout=5); c2.request("GET", "/radio"); r2 = c2.getresponse(); body2 = r2.read().decode(); c2.close()   # Spec 110: the closed statement is on This radio
 check_true("AUTH=off: the overview answers with no cookie and says sign-in is off", r2.status == 200 and "Sign-in is off" in body2)
 c2 = http.client.HTTPConnection("127.0.0.1", port2, timeout=5); c2.request("GET", "/login"); r2 = c2.getresponse(); r2.read(); c2.close()
 check("AUTH=off: /login redirects home", (r2.status, r2.getheader("Location")), (302, "/"))

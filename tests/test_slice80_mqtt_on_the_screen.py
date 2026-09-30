@@ -57,7 +57,8 @@ import re as _re
 _call = _re.search(r'radio_body\(self\._ask\("config"\)[^)]*\)', web)
 check_true("AC6 the route hands it the state",
            _call is not None and 'st.get("mqtt")' in _call.group(0), _call.group(0) if _call else "no radio_body call")
-check_true("AC6 the state strip carries it, linked to Radio", "This box carries the radio&#39;s MQTT" in web)
+# Spec 108 (LESSONS 30, D2): the strip names the computer through this_box(), so a laptop is never called the box.
+check_true("AC6 the state strip carries it, linked to Radio", "{this_box(True)} carries the radio&#39;s MQTT" in web)
 
 # AC7 a box with no proxy is not made to look faulty in the strip
 check_true("AC7 the strip only speaks when there is a proxy", 'if mq.get("running"):' in web)

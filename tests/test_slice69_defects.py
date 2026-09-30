@@ -30,7 +30,8 @@ for path in ("/help", "/about"):
     check_true(f"AC1 no journalctl on a laptop ({path})", "journalctl" not in b)
     check_true(f"AC2 a laptop is not called a box ({path})", "this box" not in b.lower() or "this laptop" in b.lower())
 _, hb = get(box, "/help")
-check_true("AC1 a box still gets the unit's log", "journalctl" in hb)
+# Spec 108 (LESSONS 30): journalctl is retired on operator screens; every shape's Help points at Health, Log.
+check_true("AC1 a box's Help points at the log on the screen", "Health, Log" in hb and "journalctl" not in hb)
 _, lf = get(lap, "/")
 check_true("AC2 the footer on a laptop says laptop", "from the laptop that carries the radio" in lf)
 _, bf = get(box, "/")
@@ -47,7 +48,7 @@ check("AC3 a plain value is left alone", W.audit_detail({"version": "0.27.0"}), 
 check("AC3 and nothing is nothing", W.audit_detail({}), "")
 
 # AC4: the counts reconcile
-_, home = get(box, "/")
+_, home = get(box, "/radio")   # Spec 110 (LESSONS 30): the database count card moved from / to This radio
 check_true("AC4 the strip says the radio's database includes the radio",
            "in the radio's database" in home and "this radio included" in home)
 

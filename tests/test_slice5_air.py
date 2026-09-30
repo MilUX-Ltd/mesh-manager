@@ -41,7 +41,7 @@ def req(method, path, body=None, cookie=None, ctype="application/x-www-form-urle
     c.close(); return r.status, hd, data
 
 
-st, hd, _ = req("POST", "/login", body="password=correct+horse")
+st, hd, _ = req("POST", "/login", body="name=Test+operator&password=correct+horse")
 cookie = hd.get("set-cookie", "").split(";")[0]
 
 # AC1 the messages page and the chat ring

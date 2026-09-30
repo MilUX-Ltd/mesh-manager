@@ -20,7 +20,7 @@ def menu_lines(status, url, radio, update=None):
     tested without a menu bar."""
     st = status or {}
     if not radio:
-        first = "No radio: showing the demo mesh"
+        first = "No radio: watching for one"
     elif st.get("bootloader"):
         first = f"Radio in bootloader on {os.path.basename(str(radio))}"
     elif st.get("connected"):
@@ -85,7 +85,7 @@ def main(argv=None):
         import rumps
     except Exception:  # noqa: BLE001
         print("no menu bar here (rumps is not installed): running the screen in this terminal instead", flush=True)
-        return D._run_together(dirs, radio is None, radio, None, False)
+        return D._run_together(dirs, False, radio, None, False)   # Spec 062 and 110: a site watching for its radio, never the demo
 
     run = D.serve_in_process(dirs, demo=False, radio=radio, port=None)   # Spec 062: a site, radio or not
     D.watch_for_radio(run, dirs)

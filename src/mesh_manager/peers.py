@@ -75,10 +75,19 @@ def verify(cert_pem, data, sig_b64):
 
 
 def parse_invite(text):
-    """`<host>:<port>/<code>/<fingerprint>`; the code may be empty (a pinned site redialling)."""
+    """`<host>:<port>/<code>/<fingerprint>/<expires>` (Spec 111: the expiry in Unix seconds, so the joiner can
+    show the time left), or the three-part form 1.4 wrote, whose expiry is not known. The code may be empty (a
+    pinned site redialling)."""
     text = str(text or "").strip()
     try:
-        addr, code, fp = text.split("/", 2)
+        parts = text.split("/")
+        if len(parts) == 3:
+            (addr, code, fp), expires = parts, None
+        elif len(parts) == 4:
+            addr, code, fp, exp = parts
+            expires = int(exp.strip())
+        else:
+            return None
         host, port = addr.rsplit(":", 1)
         port = int(port)
     except ValueError:
@@ -86,7 +95,44 @@ def parse_invite(text):
     fp = fp.strip().lower()
     if not host or not (1 <= port <= 65535) or len(fp) != 64 or any(c not in "0123456789abcdef" for c in fp):
         return None
-    return {"host": host.strip(), "port": port, "code": code.strip(), "fingerprint": fp}
+    if expires is not None and not 0 < expires < 2 ** 40:
+        return None
+    return {"host": host.strip(), "port": port, "code": code.strip(), "fingerprint": fp, "expires": expires}
+
+
+# ---- Spec 111, D10: three check words, read aloud at both ends ----------------------------------------------
+WORDLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wordlists", "bip39-english.txt")
+_WORDS = []
+
+
+def bip39_words():
+    """The BIP-39 English list, 2048 words, bundled with its licence (wordlists/)."""
+    if not _WORDS:
+        with open(WORDLIST, encoding="utf-8") as fh:
+            words = [w.strip() for w in fh if w.strip()]
+        if len(words) != 2048 or len(set(words)) != 2048:
+            raise ValueError(f"{WORDLIST} is not the 2048-word BIP-39 list")
+        _WORDS.extend(words)
+    return list(_WORDS)
+
+
+def check_words(fp):
+    """Three words from a site's fingerprint: SHA-256 of a fixed prefix and the 64 hex characters, the first 33
+    bits big-endian as three 11-bit indices. Both ends compute them from the fingerprint they hold, so a person
+    reading them aloud knows the invite names the site they meant."""
+    wl = bip39_words()
+    dig = hashlib.sha256(b"mesh-manager check words v1\n" + str(fp).strip().lower().encode("ascii")).digest()
+    n = int.from_bytes(dig[:5], "big") >> 7
+    return [wl[(n >> 22) & 2047], wl[(n >> 11) & 2047], wl[n & 2047]]
+
+
+# Spec 111, D6: each refusal names its own fault, so both ends can say what went wrong
+REFUSE_WRONG = "that code is wrong: no invite here was made with it. Check the code, or ask for a new invite"
+REFUSE_USED = "that code has been used already: an invite works once. Ask for a new invite"
+REFUSE_EXPIRED = "that code has expired: an invite lasts ten minutes. Ask for a new invite"
+REFUSE_CANCELLED = "that invite was cancelled at the site that made it. Ask for a new invite"
+REFUSE_CERT = "the certificate does not match the site id"
+FINAL = (REFUSE_WRONG, REFUSE_USED, REFUSE_EXPIRED, REFUSE_CANCELLED)
 
 
 NEVER_KEYS = frozenset(("psk", "key", "keys", "private_key", "privatekey", "admin_key", "adminkey", "admin_keys", "url", "join_url",
@@ -252,16 +298,21 @@ class Peering:
                     self._refuse(sock, "the signature does not match the pinned certificate"); return
                 self.b.peer_touch(claimed, cname)
             else:
+                # Spec 111: the code is checked, then the certificate, then spent, then the site pinned, so a
+                # dialler with a bad certificate never burns the right site's code
                 code = str(auth.get("code") or "")
                 why = self.b.peer_check_code(code)
                 if why:
-                    self._refuse(sock, why); return
+                    self._refuse(sock, why, code); return
                 try:
                     cert = x509.load_pem_x509_certificate(cert_pem.encode())
                 except ValueError:
-                    self._refuse(sock, "no certificate offered"); return
+                    self._refuse(sock, "no certificate offered", code); return
                 if fingerprint(cert) != claimed or not verify(cert_pem, nonce, auth.get("auth", "")):
-                    self._refuse(sock, "the certificate does not match the site id"); return
+                    self._refuse(sock, REFUSE_CERT, code); return
+                why = self.b.peer_spend_code(code)
+                if why:
+                    self._refuse(sock, why, code); return
                 self.b.peer_pin(claimed, cname, cert_pem, "in")
             sock.sendall((json.dumps({"ok": True, "site": self.id, "name": self.name}) + "\n").encode())
             sock.settimeout(AWAY_AFTER + 10)
@@ -273,7 +324,14 @@ class Peering:
             except OSError:
                 pass
 
-    def _refuse(self, sock, why):
+    def _refuse(self, sock, why, code=None):
+        """Say no, and (Spec 111) note it against the invite the code named, in the same words, so the
+        listener's screen shows what the dialler was told."""
+        if code is not None:
+            try:
+                self.b.peer_note_refusal(code, why)
+            except Exception as ex:  # noqa: BLE001
+                self.b.logger.info(f"peers: the refusal could not be noted: {type(ex).__name__}")
         try:
             sock.sendall((json.dumps({"error": why}) + "\n").encode())
         except OSError:
@@ -304,8 +362,8 @@ class Peering:
                     time.sleep(0.5)
                 continue
             self.refusals[peer_id] = why
-            if why and "code" in why and "used" in why:
-                return  # a spent code will not work next time either
+            if why in FINAL:
+                return  # a wrong, spent, expired or cancelled code will not work next time either
             time.sleep(BACKOFF[min(n, len(BACKOFF) - 1)]); n += 1
 
     def _dial_once(self, peer_id, host, port, code):

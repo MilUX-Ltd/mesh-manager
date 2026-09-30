@@ -88,7 +88,10 @@ reg = json.load(open(os.path.join(state, "register.json"))).get("!ee000005", {})
 check_true("AC5 the register records it as managed with onboarded_at", reg.get("managed") is True and bool(reg.get("onboarded_at")))
 exp = r.get("export") or ""
 check_true("AC5 the export sits under exports/<id>/ at mode 0600 and holds the key", exp.startswith(os.path.join(state, "exports", "!ee000005")) and os.path.exists(exp)
-           and stat.S_IMODE(os.stat(exp).st_mode) == 0o600 and gw_ch.settings.psk.hex() in open(exp).read())
+           and stat.S_IMODE(os.stat(exp).st_mode) == 0o600
+           # Spec 112 AC1 (LESSONS 30): the export is taken before any write, so it holds the device's own key as it
+           # was, not the gateway's, which was only there because the export used to come after the writes
+           and bool((json.load(open(exp)).get("channels") or [{}])[0].get("psk")) and gw_ch.settings.psk.hex() not in open(exp).read())
 check_true("AC5 the device was closed after onboarding", dev is not None and fakegw_lib.FakeBenchIface.opened[-1].closed)
 # three foreign keys
 class Full(fakegw_lib.FakeBenchIface):

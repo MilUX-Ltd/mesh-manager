@@ -43,7 +43,7 @@ W.write_password(os.path.join(etc, "passwd"), "correct horse")
 port = srv.server_address[1]; threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
 def login(headers):
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    c.request("POST", "/login", body="password=correct+horse", headers={"Content-Type": "application/x-www-form-urlencoded", **headers}); r = c.getresponse(); r.read(); ck = r.getheader("Set-Cookie") or ""; c.close()
+    c.request("POST", "/login", body="name=Test+operator&password=correct+horse", headers={"Content-Type": "application/x-www-form-urlencoded", **headers}); r = c.getresponse(); r.read(); ck = r.getheader("Set-Cookie") or ""; c.close()
     return r.status, ck
 st1, ck1 = login({"X-Forwarded-Proto": "https", "X-Forwarded-For": "203.0.113.5"})
 st2, ck2 = login({})

@@ -86,7 +86,9 @@ heard_nodes = len([n for n in NODES if n.get("heard_here", True)])
 check("AC3 the strip's heard-here count equals the Nodes page's", heard_strip, heard_nodes)
 
 # AC4 nav and targets
-check_true("AC4 four primary items and More", all(x in pages["/"] for x in ("href='/'", "href='/messages'", "href='/channels'", "href='/radio'")) and "More" in pages["/"])
+# Spec 107 (LESSONS 30): the header bar of five and the More menu became the menu rail of eight; Channels is a
+# tab under Devices and channels. The rail's own contract is test_slice107_menu_rail.py.
+check_true("AC4 the menu rail, with Home, Messages, Devices and channels and This computer", "aria-label='Menu'" in pages["/"] and all(x in pages["/"] for x in ("href='/'", "href='/messages'", "href='/register'", "href='/radio'")))
 check_true("AC4 the tap token is 32px and buttons use it (the 0.2.9 density pass)", "--tap:32px" in css.replace(" ", "") and re.search(r"button\{[^}]*min-height:\s*var\(--tap\)", css) is not None)
 check_true("AC4 nav links use the tap height", re.search(r"nav a\{[^}]*min-height:\s*var\(--tap\)", css) is not None)
 

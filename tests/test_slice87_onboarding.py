@@ -107,7 +107,7 @@ def get(path, port=port):
 
 
 # ---- AC5 the Connections page carries the next step -------------------------------------------------
-st, _, raw = get("/connections")
+st, _, raw = get("/connect/agents")   # Spec 111 (LESSONS 30): the agents have their own tab under Connect; /connections is the sites
 page = raw.decode("utf-8", "replace")
 check("AC5 the Connections page answers", st, 200)
 check_true("AC5 it says the agent needs the role and the skills too",

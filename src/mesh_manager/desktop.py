@@ -33,6 +33,9 @@ def first_config(dirs, serial=None):
         lines.append(f"SERIAL={serial}")
     with open(dirs["config"], "w") as fh:
         fh.write("\n".join(lines) + "\n")
+    # Spec 110: a fresh config is the one moment a first run is due; an upgrade never writes this
+    with open(os.path.join(dirs["etc"], "first-run.json"), "w") as fh:
+        json.dump({"state": "pending"}, fh)
     return True
 
 

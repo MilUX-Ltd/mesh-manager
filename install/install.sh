@@ -3,7 +3,11 @@
 #
 #   sudo ./install.sh <mesh-manager-<ver>-<arch>.tgz> [--serial <by-id path>]
 #        [--filter-group <group>] [--region EU_868|US] [--channel <name>]
-#        [--password <operator password>] [--no-auth] [--bind <addr>] [--port <n>] [--dry-run]
+#        [--password-stdin] [--no-auth] [--bind <addr>] [--port <n>] [--dry-run]
+#        (the operator password comes from MESH_MANAGER_PASSWORD or, with --password-stdin, one line on
+#        standard input; never the command line, where every account on the box can read it: Spec 109.
+#        Under sudo use --password-stdin: sudo drops an exported variable, and "sudo VAR=... install.sh"
+#        puts the password back on the command line)
 #        [--mode tak-server|server|hub]   (server: a box with no TAK Server beside it, Spec 050; hub: a site with no radio
 #        that other Mesh Managers join, Spec 052) [--peer-bind <addr>] [--peer-port <n>] [--site-name <name>] [--site-address <host>]
 #        [--tls-route <host>]   (Spec 057: Caddy fronts the screen at https://<host>; the firewall is yours to open, 80 and 443)
@@ -34,13 +38,17 @@ DRY=0; ROUTE_HOST_ARG=""; ROUTE_HOST=""; TARBALL=""; SERIAL=""; REGION=""; CHANN
 # of the variables: rebuilding it dropped the tarball's directory and every other flag they had
 # already worked out. Found in review, 14 September 2026.
 ORIG_ARGS=("$@")
+PW_STDIN=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --serial)        SERIAL="${2:-}"; shift 2 ;;
         --filter-group)  FILTER_GROUP="${2:-}"; shift 2 ;;
         --region)        REGION="${2:-}"; shift 2 ;;
         --channel)       CHANNEL="${2:-}"; shift 2 ;;
-        --password)      PASSWORD="${2:-}"; AUTH_ARG="on"; shift 2 ;;
+        --password)      echo "ERR the password is not taken on the command line, where every account on this box can read it" >&2
+                         echo "    set MESH_MANAGER_PASSWORD, or pass --password-stdin and give it on standard input" >&2
+                         exit 2 ;;
+        --password-stdin) PW_STDIN=1; AUTH_ARG="on"; shift ;;
         --no-auth)       AUTH_ARG="off"; shift ;;
         --bind)          BIND_ARG="${2:-}"; shift 2 ;;
         --port)          PORT_ARG="${2:-}"; shift 2 ;;
@@ -64,6 +72,17 @@ while [[ $# -gt 0 ]]; do
         *)               [[ -z "$TARBALL" ]] && TARBALL="$1" || { echo "ERR one tarball only" >&2; exit 2; }; shift ;;
     esac
 done
+# Spec 109: the password from standard input or the environment, never argv
+if (( PW_STDIN )); then
+    if [[ -t 0 ]]; then
+        printf 'Operator password (not shown): ' >&2; IFS= read -rs PASSWORD || true; echo >&2
+    else
+        IFS= read -r PASSWORD || true
+    fi
+    [[ -n "$PASSWORD" ]] || { echo "ERR --password-stdin was given but no password arrived on standard input; nothing was changed" >&2; exit 2; }
+elif [[ -n "${MESH_MANAGER_PASSWORD:-}" ]]; then
+    PASSWORD="$MESH_MANAGER_PASSWORD"; AUTH_ARG="on"
+fi
 # the interpreter for the venv: each cut is built for one Python (release/PYTHON in the tarball; 3.12 for Ubuntu 24.04,
 # 3.14 for 26.04, named -py314). The box needs that python and its venv module; MESH_MANAGER_PYTHON names one outright.
 PYT="3.12"
@@ -121,6 +140,7 @@ fi
 # ---- what this box already carries ---------------------------------------------------------
 EXTRA_ARGS=""; CUR_SERIAL=""; CUR_REGION=""; CUR_CHANNEL=""; CUR_FILTER_GROUP=""; CUR_EXTRA_ARGS=""; CUR_BIND=""; CUR_PORT=""; CUR_AUTH=""; CUR_MAP_LAT=""; CUR_MAP_LON=""; CUR_MAP_TILES=""; CUR_MAP_MBTILES_DIR=""; CUR_MAP_GPS=""; CUR_UPDATE_REPO=""; CUR_UPDATE_MODE=""; CUR_UPDATE_CHANNEL=""; AUTH="on"; MAP_LAT=""; MAP_LON=""; MAP_TILES=""; MAP_MBTILES_DIR=""; MAP_GPS=""; UPDATE_REPO=""; UPDATE_MODE=""; UPDATE_CHANNEL=""; CUR_MODE=""; MODE=""; CUR_PEER_BIND=""; CUR_PEER_PORT=""; CUR_SITE_NAME=""; CUR_SITE_ADDRESS=""; PEER_BIND=""; PEER_PORT=""; SITE_NAME=""; SITE_ADDRESS=""
 OLD_SERIAL=""; OLD_REGION=""; OLD_CHANNEL=""; OLD_FILTER_GROUP=""; OLD_EXTRA_ARGS=""; OLD_BIND=""; OLD_PORT=""; OLD_AUTH=""
+FRESH_CONF=0; [[ -f "$CONF" ]] || FRESH_CONF=1   # Spec 110: only a first config makes a first run due
 if [[ -f "$CONF" ]]; then
     # a previous Mesh Manager install is the first source of truth; flags override
     read_conf "$CONF" CUR_
@@ -480,8 +500,16 @@ if (( ! DRY )); then
     mkdir -p "$ETC"; want_conf > "$CONF"; chmod 0644 "$CONF"
     chown "root:$SVCUSER" "$ETC"; chmod 0770 "$ETC"   # the screen writes connections, the brief, the audit and the token here
 fi
+if (( FRESH_CONF )); then
+    # Spec 110: the first config, so the screen walks the operator through naming this computer, the radio
+    # and the channel. An upgrade has a config already and is never sent through it.
+    act "write $L_ETC/first-run.json: this is the first config, so the first run is due and the screen opens on it"
+    if (( ! DRY )); then
+        printf '{"state": "pending"}\n' > "$ETC/first-run.json"; chown "$SVCUSER:$SVCUSER" "$ETC/first-run.json"; chmod 0640 "$ETC/first-run.json"
+    fi
+fi
 if [[ "$AUTH" == "off" ]]; then
-    act "sign-in off (AUTH=off): anyone who can reach $BIND:$PORT is the operator; turn it on with --password"
+    act "sign-in off (AUTH=off): anyone who can reach $BIND:$PORT is the operator; turn it on with MESH_MANAGER_PASSWORD or --password-stdin"
 elif [[ -n "$PASSWORD" || ! -f "$ETC/passwd" ]]; then
     if [[ -z "$PASSWORD" ]]; then
         PASSWORD=$("$PY" -c 'import secrets; print(secrets.token_urlsafe(12))')
@@ -489,22 +517,29 @@ elif [[ -n "$PASSWORD" || ! -f "$ETC/passwd" ]]; then
     else
         GENERATED=0
     fi
-    [[ ${#PASSWORD} -ge 8 ]] || die "--password must be at least 8 characters"
+    [[ ${#PASSWORD} -ge 8 ]] || die "the operator password must be at least 8 characters"
     act "write the operator password hash to $L_ETC/passwd"
     if (( ! DRY )); then
         MESH_MANAGER_PASSWORD="$PASSWORD" "$OPT/venv/bin/mesh-manager-web" --etc "$ETC" --write-password >/dev/null \
             || die "could not write the password"
+        PASSWORD_WRITTEN=1
         chown "root:$SVCUSER" "$ETC/passwd"; chmod 0640 "$ETC/passwd"
         if (( GENERATED )); then
-            log "operator password for the screen, shown ONCE (set another with --password): $PASSWORD"
+            # Spec 109, D4: the mark makes the screen ask for a new one at first sign-in
+            printf 'generated at install, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$ETC/passwd.generated"
+            chown "root:$SVCUSER" "$ETC/passwd.generated"; chmod 0640 "$ETC/passwd.generated"
+            log "operator password for the screen, shown ONCE; it must be changed at first sign-in: $PASSWORD"
+        else
+            rm -f "$ETC/passwd.generated"
         fi
     else
-        (( GENERATED )) && echo "would: generate an operator password and show it once"
+        (( GENERATED )) && echo "would: generate an operator password and show it once; it must be changed at first sign-in ($L_ETC/passwd.generated)"
     fi
 fi
 act "write $L_ETC/web.secret (the session signing secret, owned by $SVCUSER)"
-if (( ! DRY )) && [[ ! -f "$ETC/web.secret" ]]; then
-    head -c 32 /dev/urandom > "$ETC/web.secret"; chown "$SVCUSER:$SVCUSER" "$ETC/web.secret"; chmod 0600 "$ETC/web.secret"
+# Spec 109 review: a password written here is the recovery route after a leak, so it ends every session too
+if (( ! DRY )) && [[ ! -f "$ETC/web.secret" || "${PASSWORD_WRITTEN:-0}" == 1 ]]; then
+    _sec=$(mktemp "$ETC/.web.secret.XXXXXXXX"); head -c 32 /dev/urandom > "$_sec"; mv -f "$_sec" "$ETC/web.secret"; chown "$SVCUSER:$SVCUSER" "$ETC/web.secret"; chmod 0600 "$ETC/web.secret"
 fi
 act "install $UNIT.service (Type=notify, WatchdogSec=900: liveness at the serial read loop)"
 if (( ! DRY )); then

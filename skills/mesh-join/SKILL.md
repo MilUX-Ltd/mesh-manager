@@ -6,7 +6,7 @@ audit_verdict: pass with cautions
 cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
 audit_sha: b2d5487ff1c390ae
-product_version: 1.4.0
+product_version: 1.5.0
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -52,10 +52,17 @@ broadcast: say what is about to go out and why.
 reconciles when it comes back. Silence on a link for an hour is not proof of loss, so read
 `peers` for when the link was last good before calling anything missing.
 
-`peer_invite`, `peer_join`, `peer_forget` and `peer_sharing_set` are the writes, at `act` or
-through `propose`. Joining a site is a standing arrangement between two operators, not a
-configuration change: propose it with the name of the far site and what the table would let out,
-and let the operator answer.
+`peer_invite`, `peer_invite_cancel`, `peer_join`, `peer_forget` and `peer_sharing_set` are the
+writes, at `act` or through `propose`. Joining a site is a standing arrangement between two
+operators, not a configuration change: propose it with the name of the far site and what the table
+would let out, and let the operator answer.
+
+**Read an invite before anything dials.** `site_invite_read` is a read: it says where the invite
+dials, which site it names and that site's three check words, and how long it has left. Give the
+operator the three words to compare aloud with the person at the far site; if they differ, the
+invite is not the one they meant. A join can carry its sharing table, so what leaves is decided
+before the first picture crosses. An invite works once: a refusal says whether the code was
+wrong, used, expired or cancelled, and the answer is a new invite, not another try.
 
 ## MQTT
 

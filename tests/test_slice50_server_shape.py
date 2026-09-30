@@ -41,14 +41,14 @@ def screen(status_extra):
     port = srv.server_address[1]; threading.Thread(target=srv.serve_forever, daemon=True).start(); time.sleep(0.3)
     def get(p):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return b
-    return {p: get(p) for p in ("/", "/health", "/help", "/map")}
+    return {p: get(p) for p in ("/", "/health", "/help", "/map", "/radio")}
 
 pages = screen({"mode": "server", "tak": "off"})
 allp = "\n".join(pages.values())
 check_true("AC4 the strip says Managing the mesh", "Managing the mesh" in pages["/"])
 for bad in ("Bridging to TAK", "To TAK chat", "data-action='alert_test'", "sent to TAK", "forwarded to TAK as a marker", "Point it at TAK", "forwards to TAK"):
     check(f"AC4 nothing says: {bad}", bad in allp, False)
-check_true("AC4 the home card is the last packet heard", "Last packet heard" in pages["/"])
+check_true("AC4 the home card is the last packet heard", "Last packet heard" in pages["/radio"])   # Spec 110: the card moved to This radio
 check_true("AC4 help says the box runs without TAK", "runs without TAK" in pages["/help"])
 
 pages = screen({"mode": "tak-server", "tak": "on"})

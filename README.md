@@ -176,6 +176,14 @@ On a box with no TAK Server, the server shape instead:
   --mode server
 ```
 
+With no password given, the installer makes one, shows it once, and the screen asks for a new one at
+the first sign-in. To set your own, pipe it in, so it never sits on the command line where every account
+on the box can read it:
+
+```bash
+printf '%s\n' "$PASSWORD" | sudo ./install.sh mesh-manager-<version>-amd64.tgz --password-stdin ...
+```
+
 `--help` lists the rest: where to bind, whether to ask for a password, where the map tiles
 live, how the box knows where it is, and how it updates. A dry run prints every line it would
 write and changes nothing. The box builds its environment from wheels inside the tarball, so
@@ -191,7 +199,8 @@ A screen reached from a browser elsewhere can have a name and a certificate of i
 Take the disk image or the Windows zip from the [releases page](../../releases). The application
 finds the radio on USB, shows the screen in its own window, and sits in the menu bar on macOS or
 the notification area on Windows; closing the window leaves the bridge running, and Quit stops
-it. With no radio it shows the demo mesh, so it can be looked at before any hardware arrives.
+it. With no radio it is a site watching for one, and picks the radio up when it is plugged in.
+The demo mesh is only ever what `--demo` asks for.
 
 Neither build is signed by Apple or Microsoft yet, so the first run needs right-click then Open
 on a Mac, or More info then Run anyway on Windows.

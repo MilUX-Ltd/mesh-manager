@@ -44,7 +44,7 @@ nothing on the screen speaks of TAK or forwarding. Everything else in this guide
 ### On a laptop
 
 On a Mac, open `Mesh Manager.app` from the disk image: it appears in the menu bar, not the Dock, finds the radio
-on USB (or shows the demo mesh when there is none), and shows the screen in its own window. Closing that window
+on USB (or watches for one when there is none), and shows the screen in its own window. Closing that window
 does not stop anything: the bridge keeps running and the menu-bar item brings the window back, or opens the
 screen in a browser if you would rather. Opening the app a second time shows the copy already running rather
 than starting another, since only one thing can hold the radio. If a run goes wrong, `log/app.log` beside its

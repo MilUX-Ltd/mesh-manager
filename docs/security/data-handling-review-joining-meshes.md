@@ -30,7 +30,12 @@ Positions cross as part of the picture; that is the point of the picture, and In
 ## At rest
 
 The site identity (`site.key`, EC P-256) sits in the state directory at 0600; the certificate beside it. The peers
-file holds each peer's id, name, address, pinned certificate fingerprint and table; no code survives its single use.
+file holds each peer's id, name, address, pinned certificate fingerprint and table. An open invite's code is kept
+only until it is used, expires or is cancelled, and leaves the file at that moment (Spec 111, corrected 30 September
+2026: until 1.5.0 a used code stayed until its expiry). What stays for 24 hours is the code's SHA-256, the reason it
+ended, the invite's id and label, and the last refused attempt against it, so a late attempt is told "used" or
+"expired" rather than "wrong"; the hash of an eight-character code from a 32-letter alphabet is not a secret worth
+keeping, and it cannot be used to join.
 Remote messages, since 0.14.0, are rows in the history store (SQLite in the state directory) with their origin;
 remote pictures, waypoints and alerts are held in memory only and rebuilt from the peers on connection. The GitHub
 token for updates is a separate file at 0600, read by the screen; it is never on a link.

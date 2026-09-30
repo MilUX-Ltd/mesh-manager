@@ -64,6 +64,18 @@ class FakeNode:
             self.channels[0] = _ch(0, 1, "REPLACED", b"\x03" * 32)
             self.device_channels[0].CopyFrom(self.channels[0])
             self.localConfig.lora.region = 1; self.device_config.lora.region = 1
+            # Spec 112 (LESSONS 30): a real radio takes the code's region and preset with a replace, and Replace is now
+            # confirmed on both, so the fake applies the preset the code carries as well as the region it always set
+            try:
+                import base64
+                from meshtastic.protobuf import apponly_pb2
+                frag = url.split("#", 1)[1]
+                cs = apponly_pb2.ChannelSet(); cs.ParseFromString(base64.urlsafe_b64decode(frag + "=" * (-len(frag) % 4)))
+                if cs.HasField("lora_config"):
+                    for cfg in (self.localConfig, self.device_config):
+                        cfg.lora.region = cs.lora_config.region or 1; cfg.lora.modem_preset = cs.lora_config.modem_preset
+            except Exception:  # noqa: BLE001 - a URL the fake cannot read keeps the old behaviour
+                pass
 
     def writeConfig(self, config_name):
         # The real Node.writeConfig takes both localConfig and moduleConfig section names

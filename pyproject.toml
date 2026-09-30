@@ -37,4 +37,4 @@ version = {file = "VERSION"}
 
 [tool.setuptools.package-data]
 mesh_manager = ["PINS.json", "mesh-lessons.md", "brief/agents/*.md", "brief/skills/*/SKILL.md",
-                "static/leaflet/*", "static/leaflet/images/*.png"]
+                "static/leaflet/*", "static/leaflet/images/*.png", "static/fonts/*.woff2", "static/fonts/*.txt", "wordlists/*.txt"]

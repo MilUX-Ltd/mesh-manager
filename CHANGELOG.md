@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+## 1.5.0 (30 September 2026)
+
+**One product, easy to use.** The screen is redesigned around what an operator does, not around how the
+product was built: eight places down the left, the same on a laptop, a box and a hub, in the operator's own
+words; a first run that has a new computer working in minutes; and joining another site, or adding a device,
+as one journey each.
+
+**One menu, in plain words** (Specs 107 and 108). Home, Map, Nodes, Devices and channels, Messages, Connect,
+Health and This computer, with each old page a tab under one of them; on a phone, five tabs at the foot. A
+laptop is never called the box; another Mesh Manager is a site, an AI is an agent; no screen says peer,
+connection, online, offline, a command line or a spec number. The type is IBM Plex, bundled, so a box with no
+internet looks the same as one with it.
+
+**Sign in with your name, and change the password on the screen** (Spec 109). The sign-in page says which
+computer it is; the name you give is recorded against everything you change. Sign-out ends the session on the
+box. A password the installer made has to be changed at first sign-in, and the installer never takes a
+password on its command line: `--password-stdin` or `MESH_MANAGER_PASSWORD`.
+
+**A first run, and Home** (Spec 110). A fresh install asks for the computer's name (and, on a laptop, yours),
+shows the radio and channel it found, and offers to join a hub or invite a site; an upgrade never sees it.
+Home counts who is heard, who is quiet, who is low and how busy the air is, shows the map, lists what needs
+you, and offers the six things you are most likely to do next. A laptop with no radio is watching for one,
+never the demo. The Nodes page judges a low battery by the threshold set on Health.
+
+**Joining sites** (Spec 111). Connect offers what this computer can do: a laptop joins, a box joins and
+invites when it listens, a hub invites. An invite has a label, a countdown, a QR and three check words read
+aloud at both ends; it is read before anything dials, and the sharing is chosen before the first picture
+crosses. A refusal says whether the code was wrong, used, expired or cancelled, at both ends; a dialler with
+the wrong certificate no longer uses up the right site's code. The invite now carries its expiry, so a 1.2
+site cannot read a 1.5 invite (a 1.5 site reads both).
+
+**Add a device** (Spec 112). One tab for a tracker by USB, a phone by the channel code, and a code another
+unit gave you. Onboarding saves the tracker's old settings first, then shows each step as the tracker itself
+confirms it, and stops at the first that does not; the label, holder and group are kept. A code is read
+before it is used, and says when it is not for this mesh; a Replace is only done when the region and preset
+came back too.
+
+**A hub sees the nodes its sites reach over MQTT** (Spec 113), once each, with the freshest account kept,
+marked "via MQTT, through" the site, and never with a signal figure that belongs to somebody else's gateway.
+
+**Security.** From the reviews of this release: node names are text on the map, never markup (a fault older
+than 1.5.0); a name cannot write a second line into the config; a short or empty session secret is never
+used; a password change ends every other session first; invite codes never reach the audit or a URL.
+
 ## 1.4.0 (30 September 2026)
 
 **See the mesh over time.** Everything Mesh Manager showed was now: who is heard, what the airtime is. This

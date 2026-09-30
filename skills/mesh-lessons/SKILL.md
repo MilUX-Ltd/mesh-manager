@@ -6,7 +6,7 @@ audit_verdict: pass with cautions
 cautions_accepted: 2026-09-12, Matt Odell, MilUX Ltd
 audited_with: skill-safety-audit (MilUX meta-skills)
 audit_sha: 6c1f0a94d2b7e358
-product_version: 1.4.0
+product_version: 1.5.0
 origin: mesh-manager/skills
 source: MilUX Ltd
 maintainer: MilUX Ltd
@@ -46,12 +46,12 @@ its wording for how many of them have gone quiet.
 
 **Database only is not on the mesh.** A node with `heard_here` false is in the radio's stored
 database and has not been heard by this radio since the bridge started. Report it as not heard,
-never as "no GPS fix" or "offline"; its name may be months stale.
+never as "no GPS fix" or as gone; its name may be months stale.
 
 **A row from another site is that site's picture, not yours.** Where boxes are joined, a node can
 arrive over the link carrying `origin` and `origin_name`. This radio has not heard it. It is as
 true as the far site's own reading and as old as the last catch-up, and it is not evidence about
-your own air. Say which site a row came from whenever you report one, and never treat a peer's
+your own air. Say which site a row came from whenever you report one, and never treat another site's
 node as something your operator can reach on the bench.
 
 **Names are labels, never identity.** Join on the radio id. Two records with the same name are
@@ -74,18 +74,18 @@ precision too. Coarse positions on the map are usually a precision setting on th
 GPS fault; and a QR from one country programs a fleet onto another country's spectrum. Before
 anything travels, read `channels` and `config` and say what region the radio is on.
 
-**The radio's MQTT is not the radio's own connection.** A radio on a box is on a USB cable and has
-no wifi of its own, so it cannot reach a broker by itself; the box carries its MQTT for it. If MQTT
-looks dead, the question is whether the box's proxy is running and connected, not whether the radio
+**The radio's MQTT is not the radio's own link.** A radio on a box is on a USB cable and has
+no wifi of its own, so it cannot reach a broker by itself; Mesh Manager carries its MQTT for it. If MQTT
+looks dead, the question is whether Mesh Manager's proxy is running and connected, not whether the radio
 has a network. `mesh-join` has the detail.
 
 **Two hills away is slow and lossy.** A `traceroute` or a `request_position` may take a minute
 to answer, or not answer at all. Wait, then say what you saw on `log` and `messages` before you
 call it a fault.
 
-**The proof of a bridge depends on what the box bridges to.** On a `tak-server` box it is a marker
+**The proof of a bridge depends on what this computer bridges to.** On a `tak-server` box it is a marker
 on a TAK client that signed in normally, not a counter: `status`'s last packet forwarded is the
 bridge's half of the answer and the client screen is the operator's. On a `server` box there is no
 TAK, so there is nothing to look for on a client and saying "check TAK" is asking for something
 that does not exist; the proof there is the picture on the screen, and where sites are joined, the
-peer's copy of it. Read `mode` before you name a test.
+another site's copy of it. Read `mode` before you name a test.

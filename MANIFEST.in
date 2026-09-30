@@ -2,3 +2,4 @@ recursive-include src/mesh_manager/static *
 include src/mesh_manager/PINS.json
 include src/mesh_manager/mesh-lessons.md
 recursive-include src/mesh_manager/brief *.md
+recursive-include src/mesh_manager/wordlists *.txt

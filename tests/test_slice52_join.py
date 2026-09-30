@@ -39,7 +39,7 @@ check("AC2 a second start reads the same id back", hub2.op_status().get("site", 
 check("AC2 no listener without PEER_BIND", hub2.op_status().get("peer_port"), None)
 
 inv = hub.op_peer_invite()
-check_true("AC3 an invite: code, expiry, text", bool(inv.get("code")) and bool(inv.get("expires")) and str(inv.get("invite", "")).startswith("127.0.0.1:") and inv.get("invite", "").count("/") == 2, repr(inv))
+check_true("AC3 an invite: code, expiry, text", bool(inv.get("code")) and bool(inv.get("expires")) and str(inv.get("invite", "")).startswith("127.0.0.1:") and inv.get("invite", "").count("/") == 3, repr(inv))   # Spec 111 (LESSONS 30): the invite carries its expiry as a fourth part
 site_state = tempfile.mkdtemp()
 site = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00", "MODE": "server", "SITE_NAME": "Edge"}, socket_path=os.path.join(site_state, "b.sock"), state_dir=site_state)
 site_id = site.op_status().get("site", {}).get("id")
@@ -82,7 +82,8 @@ port_w = srv.server_address[1]; threading.Thread(target=srv.serve_forever, daemo
 def get(p):
     c = http.client.HTTPConnection("127.0.0.1", port_w, timeout=10); c.request("GET", p); r = c.getresponse(); b = r.read().decode(); c.close(); return r.status, b
 s_, home = get("/"); s2, conns = get("/connections"); s3, nodes_page = get("/nodes")
-check_true("AC7 the strip reads Hub with its peers", s_ == 200 and "Hub · 1 peer" in home, home[home.find("state"):home.find("state") + 200] if "Hub" not in home else "")
+# Spec 108 (LESSONS 30): "peer" is retired on operator screens; another joined Mesh Manager is a site.
+check_true("AC7 the strip reads Hub with its sites", s_ == 200 and "Hub · 1 site" in home, home[home.find("state"):home.find("state") + 200] if "Hub" not in home else "")
 check_true("AC7 Connections carries the peers section, invite, join and forget", s2 == 200 and all(x in conns for x in ("id='peers'", "data-action='peer_invite'", "data-action='peer_join'", "Forget")))
 check_true("AC7 a remote node says where it came from", s3 == 200 and "via Edge laptop" in nodes_page)
 

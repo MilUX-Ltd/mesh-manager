@@ -53,7 +53,7 @@ def rpc(method, params=None, token=None, id=1):
         return st, {}
 
 
-st, hd, _ = req("POST", "/login", body="password=correct+horse")
+st, hd, _ = req("POST", "/login", body="name=Test+operator&password=correct+horse")
 cookie = hd.get("set-cookie", "").split(";")[0]
 
 # ---- AC1 parity -------------------------------------------------------------------------------

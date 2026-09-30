@@ -46,7 +46,7 @@ def list_connections(etc):
     return [dict(c, hash=None) for c in _load(etc, "connections.json", [])]
 
 
-def mint(etc, name, autonomy):
+def mint(etc, name, autonomy, who="operator"):
     if autonomy not in ("observe", "propose", "act"):
         raise ValueError("autonomy must be observe, propose or act")
     name = str(name).strip()[:40] or "unnamed"
@@ -57,7 +57,7 @@ def mint(etc, name, autonomy):
                "created": _now(), "revoked": None, "last_used": None}
         conns.append(rec)
         _save(etc, "connections.json", conns)
-    audit(etc, who="operator", event="connection-mint", name=name, autonomy=autonomy, id=rec["id"])
+    audit(etc, who=who, event="connection-mint", name=name, autonomy=autonomy, id=rec["id"])
     return {"id": rec["id"], "name": name, "autonomy": autonomy, "token": token}
 
 
@@ -75,7 +75,7 @@ def find_by_token(etc, token):
     return None
 
 
-def set_autonomy(etc, cid, autonomy):
+def set_autonomy(etc, cid, autonomy, who="operator"):
     if autonomy not in ("observe", "propose", "act"):
         return False
     with _lock:
@@ -88,12 +88,12 @@ def set_autonomy(etc, cid, autonomy):
         if hit:
             _save(etc, "connections.json", conns)
     if hit:
-        audit(etc, who="operator", event="connection-autonomy", id=cid, autonomy=autonomy)
+        audit(etc, who=who, event="connection-autonomy", id=cid, autonomy=autonomy)
         return True
     return False
 
 
-def revoke(etc, cid):
+def revoke(etc, cid, who="operator"):
     with _lock:
         conns = _load(etc, "connections.json", [])
         hit = None
@@ -104,7 +104,7 @@ def revoke(etc, cid):
         if hit:
             _save(etc, "connections.json", conns)
     if hit:
-        audit(etc, who="operator", event="connection-revoke", id=cid, name=hit.get("name"))
+        audit(etc, who=who, event="connection-revoke", id=cid, name=hit.get("name"))
         return True
     return False
 

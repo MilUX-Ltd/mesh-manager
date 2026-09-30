@@ -8,6 +8,7 @@ import collections
 import re
 import secrets
 import datetime
+import hashlib
 import json
 import logging
 import math
@@ -18,6 +19,7 @@ import socketserver
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import threading
 import time
 
@@ -200,6 +202,7 @@ def decode_join_url(url):
     names = [s.name or "" for s in cs.settings]
     lora = cs.lora_config if cs.HasField("lora_config") else None
     return {"channels": names, "count": len(names),
+            "roles": ["PRIMARY" if i == 0 else "SECONDARY" for i in range(len(names))],   # Spec 112: as a ChannelSet orders them
             "region": region_name(lora.region) if lora and lora.region else None,
             "modem_preset": preset_name(lora.modem_preset) if lora else None,
             "has_keys": [bool(s.psk) for s in cs.settings]}, None
@@ -939,7 +942,7 @@ class Bridge(TAKMeshtasticGateway):
                 d = json.load(fh)
         except (OSError, ValueError):
             d = {}
-        d.setdefault("peers", {}); d.setdefault("invites", {})
+        d.setdefault("peers", {}); d.setdefault("invites", {}); d.setdefault("spent", {})
         return d
 
     def _peers_save(self, d):
@@ -953,24 +956,78 @@ class Bridge(TAKMeshtasticGateway):
         with self._peers_lock:
             return self._peers_load()["peers"].get(str(peer_id))
 
+    SPENT_KEEP = 24 * 3600   # Spec 111: how long a spent code's hash is kept, so a late attempt is told why
+
+    @staticmethod
+    def _code_hash(code):
+        return hashlib.sha256(str(code or "").strip().upper().encode()).hexdigest()
+
+    def _peers_sweep(self, d):
+        """Move every expired invite to the spent list by its hash, and let spent hashes go after a day. No code
+        outlives its invite in peers.json."""
+        now, changed = time.time(), False
+        for k in list(d["invites"]):
+            v = d["invites"][k]
+            if v.get("used") or float(v.get("expires") or 0) < now:
+                self._spend(d, k, "used" if v.get("used") else "expired"); changed = True
+        for h in list(d["spent"]):
+            if float(d["spent"][h].get("until") or 0) < now:
+                del d["spent"][h]; changed = True
+        return changed
+
+    def _spend(self, d, code, reason):
+        v = d["invites"].pop(code, None) or {}
+        d["spent"][self._code_hash(code)] = {"reason": reason, "id": v.get("id"), "label": v.get("label"),
+                                             "at": utc(time.time()), "until": time.time() + self.SPENT_KEEP}
+
+    def _code_fault(self, d, code):
+        """Why a code will not do, in the words the dialler is sent; None when it names a live invite."""
+        if not code:
+            return "no such site here: pair with an invite code"
+        if code in d["invites"]:
+            return None
+        gone = d["spent"].get(self._code_hash(code))
+        if gone:
+            return {"used": P.REFUSE_USED, "expired": P.REFUSE_EXPIRED, "cancelled": P.REFUSE_CANCELLED}.get(gone.get("reason"), P.REFUSE_USED)
+        return P.REFUSE_WRONG
+
     def peer_check_code(self, code):
-        """None when the code is good (and it is spent here); otherwise why not, in words."""
+        """Spec 111: None when the code names a live invite, which is not spent yet (the certificate is checked
+        first); otherwise why not, in words that say which fault it is."""
         code = str(code or "").strip().upper()
         with self._peers_lock:
-            d = self._peers_load(); inv = d["invites"]
-            for k in list(inv):
-                if float(inv[k].get("expires") or 0) < time.time():
-                    del inv[k]
-            if not code:
+            d = self._peers_load()
+            if self._peers_sweep(d):   # a refused guess costs no write unless something expired
                 self._peers_save(d)
-                return "no such site here: pair with an invite code"
-            rec = inv.get(code)
-            if not rec or rec.get("used"):
-                self._peers_save(d)
-                return "the code is wrong, expired or already used"
-            rec["used"] = time.time()
+            return self._code_fault(d, code)
+
+    def peer_spend_code(self, code):
+        """Spend a code once, under the lock: of two diallers holding it, one wins. None when this one did."""
+        code = str(code or "").strip().upper()
+        with self._peers_lock:
+            d = self._peers_load()
+            self._peers_sweep(d)
+            why = self._code_fault(d, code)
+            if not why:
+                self._spend(d, code, "used")
             self._peers_save(d)
-        return None
+            return why
+
+    def peer_note_refusal(self, code, why):
+        """Spec 111: the listener's own record of a refused attempt, in the words the dialler was sent: against
+        the invite the code named, or as the site's last refused attempt when it named none."""
+        code = str(code or "").strip().upper()
+        note = {"at": utc(time.time()), "fault": str(why)}
+        with self._peers_lock:
+            d = self._peers_load()
+            if code in d["invites"]:
+                d["invites"][code]["last_attempt"] = note
+            elif code and self._code_hash(code) in d["spent"]:
+                d["spent"][self._code_hash(code)]["last_attempt"] = note
+            else:
+                d["last_refused"] = note
+            self._peers_save(d)
+        self._emit("peers", state="refused")
 
     def peer_pin(self, peer_id, name, cert_pem, direction):
         with self._peers_lock:
@@ -1245,18 +1302,38 @@ class Bridge(TAKMeshtasticGateway):
                 continue
             l.send({"item": fwd})
 
+    @staticmethod
+    def _contact_secs(n):
+        """A node's latest contact by either route: the later of heard on the air and a packet over MQTT."""
+        best, limit = 0.0, time.time() + 300
+        for k in ("heard", "mqtt_at"):
+            v = n.get(k)
+            if v:
+                try:
+                    t = calendar.timegm(time.strptime(str(v)[:19], "%Y-%m-%dT%H:%M:%S"))
+                except ValueError:
+                    continue
+                if t <= limit:   # a time more than five minutes ahead is a site's clock or a lie, not a contact
+                    best = max(best, t)
+        return best
+
     def _remote_rows(self, own_ids):
-        rows = []
+        """Spec 113: every site's nodes, one row per node (LESSONS 9). Of several sites reporting a node, the row with
+        the newest contact is kept, air-heard on a tie; this computer's own rows are never replaced."""
+        best = {}
         with self._peers_lock:
             snaps = list(self.remote_nodes.items())
         for origin, v in snaps:
             for n in v.get("nodes", []):
-                if str(n.get("id")) in own_ids:
+                nid = str(n.get("id"))
+                if nid in own_ids:
                     continue
                 r = dict(n); r["remote"] = True; r["origin"] = origin; r["origin_name"] = v.get("name") or origin[:12]
                 r.setdefault("label", ""); r.setdefault("group", ""); r.setdefault("tags", []); r.setdefault("icon", "radio"); r.setdefault("heard_here", True)
-                rows.append(r)
-        return rows
+                rank = (self._contact_secs(r), 1 if r.get("heard_here") else 0)
+                if nid not in best or rank > best[nid][0]:
+                    best[nid] = (rank, r)
+        return [r for _, r in best.values()]
 
     def _peer_loop(self):
         while not self._stop.is_set():
@@ -1358,22 +1435,30 @@ class Bridge(TAKMeshtasticGateway):
             out.append({"id": pid, "name": rec.get("name") or pid[:12], "state": "connected" if l else "away", "direction": rec.get("direction"),
                         "since": utc(l.since) if l else None, "last_seen": utc(l.last_seen) if l else rec.get("last_seen"), "added": rec.get("added"),
                         "nodes": len(snap.get("nodes", [])), "sharing": self._sharing(pid), "aired": rec.get("aired") or {"count": 0, "last": None}, "note": self.peering.refusals.get(pid)})
-        invites = [{"expires": utc(v["expires"])} for k, v in d["invites"].items() if float(v.get("expires") or 0) >= time.time() and not v.get("used")]
+        # Spec 111: invites by id and label, never the code
+        invites = [{"id": v.get("id"), "label": v.get("label") or "", "expires": utc(v["expires"]), "last_attempt": v.get("last_attempt")}
+                   for k, v in sorted(d["invites"].items(), key=lambda kv: float(kv[1].get("expires") or 0))
+                   if float(v.get("expires") or 0) >= time.time() and not v.get("used")]
         addr = str(self.conf.get("SITE_ADDRESS") or "").strip()
         return {"site": {"id": self.peering.id, "short": self.peering.id[:12], "name": self.peering.name, "address": addr or None, "listening": bool(self.peering.port), "port": self.peering.port},
-                "peers": out, "invites": invites, "pictures": [{"origin": o, "name": v.get("name"), "nodes": len(v.get("nodes", [])), "ts": utc(v.get("ts"))} for o, v in self.remote_nodes.items()]}
+                "peers": out, "invites": invites, "last_refused": d.get("last_refused"), "pictures": [{"origin": o, "name": v.get("name"), "nodes": len(v.get("nodes", [])), "ts": utc(v.get("ts"))} for o, v in self.remote_nodes.items()]}
 
-    def op_peer_invite(self, **_):
+    def op_peer_invite(self, label="", **_):
         if not self.peering:
             return {"error": "this bridge has no site identity"}
         if not self.peering.port:
-            return {"error": "this site is not listening: set PEER_BIND (the installer's --peer-bind) and restart the bridge"}
+            return {"error": "this site is not listening for other sites, so nothing could use an invite"}
+        label = " ".join(str(label or "").split())[:60]
+        if any(unicodedata.category(ch)[0] == "C" for ch in label):
+            return {"error": "who the invite is for is one line of text"}
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         code = "".join(secrets.choice(alphabet) for _ in range(8)); exp = time.time() + P.INVITE_TTL
+        iid = secrets.token_hex(6)   # Spec 111: the invite's own name, so it is listed and cancelled without the code
         with self._peers_lock:
-            d = self._peers_load(); d["invites"][code] = {"expires": exp, "made": utc(time.time())}; self._peers_save(d)
+            d = self._peers_load(); self._peers_sweep(d)
+            d["invites"][code] = {"id": iid, "label": label, "expires": exp, "made": utc(time.time())}; self._peers_save(d)
         host = str(self.conf.get("SITE_ADDRESS") or "").strip() or socket.gethostname()
-        invite = f"{host}:{self.peering.port}/{code}/{self.peering.id}"
+        invite = f"{host}:{self.peering.port}/{code}/{self.peering.id}/{int(exp)}"
         svg = None
         try:
             import pyqrcode
@@ -1381,34 +1466,132 @@ class Bridge(TAKMeshtasticGateway):
         except Exception:  # noqa: BLE001
             svg = None
         self._emit("peers", state="invited")
-        return {"invite": invite, "code": code, "expires": utc(exp), "fingerprint": self.peering.id, "qr_svg": svg, "note": f"read once, good for {P.INVITE_TTL // 60} minutes, one use"}
+        return {"invite": invite, "code": code, "id": iid, "label": label, "expires": utc(exp), "fingerprint": self.peering.id,
+                "words": self._words(self.peering.id), "qr_svg": svg, "note": f"works once, for {max(1, P.INVITE_TTL // 60)} minutes"}
 
-    def op_peer_join(self, invite="", **_):
+    def op_peer_invite_cancel(self, id="", **_):   # noqa: A002 - the catalogue's input name
+        """Spec 111: take an invite back before anyone uses it; its code leaves peers.json at once."""
+        want = str(id or "").strip()
+        with self._peers_lock:
+            d = self._peers_load(); self._peers_sweep(d)
+            code = next((k for k, v in d["invites"].items() if want and v.get("id") == want), None)
+            if not code:
+                self._peers_save(d)
+                return {"error": "no open invite has that id: it may have been used, expired or cancelled already"}
+            label = d["invites"][code].get("label")
+            self._spend(d, code, "cancelled"); self._peers_save(d)
+        self._emit("peers", state="invite-cancelled")
+        return {"cancelled": want, "label": label, "confirmed": True}
+
+    def op_peer_invite_read(self, invite="", **_):
+        """Spec 111: what an invite says, before anything dials: where, which site (and its check words), and
+        how long it has left. Reads only; no connection is made."""
+        inv = P.parse_invite(invite)
+        if not inv:
+            return {"error": "that is not an invite: an invite reads host:port/code/fingerprint/expires, as the other site's screen shows it"}
+        exp = inv.get("expires")
+        left = None if exp is None else max(0, int(exp - time.time()))
+        return {"address": f"{inv['host']}:{inv['port']}", "fingerprint": inv["fingerprint"], "words": self._words(inv["fingerprint"]),
+                "expires": utc(exp) if exp else None, "seconds_left": left, "expired": left == 0,
+                "own": bool(self.peering) and inv["fingerprint"] == self.peering.id,
+                "known": bool(self.peer_pinned(inv["fingerprint"]))}
+
+    def _words(self, fp):
+        try:
+            return P.check_words(fp)
+        except (OSError, ValueError) as ex:
+            self.logger.warning(f"peers: no check words ({type(ex).__name__}: {ex})")
+            return None
+
+    def _clean_sharing(self, sharing):
+        """Only the out and in switches of the known classes, as booleans; anything else is dropped."""
+        out = {}
+        if isinstance(sharing, dict):
+            for cls, v in sharing.items():
+                if cls in self.SHARING_CLASSES and isinstance(v, dict):
+                    out[cls] = {k: bool(v[k]) for k in ("out", "in") if k in v}
+        return out
+
+    def op_peer_join(self, invite="", sharing=None, **_):
         if not self.peering:
             return {"error": "this bridge has no site identity"}
         inv = P.parse_invite(invite)
         if not inv:
-            return {"error": "an invite reads host:port/code/fingerprint, as the other site's screen shows it"}
-        if inv["fingerprint"] == self.peering.id:
+            return {"error": "that is not an invite: an invite reads host:port/code/fingerprint/expires, as the other site's screen shows it"}
+        fp = inv["fingerprint"]
+        if fp == self.peering.id:
             return {"error": "that is this site's own invite"}
+        # Spec 111: submit once. A second press for the same site, during or after the first, dials nothing.
         with self._peers_lock:
-            d = self._peers_load(); rec = d["peers"].setdefault(inv["fingerprint"], {"added": utc(time.time()), "sharing": self._sharing_defaults()})
-            rec["address"] = f"{inv['host']}:{inv['port']}"; rec["direction"] = "out"; self._peers_save(d)
-        result = []
-        self.peering.dial(inv["fingerprint"], inv["host"], inv["port"], inv["code"], first_result=result)
-        t0 = time.time()
-        while not result and time.time() - t0 < 15:
-            time.sleep(0.1)
-        if not result:
-            return {"error": "no answer from the site within 15 s; the link keeps trying", "site": inv["fingerprint"]}
-        ok, why, ans = result[0]
-        if not ok:
-            if inv["code"]:  # a pairing that failed leaves nothing behind
-                self.peering.stop_dial(inv["fingerprint"])
+            joining = self.__dict__.setdefault("_joining", set())
+            if fp in joining:
+                return {"error": "a join to that site is already under way: wait for its answer", "site": fp}
+            if fp in self.peering.connected():
+                rec = self._peers_load()["peers"].get(fp) or {}
+                return {"joined": True, "already": True, "site": fp, "name": rec.get("name"), "confirmed": True,
+                        "note": "this site is already linked to it; nothing was dialled"}
+            joining.add(fp)
+        handed_off = False
+        try:
+            with self._peers_lock:
+                d = self._peers_load()
+                created = fp not in d["peers"]
+                before = json.loads(json.dumps(d["peers"].get(fp) or {}))   # review of 1.5.0: a failed join puts an old pairing back
+                rec = d["peers"].setdefault(fp, {"added": utc(time.time()), "sharing": self._sharing_defaults()})
+                rec["address"] = f"{inv['host']}:{inv['port']}"; rec["direction"] = "out"
+                for cls, v in self._clean_sharing(sharing).items():   # chosen before the dial, so the first picture obeys it
+                    rec.setdefault("sharing", self._sharing_defaults()).setdefault(cls, {}).update(v)
+                self._peers_save(d)
+            result = []
+            self.peering.dial(fp, inv["host"], inv["port"], inv["code"], first_result=result)
+            t0 = time.time()
+            while not result and time.time() - t0 < 15:
+                time.sleep(0.1)
+            if not result:
+                # still dialling: the first answer is waited for in the background, the same clean-up applied to it,
+                # and the site held as joining until then, so a second press cannot overlap this one
+                def settle():
+                    t1 = time.time()
+                    while not result and time.time() - t1 < 90:
+                        time.sleep(0.2)
+                    try:
+                        if not result or not result[0][0]:
+                            self._join_failed(fp, inv, created, before)
+                    finally:
+                        with self._peers_lock:
+                            self._joining.discard(fp)
+                threading.Thread(target=settle, name=f"peer-join-{fp[:8]}", daemon=True).start()
+                handed_off = True
+                return {"error": "no answer from the site within 15 s; still trying, and the site shows here if it joins", "site": fp}
+            ok, why, ans = result[0]
+            if not ok:
+                self._join_failed(fp, inv, created, before)
+                return {"error": why, "site": fp}
+            return {"joined": True, "site": (ans or {}).get("site"), "name": (ans or {}).get("name"), "confirmed": True}
+        finally:
+            if not handed_off:
                 with self._peers_lock:
-                    d = self._peers_load(); d["peers"].pop(inv["fingerprint"], None); self._peers_save(d)
-            return {"error": why, "site": inv["fingerprint"]}
-        return {"joined": True, "site": (ans or {}).get("site"), "name": (ans or {}).get("name"), "confirmed": True}
+                    self._joining.discard(fp)
+
+    def _join_failed(self, fp, inv, created, before):
+        """A pairing that failed leaves nothing behind: never a link that is up, a record this press made is removed,
+        and a site already paired gets its old address, direction and sharing back, and its redial."""
+        if not inv.get("code") or fp in self.peering.connected():
+            return
+        self.peering.stop_dial(fp)
+        with self._peers_lock:
+            d = self._peers_load()
+            if created:
+                d["peers"].pop(fp, None)
+            elif before:
+                d["peers"][fp] = before
+            self._peers_save(d)
+        if not created and before.get("direction") == "out" and before.get("address"):
+            host, _, port = str(before["address"]).rpartition(":")
+            try:
+                self.peering.dial(fp, host, int(port))
+            except ValueError:
+                pass
 
     def op_peer_forget(self, site="", **_):
         site = str(site or "").strip().lower()
@@ -3060,6 +3243,32 @@ class Bridge(TAKMeshtasticGateway):
         return {"serial": want, "was": cur, "confirmed": True,
                 "note": "the bridge is restarting onto that radio: the mesh is down for a few seconds"}
 
+    def op_site_name_set(self, name=None, **_):
+        """Spec 110: the name other sites know this computer by, written to the config and used at once.
+
+        A screen op, not in the catalogue, so no agent can rename a site. The name goes into a KEY=value
+        line, so nothing that could end the line or hide in it is accepted."""
+        raw = str(name if name is not None else "")
+        # control characters, and the line and paragraph separators (Zl, Zp) that str.splitlines() also breaks on
+        if any(unicodedata.category(ch)[0] == "C" or unicodedata.category(ch) in ("Zl", "Zp") for ch in raw) or len(raw.splitlines()) > 1:
+            return {"error": "a site's name is one line of text, with no control characters"}
+        want = raw.strip()
+        if not want or len(want) > 60:
+            return {"error": "give the site a name of 1 to 60 characters"}
+        conf_path = str(self.conf.get("CONFIG_PATH") or "")
+        if not conf_path or not os.path.exists(conf_path):
+            return {"error": "this computer has no config file to write, so the name could not be kept"}
+        try:
+            self._write_conf_key(conf_path, "SITE_NAME", want)
+        except (OSError, ValueError) as e:
+            return {"error": f"the name could not be written: {type(e).__name__}: {e}"}
+        was = getattr(self.peering, "name", None)
+        self.conf["SITE_NAME"] = want
+        if self.peering:
+            self.peering.name = want
+        self._emit("status", action="site_name_set", name=want)
+        return {"name": want, "was": was, "confirmed": True}
+
     @staticmethod
     def _write_conf_key(path, key, value):
         """One key, in place, with every other line of the file left exactly as it was.
@@ -3072,6 +3281,8 @@ class Bridge(TAKMeshtasticGateway):
         leaves the config itself a symlink somebody else chose. The temporary file is now created
         exclusively, under a name nobody can predict, and the write fails rather than following
         anything already sitting there. Found in review, 14 September 2026."""
+        if len(str(value).splitlines()) > 1 or any(ch in str(value) for ch in "\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"):
+            raise ValueError(f"{key} would span more than one line of the config")   # review of 1.5.0: never a second KEY=
         lines = open(path).read().splitlines()
         out, done = [], False
         for ln in lines:
@@ -3285,7 +3496,10 @@ class Bridge(TAKMeshtasticGateway):
             finally:
                 iface.close()
 
-    def op_bench_onboard(self, path=None, long_name=None, short_name=None, role=None, label=None, holder=None, **_):
+    def op_bench_onboard(self, path=None, long_name=None, short_name=None, role=None, label=None, holder=None, group=None, **_):
+        """Spec 112: put a tracker on this mesh, in order: export what it holds now, then names, role, channel,
+        lora and this radio's admin key, each written and read back from the device before the next, then the
+        register. Each step is an `onboard` event as it lands; the first that does not read back stops it."""
         long_name, short_name, role = str(long_name or "").strip(), str(short_name or "").strip(), str(role or "").strip()
         _lh = {k: str(v).strip()[:80] for k, v in (("label", label), ("holder", holder)) if v and str(v).strip()}
         if not long_name or len(long_name.encode()) > 39:
@@ -3305,48 +3519,90 @@ class Bridge(TAKMeshtasticGateway):
                 return {"error": err}
             try:
                 node, gw = iface.localNode, self.interface.localNode
-                sec = self._read_section("security", node=node)
+                # the device as it is, saved before anything is written (the confirm has always said "first")
+                snap0, raw0 = self._bench_snapshot(iface)
+                did = snap0.get("id")
+                sec = raw0["security"]
                 keys = [bytes(k) for k in sec.admin_key]
                 if ours not in keys and len(keys) >= 3:
                     return {"error": f"the device already holds three admin keys and none is this radio's ({len(keys)} of 3); remove one on the device before onboarding"}
+                fn = self._export(snap0, raw0)
                 sent = utc(time.time())
-                written = []
-                node.setOwner(long_name=long_name, short_name=short_name)
-                written += ["long_name", "short_name"]
-                node.localConfig.device.role = role_v
-                node.writeConfig("device")
-                written.append("role")
-                ch = node.channels[0]
-                ch.settings.name = gw.channels[0].settings.name
-                ch.settings.psk = gw.channels[0].settings.psk
-                ch.role = 1
-                node.writeChannel(0)
-                written.append("channel0")
-                node.localConfig.lora.region = gw.localConfig.lora.region
-                node.localConfig.lora.modem_preset = gw.localConfig.lora.modem_preset
-                node.writeConfig("lora")
-                written.append("lora")
-                node.localConfig.security.CopyFrom(sec)
-                if ours not in keys:
-                    node.localConfig.security.admin_key.append(ours)
-                node.writeConfig("security")
-                written.append("admin_key")
+                written, steps = [], []
+
+                def step(name, ok, why=None):
+                    steps.append({"step": name, "confirmed": bool(ok)})
+                    self._emit("onboard", step=name, confirmed=bool(ok), id=did, why=None if ok else why)
+                    return ok
+
+                def check(read, good):
+                    try:
+                        return bool(good(read())), None
+                    except Exception as e:  # noqa: BLE001
+                        return False, f"no answer from the device ({type(e).__name__})"
+
+                step("exported", True)
+                want_name, want_psk = gw.channels[0].settings.name, bytes(gw.channels[0].settings.psk)
+                region, preset = int(gw.localConfig.lora.region), int(gw.localConfig.lora.modem_preset)
+
+                def w_names():
+                    node.setOwner(long_name=long_name, short_name=short_name); written.extend(["long_name", "short_name"])
+
+                def w_role():
+                    node.localConfig.device.role = role_v; node.writeConfig("device"); written.append("role")
+
+                def w_channel():
+                    ch = node.channels[0]; ch.settings.name = want_name; ch.settings.psk = want_psk; ch.role = 1
+                    node.writeChannel(0); written.append("channel0")
+
+                def w_lora():
+                    node.localConfig.lora.region = region; node.localConfig.lora.modem_preset = preset
+                    node.writeConfig("lora"); written.append("lora")
+
+                def w_key():
+                    node.localConfig.security.CopyFrom(sec)
+                    if ours not in keys:
+                        node.localConfig.security.admin_key.append(ours)
+                    node.writeConfig("security"); written.append("admin_key")
+
+                plan = [("names", w_names, lambda: self._read_owner(node=node), lambda o: o["long_name"] == long_name and o["short_name"] == short_name),
+                        ("role", w_role, lambda: self._read_section("device", node=node), lambda d: int(d.role) == int(role_v)),
+                        ("channel", w_channel, lambda: self._read_channel(0, node=node), lambda c: c["name"] == want_name and bytes(c.get("_psk") or b"") == want_psk),
+                        ("lora", w_lora, lambda: self._read_section("lora", node=node), lambda l: int(l.region) == region and int(l.modem_preset) == preset),
+                        ("admin_key", w_key, lambda: self._read_section("security", node=node), lambda s: ours in [bytes(k) for k in s.admin_key])]
+                failed = None
+                for name, write, read, good in plan:
+                    write()
+                    ok, why = check(read, good)
+                    if not step(name, ok, why):
+                        failed = (name, why)
+                        break
                 snap, raw = self._bench_snapshot(iface)
                 ch0 = raw["channels"][0]
-                ok = (snap["long_name"] == long_name and snap["short_name"] == short_name and snap["role"] == role
-                      and ch0["name"] == gw.channels[0].settings.name and bytes(ch0.get("_psk") or b"") == bytes(gw.channels[0].settings.psk)
-                      and int(raw["lora"].region) == int(gw.localConfig.lora.region) and int(raw["lora"].modem_preset) == int(gw.localConfig.lora.modem_preset)
-                      and snap["managed"])
-                fn = self._export(snap, raw)
                 reg = self._register_load().get(snap.get("id") or "", {})
-                entry = self._register_note(snap, export_at=utc(time.time()), onboarded_at=utc(time.time()) if ok else None,
-                                            label=reg.get("label") or long_name)
-                self._emit("bench", action="onboard", id=snap.get("id"), confirmed=ok)
-                return {"written": written, "sent": sent, "confirmed": ok,
+                entry = self._register_note(snap, export_at=utc(time.time()), onboarded_at=None if failed else utc(time.time()),
+                                            label=_lh.get("label") or reg.get("label") or long_name, holder=_lh.get("holder"))
+                if not failed:
+                    gkey = None
+                    if group is not None and str(group).strip():
+                        gkey = self._group_key(group)
+                        regs = self._register_load(); e_ = regs.setdefault(snap.get("id"), {})
+                        e_["group"] = gkey; e_["group_at"] = utc(time.time()); self._register_save(regs)
+                        self._share_groups()
+                    got = self._register_load().get(snap.get("id") or "", {})
+                    ok = bool(got) and (gkey is None or got.get("group") == gkey)
+                    if not step("group", ok, None if ok else "the register did not keep the group"):
+                        failed = ("group", "the register did not keep the group")
+                    entry = got or entry
+                confirmed = failed is None
+                self._emit("bench", action="onboard", id=snap.get("id"), confirmed=confirmed)
+                return {"written": written, "sent": sent, "confirmed": confirmed, "steps": steps,
                         "read_back": {"long_name": snap["long_name"], "short_name": snap["short_name"], "role": snap["role"], "channel0": ch0["name"],
                                       "region": snap["region"], "modem_preset": snap["modem_preset"], "managed": snap["managed"], "admin_keys": snap["admin_keys"]},
-                        "export": fn, "register": {"id": snap.get("id"), "managed": bool(entry.get("managed")), "label": entry.get("label", "")},
-                        "unconfirmed": None if ok else "the device's own answers differ from what was written"}
+                        "export": fn, "register": {"id": snap.get("id"), "managed": bool(entry.get("managed")), "label": entry.get("label", ""),
+                                                   "holder": entry.get("holder", ""), "group": entry.get("group", "")},
+                        "unconfirmed": None if confirmed else f"the {failed[0]} step did not read back from the device"
+                                                               + (f": {failed[1]}" if failed[1] else "") + ", so nothing after it was written"}
             except Exception as e:  # noqa: BLE001
                 return {"error": f"onboarding failed: {type(e).__name__}: {e}"}
             finally:
@@ -5063,9 +5319,28 @@ class Bridge(TAKMeshtasticGateway):
             r["unconfirmed"] = "the radio read back something other than what was written"
         return r
 
+    @staticmethod
+    def _preset_channel_name(preset):
+        """The name Meshtastic gives an unnamed primary: the preset in CamelCase (LONG_FAST is LongFast)."""
+        return "".join(w.capitalize() for w in str(preset or "").split("_"))
+
     def op_channel_decode(self, url="", **_):
+        """Spec 112: what a code holds (names, roles, region, preset, never the key), and what differs from this
+        radio: the primary channel, the region or the preset. Nothing differs for this mesh's own code."""
         info, err = decode_join_url(url)
-        return info if not err else {"error": err}
+        if err:
+            return {"error": err}
+        try:
+            gw = self.interface.localNode
+            mine = {"region": region_name(gw.localConfig.lora.region), "preset": preset_name(gw.localConfig.lora.modem_preset)}
+            mine["channel"] = gw.channels[0].settings.name or self._preset_channel_name(mine["preset"])
+        except (AttributeError, IndexError, TypeError):
+            return info   # no radio to compare with: no differs at all
+        theirs_preset = info.get("modem_preset")
+        theirs = {"channel": (info["channels"][0] if info["channels"] else "") or self._preset_channel_name(theirs_preset or mine["preset"]),
+                  "region": info.get("region"), "preset": theirs_preset}
+        info["differs"] = [k for k in ("channel", "region", "preset") if theirs[k] is not None and theirs[k] != mine[k]]
+        return info
 
     def op_channel_create(self, name="", index=None, **_):
         node = self.interface.localNode
@@ -5144,6 +5419,13 @@ class Bridge(TAKMeshtasticGateway):
         arrived, sent, why, rows = self._readback(rb)
         names = {c.get("name") for c in (rows or [])}
         ok = bool(arrived) and all((n in names) for n in info["channels"] if n)
+        if ok and mode == "replace" and (info.get("region") or info.get("modem_preset")):
+            # Spec 112: a radio that took the channels and kept its old band has not been replaced
+            got, _s, why2, lora = self._readback(lambda: self._read_section("lora"))
+            ok = bool(got) and (not info.get("region") or region_name(lora.region) == info["region"]) \
+                and (not info.get("modem_preset") or preset_name(lora.modem_preset) == info["modem_preset"])
+            if not got:
+                why = why2
         r = self._write_reply({"mode": mode, "channels": info["channels"], "region": info.get("region"), "modem_preset": info.get("modem_preset")}, rows, arrived, sent, why, ok)
         r.update({"mode": mode, "region": info.get("region")})
         self._emit("write", action="channel_adopt", mode=mode, confirmed=r["confirmed"])
