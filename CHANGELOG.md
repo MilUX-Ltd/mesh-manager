@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+## 1.6.0 (2 October 2026)
+
+**Knowing where things are.** Each node says how far it is from the box and which way, a fence raises an alert only
+when a node has really crossed and says when it did, and the gateway radio keeps the fleet in its memory however
+busy the channel gets. Each holds to the product's own rule, that the screen says what is so and not what it hopes.
+A distance from a guessed position is not shown, a fence alert carries the time of the crossing and not of the
+check, and a change the radio does not confirm is shown as asked until it does.
+
+**How far, and which way** (Spec 114). Each node with a fix says how far it is from the box and which way:
+in the node list, on the node page and in a direct message's header. Metres under a kilometre, then kilometres;
+degrees true with the compass point (`047° NE`); within 10 m, no bearing at all. When the box has no position of its
+own, only an estimate from the nodes it hears, the list shows no distances and says why once, because a distance
+from a guess is worse than none. A fix older than Health's Silent after says how old it is.
+
+**Fences that do not cry wolf** (Spec 115). One bad fix on the edge of a fence no longer raises an alert.
+Each fence now believes a crossing only after a number of positions in a row on the new side (2 unless you set it,
+1 to 5) or once a position is far enough past the line (5 to 500 m, for a fence along a road). Every position heard
+between checks is judged, in order, and the alert says when the node crossed and by which rule: "Walker left
+Training area at 14:32 (2 positions outside)". The open alert, its history and TAK carry that time, not the time of
+the check. Fences drawn before this need 2 positions too; set 1 to have the old behaviour back.
+
+**The fleet stays in the radio's memory** (Spec 116). On a busy channel the gateway radio's node database
+fills, and it used to forget whoever it had heard least recently, fleet or not. Every managed device is now made a
+favourite on the gateway radio, which keeps favourites however full it gets, and a noisy stranger can be ignored from
+its row or its page, so the radio drops its traffic. A managed device, a favourite and the box's own radio are never
+ignored. The radio does not answer these requests, so each shows as asked until its node database shows the change;
+one it never takes is reported after a day. Ignored nodes are listed below the node table with Stop ignoring. A radio
+whose firmware is too old shows none of this and says why once.
+
+## 1.5.3 (1 October 2026)
+
+**A fresh clone no longer carries a link to another computer.** Nothing in the product changes. The repository
+tracked a `.venv` that was a link to a folder on one Mac, so every other clone held a link to nowhere, and
+removing the owner's working copy removed the environment the others used.
+
+- **The link is no longer tracked.** The ignore rule named `.venv/` with a trailing slash, which matches a
+  folder and not a link, so the link was committed in the first place. The rule now matches both.
+- **The check holds it.** A new suite checks that the repository tracks no `.venv`, that a `.venv` that is a link is
+  ignored, and that `tests/run.sh` runs its suites on a tree whose `.venv` points nowhere, using the Python on
+  the path.
+- **How to run the suites is written down.** `CONTRIBUTING.md` now says what a clean machine needs.
+
+## 1.5.2 (1 October 2026)
+
+**A secret typed into a form never goes into a URL, whether or not the page's script runs.** 1.5.1 fixed the
+site forms; the same fault was in every other form that holds a secret. Nothing is added; each check below
+fails against 1.5.1.
+
+- **Six forms had no method.** The two channel code forms (Devices and channels, and Add a device), the
+  MQTT broker form (on Connect and on Radio), the map source form and the form on an agent's proposal named no
+  method, so a browser without JavaScript sent them as a GET with the channel code, the password or the map
+  address in the address bar, where history and a proxy's log keep it. Each now posts. A proposal still runs
+  only by its own route, which a form posted without its script cannot reach, so it runs nothing.
+- **A GET carrying a secret was answered.** The box refused only a GET carrying an invite. It now refuses, with a
+  405 and before it does anything, a GET whose address carries a field named url, key, token, password, secret
+  or invite, on every page, and the reply says nothing of the value. Nothing on the screen asks by GET with
+  one of these.
+- **The rule is held for the class.** The check crawls the screen's pages and finds every form that holds a
+  secret, so a form added later is caught without anyone remembering it.
+
+## 1.5.1 (1 October 2026)
+
+**A channel key or a site invite never leaves the screen by accident.** Three places put a key or an
+invite where the rule says it must never go: fetched before anyone asked to see it, or carried in a URL.
+Nothing is added; each check below fails against 1.5.0.
+
+- **The channel QR was fetched when Channels loaded, before anyone pressed Show.** The page carried the
+  image's address in its first HTML, so the browser asked for the key-bearing QR on its own. The image now
+  has no source until Show is pressed, and loses it again when the sheet is closed, by the Close button, by
+  Escape or by the minute running out. This holds on Devices and channels and on Add a device.
+- **Reading a join URL put the URL in the address.** The first Read it control asked for the URL in a
+  query string, where a proxy's log and the browser's history keep it, and the box answered. It now sends
+  the URL in the body of a POST, and the box refuses the same question asked by GET with a 405.
+- **A site invite could end up in a URL when the page's script did not run.** The Join a site and Invite
+  forms named no method, so a browser without JavaScript sent them as a GET, with the invite in the
+  address. Both forms now post, and a GET carrying an invite is refused with a 405 on every page, changing
+  nothing.
+
 ## 1.5.0 (30 September 2026)
 
 **One product, easy to use.** The screen is redesigned around what an operator does, not around how the

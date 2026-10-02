@@ -25,7 +25,8 @@ check("AC1 and outside a 50 m one", inc(51.0, -1.0, 51.0, -1.001, 50) if inc els
 
 state = tempfile.mkdtemp()
 br = B.Bridge({"SERIAL": "/dev/serial/by-id/usb-fake-test-radio-if00"}, socket_path=os.path.join(state, "b.sock"), state_dir=state, observe=True)
-r = br.op_fence_set(name="Compound", kind="polygon", points=json.dumps(SQ), rule="both") if hasattr(br, "op_fence_set") else {}
+# Spec 115 (D3): an unset fence needs 2 positions now; these are set to 1 so this suite keeps testing Spec 045's crossings
+r = br.op_fence_set(name="Compound", kind="polygon", points=json.dumps(SQ), rule="both", debounce_by="positions", debounce=1) if hasattr(br, "op_fence_set") else {}
 fid = r.get("id")
 check_true("AC2 a polygon fence is stored and returns an id", bool(fid) and r.get("confirmed") is True, repr(r))
 r2 = br.op_fence_set(name="Bad", kind="polygon", points=json.dumps(SQ[:2]), rule="both") if hasattr(br, "op_fence_set") else {}
@@ -34,7 +35,7 @@ r3 = br.op_fence_set(name="Bad", kind="polygon", points=json.dumps(SQ), rule="si
 check_true("AC2 a bad rule is refused in words", "rule" in str(r3.get("error", "")).lower(), repr(r3))
 r4 = br.op_fence_set(name="Tiny", kind="circle", lat=51.0, lon=-1.0, radius_m=5, rule="enter") if hasattr(br, "op_fence_set") else {}
 check_true("AC2 a 5 m circle is refused", "radius" in str(r4.get("error", "")).lower(), repr(r4))
-r5 = br.op_fence_set(name="Gate", kind="circle", lat=51.0, lon=-1.0, radius_m=100, rule="leave", group="Recce") if hasattr(br, "op_fence_set") else {}
+r5 = br.op_fence_set(name="Gate", kind="circle", lat=51.0, lon=-1.0, radius_m=100, rule="leave", group="Recce", debounce_by="positions", debounce=1) if hasattr(br, "op_fence_set") else {}
 check_true("AC2 a circle with a group is stored", bool(r5.get("id")), repr(r5))
 fl = br.op_fences() if hasattr(br, "op_fences") else {}
 check("AC2 fences lists both", sorted(f.get("name") for f in fl.get("fences", [])), ["Compound", "Gate"])

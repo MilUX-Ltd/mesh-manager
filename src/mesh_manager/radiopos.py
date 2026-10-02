@@ -24,6 +24,15 @@ def worth_broadcasting(source):
     return str(source or "") in TRUSTED_SOURCES
 
 
+def bearing_degrees(lat1, lon1, lat2, lon2):
+    """The initial great-circle bearing from the first point to the second: degrees true, 0 to under 360 (Spec 114)."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    x = math.sin(dl) * math.cos(p2)
+    y = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
 def metres_between(lat1, lon1, lat2, lon2):
     """Great-circle distance. Good to well under a metre at the scale that matters here."""
     r = 6371000.0

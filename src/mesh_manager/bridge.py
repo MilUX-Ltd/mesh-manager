@@ -84,35 +84,124 @@ def fence_inside(fence, lat, lon):
     return point_in_polygon(lat, lon, fence.get("points") or [])
 
 
-def fence_transitions(fences, state, nodes):
-    """Spec 045: the crossings since the last look. state holds the last known side of every
-    (fence, node) pair; the first sight of a pair records the side and raises nothing. Returns
-    (events, new_state), an event being {fence, fence_name, node, name, kind: enter|leave}."""
+# Spec 116, D5: the first firmware taken to keep favourites and an ignore list. Not yet checked on the bench spare
+# radio; the live gate records the version found on the card, and this is the one place to change it.
+NODE_LISTS_MIN = (2, 5, 0)
+
+
+def firmware_tuple(v):
+    """'2.6.11.60ec05e' -> (2, 6, 11); None when it does not read as a version."""
+    m = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", str(v or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _utc_seconds(iso):
+    import calendar as _cal
+    return _cal.timegm(time.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _local_hhmm(iso):
+    """Spec 115: an alert's crossing time as the box's clock shows it, HH:MM; the stamp itself if it will not parse."""
+    import calendar as _cal
+    try:
+        return time.strftime("%H:%M", time.localtime(_cal.timegm(time.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ"))))
+    except (TypeError, ValueError):
+        return str(iso or "")
+
+
+def fence_depth(fence, lat, lon):
+    """Spec 115: the signed distance from a point to a fence's boundary, in metres, positive inside. A circle is its
+    radius less the distance from its centre; a polygon is the distance to its nearest edge on a flat projection
+    about the point (good to well under a metre at a fence's scale), signed by point_in_polygon."""
+    if fence.get("kind") == "circle":
+        c = fence.get("centre") or [None, None]
+        return float(fence.get("radius_m") or 0) - _haversine(float(c[0]), float(c[1]), lat, lon)
+    pts = fence.get("points") or []
+    if len(pts) < 3:
+        return float("-inf")
+    import math as _m
+    kx, ky = 111320.0 * _m.cos(_m.radians(lat)), 111195.0
+    xy = [((float(p[1]) - lon) * kx, (float(p[0]) - lat) * ky) for p in pts]
+    best = float("inf")
+    for i in range(len(xy)):
+        (x1, y1), (x2, y2) = xy[i], xy[(i + 1) % len(xy)]
+        dx, dy = x2 - x1, y2 - y1
+        t = 0.0 if dx == dy == 0 else max(0.0, min(1.0, -(x1 * dx + y1 * dy) / (dx * dx + dy * dy)))
+        best = min(best, _m.hypot(x1 + t * dx, y1 + t * dy))
+    return best if point_in_polygon(lat, lon, pts) else -best
+
+
+def fence_debounce(fence):
+    """Spec 115 (D1, D3): ("positions", n) or ("metres", m). A fence with no setting, or a bad one, needs 2 positions."""
+    d = fence.get("debounce") if isinstance(fence.get("debounce"), dict) else {}
+    try:
+        if d.get("by") == "metres" and 5 <= float(d.get("m")) <= 500:
+            return "metres", float(d["m"])
+        if d.get("by") == "positions" and 1 <= int(d.get("n")) <= 5:
+            return "positions", int(d["n"])
+    except (TypeError, ValueError):
+        pass
+    return "positions", 2
+
+
+def fence_crossings(fences, state, positions):
+    """Spec 115: the crossings in a run of positions, judged one at a time in order. positions are dicts with node,
+    name, group, lat, lon and ts (the time the box heard it, or None). state holds, for every (fence, node) pair, the
+    confirmed side and any crossing being proved; the first sight of a pair records the side and raises nothing.
+    A crossing is believed after n positions in a row on the new side, or once a position is m metres past the line,
+    and carries the time of the first position on the new side. Returns (events, new_state), an event being
+    {fence, fence_name, node, name, kind: enter|leave, ts, rule}."""
     state = dict(state or {})
     events = []
     for f in fences or []:
         if not f.get("enabled", True):
             continue
         fid = str(f.get("id") or "")
-        for n in nodes or []:
-            nid = n.get("id")
-            if not nid or n.get("lat") is None or n.get("lon") is None:
+        by, need = fence_debounce(f)
+        for p in positions or []:
+            nid = p.get("node")
+            if not nid or p.get("lat") is None or p.get("lon") is None:
                 continue
-            if f.get("group") and str(n.get("group") or "") != str(f["group"]):
+            if f.get("group") and str(p.get("group") or "") != str(f["group"]):
                 continue
             try:
-                inside = fence_inside(f, float(n["lat"]), float(n["lon"]))
+                lat, lon = float(p["lat"]), float(p["lon"])
+                d = fence_depth(f, lat, lon) if by == "metres" else None
+                inside = (d > 0) if by == "metres" else fence_inside(f, lat, lon)
             except (TypeError, ValueError):
                 continue
             key = f"{fid}:{nid}"
-            prev = state.get(key)
-            state[key] = inside
-            if prev is None or prev == inside:
+            st = state.get(key)
+            if st is None:
+                state[key] = {"side": inside, "pend": None, "count": 0, "first": None}
                 continue
-            kind = "enter" if inside else "leave"
-            if f.get("rule", "both") in (kind, "both"):
-                events.append({"fence": fid, "fence_name": f.get("name") or fid, "node": nid, "name": n.get("name") or nid, "kind": kind})
+            st = {"side": st, "pend": None, "count": 0, "first": None} if isinstance(st, bool) else dict(st)   # a Spec 045 state
+            if inside == st["side"]:
+                st.update(pend=None, count=0, first=None)
+                state[key] = st
+                continue
+            if st.get("pend") != inside:
+                st.update(pend=inside, count=0, first=p.get("ts"))
+            st["count"] += 1
+            if by == "metres":
+                believed, rule = abs(d) >= need, f"{need:g} m past the line"
+            else:
+                believed, rule = st["count"] >= need, f"{need} position{'' if need == 1 else 's'} {'inside' if inside else 'outside'}"
+            if believed:
+                kind = "enter" if inside else "leave"
+                if f.get("rule", "both") in (kind, "both"):
+                    events.append({"fence": fid, "fence_name": f.get("name") or fid, "node": nid, "name": p.get("name") or nid,
+                                   "kind": kind, "ts": st.get("first"), "rule": rule})
+                st.update(side=inside, pend=None, count=0, first=None)
+            state[key] = st
     return events, state
+
+
+def fence_transitions(fences, state, nodes):
+    """Spec 045: the crossings since the last look, from each node's current position (one position each). Kept for
+    its callers; Spec 115's fence_crossings does the work, so a fence's setting applies here too."""
+    return fence_crossings(fences, state, [{"node": n.get("id"), "name": n.get("name"), "group": n.get("group"),
+                                            "lat": n.get("lat"), "lon": n.get("lon"), "ts": None} for n in nodes or []])
 
 
 def key_fingerprint(key_b64):
@@ -835,6 +924,7 @@ class Bridge(TAKMeshtasticGateway):
 
     def _on_connected(self, interface, topic=pub.AUTO_TOPIC if pub else None):
         self._touch()
+        self._lists_fw = None   # Spec 116: a reconnect may be another radio, or the same one reflashed
         sd_notify("READY=1")
         self._emit("connection", state="established")
 
@@ -1665,6 +1755,7 @@ class Bridge(TAKMeshtasticGateway):
         regall = self._register_load() if hasattr(self, "_register_load") else {}
         labels = {k: str(v.get("label") or "") for k, v in regall.items()}
         groups = self._groups_load()
+        pend = self._node_lists_load()["pending"]   # Spec 116
         out = []
         for n in (self.mesh_nodes() if self.interface is not None else []):
             rec = db.get(n.get("id"), {}) if isinstance(db, dict) else {}
@@ -1707,11 +1798,19 @@ class Bridge(TAKMeshtasticGateway):
             self._identity_note(n.get("id"), u.get("publicKey"), u.get("hwModel"), u.get("role"))
             lh = rec.get("lastHeard") if isinstance(rec, dict) else None
             n["last_heard_db"] = utc(lh) if lh else None
+            # Spec 114: when the radio's database says when a node's position was taken, the screen can say how old it is
+            pt = (rec.get("position") or {}).get("time") if isinstance(rec, dict) else None
+            n["fix_ts"] = utc(pt) if pt else None
+            # Spec 116: the radio's own lists, and what has been asked of it and not yet shown
+            n["favorite"] = bool(rec.get("isFavorite")) if isinstance(rec, dict) else False
+            n["ignored"] = bool(rec.get("isIgnored")) if isinstance(rec, dict) else False
+            n["managed"] = bool(r_.get("managed"))
+            n["list_asked"] = sorted(k.rsplit(":", 1)[1] for k in pend if k.rsplit(":", 1)[0] == n.get("id"))
             out.append(n)
         out.extend(self._remote_rows(set(str(n.get("id")) for n in out)))  # Spec 052: the peers' pictures
         # Spec 090: whether this box has any group at all. An ungrouped node is grey once one
         # exists and keeps its own colour while none does, so a box that never groups never changes.
-        return {"nodes": out, "count": len(out), "grouped": bool(groups)}
+        return {"nodes": out, "count": len(out), "grouped": bool(groups), "lists": self.node_lists_support()}
 
     def _identity_note(self, nid, key, hw, role):
         """Spec 043: the radio's database says what a node is (hardware, role) and which public key it
@@ -2220,7 +2319,7 @@ class Bridge(TAKMeshtasticGateway):
             nodes.append(dict(n, direct_snr=self.direct.get(nid), history=[list(x) for x in self.links.get(nid, [])]))
         return {"own": {"id": own.get("id"), "name": own.get("name"), "lat": pos.get("lat"), "lon": pos.get("lon"), "position_source": pos.get("source"),
                         "sats": pos.get("sats"), "time": pos.get("time"), "count": pos.get("count"), "gps": self.gps_state},
-                "nodes": nodes, "routes": dict(self.routes)}
+                "nodes": nodes, "routes": dict(self.routes), "lists": self.node_lists_support()}
 
     def op_route(self, id=None, **_):
         return {"route": self.routes.get(str(id or ""))}
@@ -4568,9 +4667,114 @@ class Bridge(TAKMeshtasticGateway):
         except (OSError, ValueError):
             d = {}
         st = dict(self.ALERT_DEFAULTS); st.update({k: v for k, v in (d.get("settings") or {}).items() if k in self.ALERT_DEFAULTS})
-        return {"settings": st, "open": d.get("open") or {}, "acked": d.get("acked") or {}, "alerted_unknown": d.get("alerted_unknown") or [], "fence_state": d.get("fence_state") or {}}
+        return {"settings": st, "open": d.get("open") or {}, "acked": d.get("acked") or {}, "alerted_unknown": d.get("alerted_unknown") or [], "fence_state": d.get("fence_state") or {}, "fence_seen": d.get("fence_seen") or {}}
 
     # ---- geofences (Spec 045): drawn areas, kept on the box; crossings become alerts
+    # ---- the gateway radio's favourites and ignore list (Spec 116) ------------------------------------------------
+    NODE_LIST_CALLS = {("favorite", True): "setFavorite", ("favorite", False): "removeFavorite",
+                       ("ignored", True): "setIgnored", ("ignored", False): "removeIgnored"}
+
+    def _node_lists_path(self):
+        return os.path.join(self.state_dir, "node-lists.json")
+
+    def _node_lists_load(self):
+        try:
+            d = json.load(open(self._node_lists_path()))
+        except (OSError, ValueError):
+            d = {}
+        return {"pending": dict(d.get("pending") or {}), "done": dict(d.get("done") or {})}
+
+    def _node_lists_save(self, book):
+        os.makedirs(self.state_dir, exist_ok=True)
+        tmp = self._node_lists_path() + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(book, fh, indent=1)
+        os.replace(tmp, self._node_lists_path())
+
+    def node_lists_support(self):
+        """D5: whether this radio's firmware keeps the lists. The version is asked of the radio once an hour at most
+        (a failed ask is tried again in five minutes), and afresh after every reconnect."""
+        now = time.time()
+        cached = getattr(self, "_lists_fw", None)
+        if not cached or now - cached[1] > (3600 if cached[0] else 300):
+            fw = self._read_metadata() if getattr(self, "interface", None) is not None else None
+            self._lists_fw = cached = (fw or None, now)
+        t = firmware_tuple(cached[0])
+        return {"supported": bool(t and t >= NODE_LISTS_MIN), "firmware": cached[0], "min": ".".join(str(x) for x in NODE_LISTS_MIN)}
+
+    def op_node_list_set(self, id=None, list=None, on=None, **_):
+        """Ask the gateway radio to put a node on, or take it off, its favourites or its ignore list. The radio does
+        not answer such a request, so the answer is "asked"; _node_lists_pass confirms it from the radio's node
+        database (D3)."""
+        nid, lst, raw = str(id or "").strip(), str(list or "").strip(), str(on if on is not None else "").strip().lower()
+        if lst not in ("favorite", "ignored"):
+            return {"error": "list must be favorite or ignored"}
+        if raw not in ("on", "off", "true", "false", "1", "0", "yes", "no"):
+            return {"error": "on must be on or off"}
+        want = raw in ("on", "true", "1", "yes")
+        if not re.fullmatch(r"![0-9a-f]{8}", nid):
+            return {"error": f"{nid or 'that'} is not a radio id"}
+        sup = self.node_lists_support()
+        if not sup["supported"]:
+            return {"error": f"this radio's firmware ({sup['firmware'] or 'unknown'}) cannot keep favourites or an ignore list; that needs {sup['min']} or later"}
+        if nid == (self._own() or {}).get("id"):
+            return {"error": "the box's own radio is never put on its own lists"}
+        db = getattr(self.interface, "nodes", None) or {}
+        rec = db.get(nid) if isinstance(db, dict) else None
+        if not isinstance(rec, dict):
+            return {"error": f"{nid} is not in this radio's node database, so it cannot be put on its lists"}
+        book = self._node_lists_load()
+        if lst == "ignored" and want:
+            if (self._register_load().get(nid) or {}).get("managed"):
+                return {"error": "a managed device is never ignored: the radio would stop hearing it, and it would no longer reach TAK"}
+            if rec.get("isFavorite") or (book["pending"].get(f"{nid}:favorite") or {}).get("on"):
+                return {"error": "a favourite is never ignored; take it off the favourites first"}
+        try:
+            getattr(self.interface.localNode, self.NODE_LIST_CALLS[(lst, want)])(nid)
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"could not ask the radio: {type(e).__name__}: {e}"}
+        ts = utc(time.time())
+        book["pending"][f"{nid}:{lst}"] = {"on": want, "asked": ts}
+        book["done"].pop(f"{nid}:{lst}", None)
+        self._node_lists_save(book)
+        self._emit("node_list", id=nid, list=lst, on=want, state="asked")
+        return {"id": nid, "list": lst, "on": want, "state": "asked", "asked": ts}
+
+    def _node_lists_pass(self):
+        """Every minute: a request the radio's node database now shows is confirmed; one a day old that it never
+        took is reported as not taken (D3). Then every managed device that is not a favourite, with nothing pending,
+        is asked for as one (D1); nothing is ever taken off the favourites by this pass (D2)."""
+        if getattr(self, "interface", None) is None:
+            return
+        db = getattr(self.interface, "nodes", None) or {}
+        book, now, changed = self._node_lists_load(), time.time(), False
+        for key, req in sorted(book["pending"].items()):
+            nid, lst = key.rsplit(":", 1)
+            rec = db.get(nid) if isinstance(db, dict) and isinstance(db.get(nid), dict) else {}
+            shown = bool(rec.get("isFavorite" if lst == "favorite" else "isIgnored"))
+            try:
+                age = now - _utc_seconds(req.get("asked"))
+            except (TypeError, ValueError):
+                age = 0
+            state = "confirmed" if shown == bool(req.get("on")) else ("not taken" if age > 86400 else None)
+            if state:
+                book["done"][key] = {"state": state, "on": bool(req.get("on")), "at": utc(now)}
+                del book["pending"][key]
+                changed = True
+                self._emit("node_list", id=nid, list=lst, on=bool(req.get("on")), state=state)
+        if changed:
+            self._node_lists_save(book)
+        if not self.node_lists_support()["supported"]:
+            return
+        own = (self._own() or {}).get("id")
+        for nid, r in sorted(self._register_load().items()):
+            if not isinstance(r, dict) or not r.get("managed") or nid == own:
+                continue
+            rec = db.get(nid) if isinstance(db, dict) else None
+            if not isinstance(rec, dict) or rec.get("isFavorite") or f"{nid}:favorite" in self._node_lists_load()["pending"]:
+                continue
+            self.op_node_list_set(id=nid, list="favorite", on="on")
+
     def _fences_path(self):
         return os.path.join(self.state_dir, "fences.json")
 
@@ -4591,7 +4795,8 @@ class Bridge(TAKMeshtasticGateway):
     def op_fences(self, **_):
         return {"fences": self._fences_load()}
 
-    def op_fence_set(self, id=None, name=None, kind=None, points=None, lat=None, lon=None, radius_m=None, rule=None, group=None, enabled=None, **_):
+    def op_fence_set(self, id=None, name=None, kind=None, points=None, lat=None, lon=None, radius_m=None, rule=None, group=None, enabled=None,
+                     debounce_by=None, debounce=None, **_):
         fences = self._fences_load()
         fid = str(id or "").strip()
         cur = next((f for f in fences if f["id"] == fid), None) if fid else None
@@ -4634,6 +4839,22 @@ class Bridge(TAKMeshtasticGateway):
             f["centre"] = c; f["radius_m"] = r; f.pop("points", None)
         if group is not None:
             f["group"] = str(group).strip()[:40]
+        if debounce_by not in (None, "") or debounce not in (None, ""):   # Spec 115: how a crossing is believed
+            by = str(debounce_by or (f.get("debounce") or {}).get("by") or "positions")
+            try:
+                v = float(debounce)
+            except (TypeError, ValueError):
+                return {"error": "debounce needs a number: positions in a row, or metres past the line"}
+            if by == "positions":
+                if not (1 <= v <= 5 and v == int(v)):
+                    return {"error": "a debounce by positions is 1 to 5 positions in a row"}
+                f["debounce"] = {"by": "positions", "n": int(v)}
+            elif by == "metres":
+                if not (5 <= v <= 500):
+                    return {"error": "a debounce by metres is 5 to 500 metres past the line"}
+                f["debounce"] = {"by": "metres", "m": int(v) if v == int(v) else v}
+            else:
+                return {"error": "debounce must be by positions or by metres"}
         if enabled is not None:
             f["enabled"] = str(enabled).lower() not in ("off", "no", "false", "0")
         f.setdefault("enabled", True)
@@ -4737,7 +4958,38 @@ class Bridge(TAKMeshtasticGateway):
             self.logger.warning(f"the alert did not reach TAK: {type(e).__name__}: {e}")
             return False
 
-    def _raise_alert(self, a, node, kind, text):
+    def _fence_positions(self, a, rows):
+        """Spec 115: the positions to judge for the fences, in order. From the history store, every position heard since
+        the last one judged; a node seen for the first time is judged on where it is now, and its past is not replayed.
+        Without the store, or with nothing new in it, a node that has moved since the last look is one position, timed
+        at the check (ts None)."""
+        seen = a.setdefault("fence_seen", {})
+        h = getattr(self, "history", None)
+        store = bool(h and h.ok)
+        out = []
+        for n in rows:
+            nid = n.get("id")
+            if not nid or n.get("lat") is None or n.get("lon") is None:
+                continue
+            base = {"node": nid, "name": n.get("name"), "group": n.get("group")}
+            last = seen.get(nid)
+            new = []
+            if store and last is not None:
+                got = h.query("positions", node=nid, since=last.get("ts"), limit=500) if last.get("ts") else h.query("positions", node=nid, limit=500)
+                new = [r for r in got if int(r.get("id") or 0) > int(last.get("id") or 0)]
+            if new:
+                out += [dict(base, lat=r["lat"], lon=r["lon"], ts=r["ts"]) for r in new]
+                seen[nid] = {"id": new[-1].get("id"), "ts": new[-1]["ts"], "lat": new[-1]["lat"], "lon": new[-1]["lon"]}
+                continue
+            here = (round(float(n["lat"]), 6), round(float(n["lon"]), 6))
+            if last is None or here != (round(float(last.get("lat") or 0), 6), round(float(last.get("lon") or 0), 6)):
+                out.append(dict(base, lat=n["lat"], lon=n["lon"], ts=None))
+                newest = h.query("positions", node=nid, limit=1) if store else []
+                prev = last or {}
+                seen[nid] = {"id": (newest[-1].get("id") if newest else prev.get("id")), "ts": (newest[-1]["ts"] if newest else prev.get("ts")), "lat": here[0], "lon": here[1]}
+        return out
+
+    def _raise_alert(self, a, node, kind, text, since=None):
         key = f"{node}:{kind}"
         if key in a["open"]:
             return False
@@ -4745,10 +4997,10 @@ class Bridge(TAKMeshtasticGateway):
             # Someone has seen this one and the condition has not cleared since. Raising it again
             # every pass is how an alert list becomes wallpaper (Spec 077).
             return False
-        a["open"][key] = {"node": node, "kind": kind, "text": text, "since": utc(time.time())}
+        a["open"][key] = {"node": node, "kind": kind, "text": text, "since": since or utc(time.time())}   # Spec 115: when it happened
         h = getattr(self, "history", None)
         if h and h.ok:
-            h.alert(node, kind, text)
+            h.alert(node, kind, text, ts=a["open"][key]["since"])
         sent = self._tak_chat(f"[Mesh Manager] {text}") if a["settings"].get("to_tak") else False
         self._emit("alert", state="open", node=node, what=kind, text=text, tak=bool(sent))
         self._peer_share("alerts", {"state": "open", "node": node, "kind": kind, "text": text, "since": a["open"][key]["since"]})   # Spec 053
@@ -4818,10 +5070,11 @@ class Bridge(TAKMeshtasticGateway):
         if fences:
             try:
                 rows = [dict(n, name=str(reg.get(n.get("id"), {}).get("label") or n.get("name") or n.get("id"))) for n in self.op_nodes().get("nodes", []) if n.get("id") != own]
-                events, a["fence_state"] = fence_transitions(fences, a.get("fence_state") or {}, rows)
+                events, a["fence_state"] = fence_crossings(fences, a.get("fence_state") or {}, self._fence_positions(a, rows))
                 for ev in events:
                     self._clear_alert(a, ev["node"], "geofence")
-                    raised += self._raise_alert(a, ev["node"], "geofence", f"{ev['name']} {'entered' if ev['kind'] == 'enter' else 'left'} {ev['fence_name']}")
+                    when = f"at {_local_hhmm(ev['ts'])}" if ev.get("ts") else "at the time of the check"
+                    raised += self._raise_alert(a, ev["node"], "geofence", f"{ev['name']} {'entered' if ev['kind'] == 'enter' else 'left'} {ev['fence_name']} {when} ({ev['rule']})", since=ev.get("ts"))
             except Exception as ex:  # noqa: BLE001
                 self.logger.warning(f"the fence check failed: {type(ex).__name__}: {ex}")
         # Spec 043: a public key that is not the one on file, until the operator accepts it
@@ -5030,6 +5283,10 @@ class Bridge(TAKMeshtasticGateway):
                 self._judge_alerts()
             except Exception as e:  # noqa: BLE001
                 self.logger.warning(f"the alert pass failed: {type(e).__name__}: {e}")
+            try:
+                self._node_lists_pass()   # Spec 116: confirm what was asked of the radio's lists, keep the fleet as favourites
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"the node lists pass failed: {type(e).__name__}: {e}")
             try:
                 self._beacon_due()   # Spec 097: this pass already runs every minute
             except Exception as e:  # noqa: BLE001

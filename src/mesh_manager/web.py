@@ -32,6 +32,7 @@ from . import __version__
 from .common import DEFAULT_CONFIG, DEFAULT_SOCKET, GROUP_COLOURS, NODE_ICONS, read_config
 from . import catalogue as C
 from . import mgrs as MG
+from . import radiopos as RP
 from . import channel as CH
 from . import connections as K
 from . import appupdate as AU
@@ -442,7 +443,7 @@ def run_action(web, aid, args, who):
     if aid == "channels":
         res = {k: v for k, v in res.items() if k != "url"}
     if aid in ("nodes", "links"):
-        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web), battery_pct=_battery_pct(web),
+        rows, db_rows, heard, db = nodes_tables(res.get("nodes", []), res.get("routes"), _silent_min(web), battery_pct=_battery_pct(web), own=res.get("own"), lists=res.get("lists"),
                                                 availability=_availability(web) if aid == "nodes" else None,
                                                 reboots=_reboots(web) if aid == "nodes" else None)
         res = dict(res, rows_html=rows, db_rows_html=db_rows, heard=heard, db=db)
@@ -1335,7 +1336,7 @@ def map_sources_form(t, disk=None, added=None, folder=""):
     return (f"<details class='fold' id='map-sources' style='margin-top:var(--s3)'><summary>Map sources</summary>"
             f"<p class='meta'>The layer control offers {built}. Add the imagery you already carry in TAK: drop an ATAK <code>&lt;customMapSource&gt;</code> XML into {the_box()}'s map folder{(' (' + e(folder) + ')') if folder else ''} and it appears here, or paste one below. Tiles load in the viewer's browser; {the_box()} sends nothing.</p>"
             f"<div class='tablewrap'><table><thead><tr><th>Source</th><th>From</th><th>Detail</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4 class=meta>Nothing beyond the built-in sources yet.</td></tr>'}</tbody></table></div>"
-            f"<form data-action='map_source_add' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:760px;margin-top:var(--s3)'>"
+            f"<form data-action='map_source_add' method='post' action='/api/map_source_add' class='card' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\" style='max-width:760px;margin-top:var(--s3)'>"
             f"<h2 style='margin-top:0'>{e(a['title'])}</h2><p class='meta'>{e(a['description'])}</p>"
             "<label>Name<input type='text' name='name' maxlength='60' placeholder='e.g. Andover imagery'></label>"
             "<label>ATAK custom map source XML<textarea name='xml' rows='4' placeholder='&lt;customMapSource&gt;…&lt;/customMapSource&gt;'></textarea></label>"
@@ -2511,6 +2512,10 @@ def fence_forms(L):
             "<label>Name (40 bytes at most)<input type='text' name='name' maxlength='40' required placeholder='e.g. Compound'></label>"
             "<div><span class='meta'>Alert when</span><br>" + seg("rule", (("enter", "Coming in"), ("leave", "Going out"), ("both", "Either")), "both") + "</div>"
             + gsel +
+            "<div><span class='meta'>Believe a crossing after</span><br>" + seg("debounce_by", (("positions", "Positions in a row"), ("metres", "Metres past the line")), "positions") + "</div>"
+            "<label>How many<input type='number' name='debounce' min='1' max='500' value='2'></label>"
+            "<p class='meta'>Positions in a row: 1 to 5 on the new side before it counts, so one bad fix on the edge raises nothing. "
+            "Metres past the line: 5 to 500, for a fence along a road or a wall. The alert says when it crossed and which rule it used.</p>"
             "<div class='row-actions'><button type='submit'>Save the fence</button><button type='button' class='quiet' id='fence-cancel'>Cancel</button></div><div class='res meta' role='status'></div></form></div>"
             "<details class='fold' id='fences' style='margin-top:var(--s3)'><summary>Fences</summary><p class='meta'>Areas drawn on the map. A device crossing one raises a geofence alert here and in TAK chat, by the same path as the quiet and battery alerts. A device with no position is neither in nor out.</p>"
             "<div class='tablewrap'><table><thead><tr><th>Fence</th><th>Alert when</th><th>Applies to</th><th></th></tr></thead><tbody id='fence-list'><tr><td colspan=4 class='meta'>loading</td></tr></tbody></table></div></details>")
@@ -2814,13 +2819,107 @@ ASK_MORE = {"traceroute": "Asks for the hops out and back; a minute is normal", 
             "request_telemetry": "Asks for battery, voltage and uptime now", "request_nodeinfo": "Brings back a name changed over the air"}
 
 
-def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20):
+COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def box_position_trusted(own):
+    """Spec 114, D3: the box's position is one to measure from only when it is its own (a fix, a radio's fix,
+    declared, or configured), never the median of the nodes it hears."""
+    own = own or {}
+    return own.get("lat") is not None and own.get("lon") is not None and str(own.get("position_source") or "") in RP.TRUSTED_SOURCES
+
+
+def range_text(own, n, silent_min=30):
+    """Spec 114: how far a node is from the box and which way, as every place shows it, or "" when there is nothing
+    honest to say: no fix, no position of the box's own (D3), or the box itself. D1 metres under 1 km, then
+    kilometres; D2 degrees true with the compass point; D4 a fix older than Silent after says how old."""
+    if not box_position_trusted(own) or n.get("lat") is None or n.get("lon") is None or (n.get("id") and n.get("id") == (own or {}).get("id")):
+        return ""
+    fix_age = ""
+    try:
+        if n.get("fix_ts") and time.time() - _utc_secs(n["fix_ts"]) > int(silent_min) * 60:
+            fix_age = " · fix " + age(n["fix_ts"])
+    except (TypeError, ValueError):
+        pass
+    m = RP.metres_between(float(own["lat"]), float(own["lon"]), float(n["lat"]), float(n["lon"]))
+    if m < 10:
+        # D5: closer than a fix is good to, a bearing is noise, so none is given
+        return "within 10 m" + fix_age
+    if round(m) < 1000:
+        dist = f"{int(round(m))} m"
+    elif round(m / 1000, 1) < 10:
+        dist = f"{m / 1000:.1f} km"
+    else:
+        dist = f"{int(round(m / 1000))} km"
+    b = RP.bearing_degrees(float(own["lat"]), float(own["lon"]), float(n["lat"]), float(n["lon"]))
+    out = f"{dist} {int(round(b)) % 360:03d}° {COMPASS[int(((b + 22.5) % 360) // 45)]}{fix_age}"
+    return out
+
+
+def lists_line(lists):
+    """Spec 116, D5: said once, when the radio cannot keep the lists."""
+    if not lists or lists.get("supported"):
+        return ""
+    return (f"<p class='meta' id='no-lists'>This radio's firmware ({e(str(lists.get('firmware') or 'unknown'))}) cannot keep favourites or an "
+            f"ignore list; that needs {e(str(lists.get('min') or ''))} or later.</p>")
+
+
+def ignored_list(nodes, lists):
+    """Spec 116, D4: the nodes the radio ignores, each with Stop ignoring."""
+    if not (lists or {}).get("supported"):
+        return ""
+    ign = [n for n in nodes if n.get("ignored")]
+    if not ign:
+        return ""
+    rows = "".join(f"<tr><td>{e(dname(n))} <span class='meta'>{e(str(n.get('id')))}</span></td><td>"
+                   + ("<span class='meta'>stop asked</span>" if "ignored" in (n.get("list_asked") or [])
+                      else list_form(str(n.get("id")), "ignored", "off", "Stop ignoring", "Stop ignoring this node? The gateway radio hears it again, and it reaches TAK again."))
+                   + "</td></tr>" for n in ign)
+    return (f"<details class='fold' id='ignored' open><summary>Ignored by the radio <b>{len(ign)}</b></summary>"
+            f"<p class='meta'>The gateway radio drops these nodes' traffic, so they are not heard here and do not reach TAK.</p>"
+            f"<div class='tablewrap'><table><tbody>{rows}</tbody></table></div></details>")
+
+
+def no_distances_line(own):
+    """Spec 114: said once, at the top of the list, when there is no position of the box's own to measure from."""
+    if box_position_trusted(own):
+        return ""
+    why = ("its position is only an estimate from the nodes it hears" if str((own or {}).get("position_source") or "") == "devices"
+           else "it has no position of its own")
+    return (f"<p class='meta' id='no-distances'>No distances: {e(why)}, so {this_box()} cannot say how far a node is. "
+            f"Give it one on <a href='/computer/where'>Where it is</a>.</p>")
+
+
+def list_form(nid, lst, on, label, confirm, cls="line"):
+    """Spec 116: one request to the gateway radio's lists. It posts, like every form that changes something."""
+    return (f"<form class='inline' data-action='node_list_set' method='post' action='/api/node_list_set' data-risk='change' data-confirm=\"{e(confirm)}\" style='display:inline'>"
+            f"<input type='hidden' name='id' value='{e(nid)}'><input type='hidden' name='list' value='{lst}'><input type='hidden' name='on' value='{on}'>"
+            f"<button type='submit' class='{cls}'>{e(label)}</button><div class='res meta' role='status'></div></form>")
+
+
+IGNORE_CONFIRM = "Ignore this node? The gateway radio drops its traffic: it is no longer heard here, and no longer reaches TAK. You can stop ignoring it on the Nodes page."
+
+
+def list_marks(n):
+    """Spec 116: what the radio's lists say about a node, and what has been asked and not yet shown."""
+    marks = (["★ favourite"] if n.get("favorite") else []) + (["ignored"] if n.get("ignored") else [])
+    marks += [("favourite" if a == "favorite" else "ignore") + " asked" for a in (n.get("list_asked") or [])]
+    return marks
+
+
+def can_ignore(n, own_id=None):
+    """D4: never a managed device, a favourite (or one asked for), the box's own radio, or a node seen through a site."""
+    return not (n.get("ignored") or n.get("favorite") or n.get("managed") or n.get("remote") or "favorite" in (n.get("list_asked") or [])
+                or (own_id and n.get("id") == own_id))
+
+
+def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20, own=None, lists=None):
     nid = str(n.get("id") or "")
     name = dname(n)
     own_name = str(n.get("name") or "") if n.get("label") and n.get("name") else ""
     has_fix = n.get("lat") is not None and n.get("lon") is not None
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if has_fix else "no fix")
-    sub = " · ".join(x for x in (own_name, str(n.get("hw") or ""), pos) if x)
+    sub = " · ".join(x for x in (own_name, str(n.get("hw") or ""), pos, range_text(own, n, silent_min), *list_marks(n)) if x)
     reached_mqtt = bool(n.get("via_mqtt")) and n.get("heard_here") is False
     if n.get("remote"):  # Spec 052: a node from a peer's picture; Spec 113: and how that site reached it
         site_ = n.get('origin_name') or str(n.get('origin') or '')[:12]
@@ -2871,6 +2970,8 @@ def node_row(n, db=False, routes=None, silent_min=30, availability=None, reboots
             f"<td>{sig(None, None, True) if reached_mqtt else sig(n.get('snr'), n.get('hops'), n.get('via_mqtt'))}{('<div>' + spark(n.get('history')) + '</div>') if not db and spark(n.get('history')) else ''}</td><td>{batt_html}</td><td>{heard_html}</td>"
             f"<td><div class='row-actions'>{asks}"
             + ("" if db else node_name_fold(n))
+            + (list_form(nid, "ignored", "on", "Ignore", IGNORE_CONFIRM, cls="quiet")
+               if (lists or {}).get("supported") and not db and can_ignore(n, (own or {}).get("id")) else "")
             + f"</div><div class='res meta' role='status'></div>"
             f"<div class='route-slot'>{route_bar((routes or {}).get(nid)) if (routes or {}).get(nid) else ''}</div></td></tr>")
 
@@ -2966,20 +3067,21 @@ def latest_contact(n):
     return when
 
 
-def nodes_tables(nodes, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20):
+def nodes_tables(nodes, routes=None, silent_min=30, availability=None, reboots=None, battery_pct=20, own=None, lists=None):
     heard = [n for n in nodes if reached(n)]
     db = [n for n in nodes if not reached(n)]
-    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct) for n in heard) or f"<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into {this_box()} and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
-    db_rows = "".join(node_row(n, db=True, silent_min=silent_min, battery_pct=battery_pct) for n in db)
+    rows = "".join(node_row(n, routes=routes, silent_min=silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct, own=own, lists=lists) for n in heard) or f"<tr><td colspan=5 class='meta'>No node heard since this bridge started. A quiet mesh is not a broken bridge: wait for a tracker to speak, or plug one into {this_box()} and set it up on the <a href='/bench'>Bench</a>.</td></tr>"
+    db_rows = "".join(node_row(n, db=True, silent_min=silent_min, battery_pct=battery_pct, own=own, lists=lists) for n in db)
     return rows, db_rows, len(heard), len(db)
 
 
-def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None, reboots=None, battery_pct=20):
-    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct)
+def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, availability=None, reboots=None, battery_pct=20, own=None, lists=None):
+    rows, db_rows, heard, db = nodes_tables(nodes, routes, silent_min, availability=availability, reboots=reboots, battery_pct=battery_pct, own=own, lists=lists)
     live = [n for n in nodes if reached(n)]
     head = "<thead><tr><th>Node</th><th>Signal</th><th>Battery</th><th>Last heard</th><th>Ask</th></tr></thead>"
     lead = (f"<p class='meta'><span id='nodes-heard-count'>{heard}</span> heard here or over MQTT since the bridge started, "
-            f"<span id='nodes-db-count'>{db}</span> more in the radio's database. Joined on radio id; names are labels, never identity.</p>") if intro else ""
+            f"<span id='nodes-db-count'>{db}</span> more in the radio's database. Joined on radio id; names are labels, never identity.</p>"
+            + no_distances_line(own) + lists_line(lists)) if intro else ""
     def cnt(k):
         if k == "quiet":
             return sum(1 for n in live if latest_contact(n) and (time.time() - _utc_secs(latest_contact(n))) > int(silent_min) * 60)
@@ -2998,7 +3100,7 @@ def nodes_body(nodes, intro=True, routes=None, silent_min=30, groups=None, avail
             f"<div class='tablewrap'><table>{head}<tbody id='nodes-db'>{db_rows}</tbody></table></div></details>") if db or not intro else ""
     js = WRITE_JS + (NODES_JS if intro else NODES_JS + "<script>window.onMesh=window.onMesh||function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}};</script>")
     dl = "<datalist id='groups'>" + "".join(f"<option value='{e(g)}'>" for g in (groups or [])) + "</datalist>"
-    return f"{lead}{filters}{dl}<div class='tablewrap'><table>{head}<tbody id='nodes'>{rows}</tbody></table></div><p class='meta' id='nf-none' hidden>No node matches that filter.</p>{fold}{js}"
+    return f"{lead}{filters}{dl}<div class='tablewrap'><table>{head}<tbody id='nodes'>{rows}</tbody></table></div><p class='meta' id='nf-none' hidden>No node matches that filter.</p>{fold}{ignored_list(nodes, lists) if intro else ''}{js}"
 
 
 def nodes_rows_html(nodes, availability=None):
@@ -3138,14 +3240,15 @@ WRITE_JS = r"""<script>
   });
   var dec=document.getElementById('decode');
   if(dec){dec.addEventListener('click',function(){var url=document.querySelector('form[data-action=channel_adopt] input[name=url]').value;
-    fetch('/api/channel_decode?url='+encodeURIComponent(url)).then(function(r){return r.json();}).then(function(j){
+    fetch('/api/channel_decode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url})}).then(function(r){return r.json();}).then(function(j){
       var out=document.getElementById('decoded');var btn=document.querySelector('form[data-action=channel_adopt] button[type=submit]');
       if(j.error){out.textContent='cannot read it: '+j.error;out.className='meta bad';btn.disabled=true;return;}
       out.textContent='This URL carries '+j.count+' channel(s): '+j.channels.map(function(n){return n||'(unnamed)';}).join(', ')+' · region '+(j.region||'not set')+' · preset '+(j.modem_preset||'not set')+'. Read that before you adopt it.';
       out.className='meta ok';btn.disabled=false;});});}
-  // the join QR sheet is a dialog: focus moves to Close, Escape closes, focus returns, and it closes itself after a minute
+  // the join QR sheet is a dialog: focus moves to Close, Escape closes, focus returns, and it closes itself after a minute.
+  // The image carries the key, so it has no source until Show is pressed and none again once the sheet closes (1.5.1).
   var sheet=document.getElementById('qr-sheet'),qrTimer=null,qrOpener=null;
-  function qrClose(){if(!sheet)return;sheet.hidden=true;if(qrTimer){clearInterval(qrTimer);qrTimer=null;}if(qrOpener){qrOpener.focus();}}
+  function qrClose(){if(!sheet)return;sheet.hidden=true;var qi=sheet.querySelector('img');if(qi){qi.removeAttribute('src');}if(qrTimer){clearInterval(qrTimer);qrTimer=null;}if(qrOpener){qrOpener.focus();}}
   document.querySelectorAll('[data-qr-open]').forEach(function(b){b.addEventListener('click',function(){if(!sheet)return;qrOpener=b;var img=sheet.querySelector('img');
     if(img&&b.dataset.qrIndex!==undefined){img.src='/channels/qr.png?index='+encodeURIComponent(b.dataset.qrIndex)+'&t='+Date.now();img.alt='Join QR for '+(b.dataset.qrName||'this channel');}
     var nm=sheet.querySelector('[data-qr-name]');if(nm&&b.dataset.qrName){nm.textContent=b.dataset.qrName;}
@@ -3169,6 +3272,9 @@ WRITE_JS = r"""<script>
 # Reads whose argument carries a secret (an invite's code, a channel code's key): the screen sends them in the
 # body of a POST, so the secret is never in a URL, a proxy's log or the browser's history (Specs 111 and 112).
 BODY_READS = frozenset(("site_invite_read", "channel_decode"))
+# Query fields no GET may carry: the names a form gives its secret (a channel code's url, a key, a token, a password, an invite).
+# Nothing on the screen asks by GET with one of these, so refusing them costs nothing and closes the class (1.5.2).
+SECRET_FIELDS = frozenset(("url", "key", "token", "password", "secret", "invite"))
 
 
 def _act(aid):
@@ -3235,7 +3341,7 @@ def channels_body(ch, own_id="?", st=None, rotation=None):
     err = f"<p class='warn'>{e(ch['error'])}</p>" if ch.get("error") else ""
     qr = ("<h2>Put another device on this channel</h2><p class='meta'>The join QR carries the channel name, the key, the region and the modem preset; the key appears nowhere else on this screen. "
           "Show it only to a device you mean to join. Each channel row has its own QR.</p><button type='button' data-qr-open data-qr-index='0' data-qr-name='" + e(primary) + "'>Show the join QR for " + e(primary) + "</button>"
-          f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Join QR' hidden><img src='/channels/qr.png' alt='Join QR for {e(primary)}' width='320' height='320'>"
+          f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Join QR' hidden><img alt='Join QR for {e(primary)}' width='320' height='320'>"
           f"<div><b data-qr-name>{e(primary)}</b> · {e(st.get('region') or '?')} · {e(st.get('modem_preset') or '?')}</div><p class='meta'>Scan it in the Meshtastic app, or hold it up to a tracker's onboarding.</p>"
           "<span class='meta' data-qr-count></span>" + icon_button("close", "Close the join QR", "Close the join QR", cls="line icon close", attrs="data-qr-close") + "</div>"
           if ch.get("url") else "<p class='meta'>No primary channel with a key is readable yet.</p>")
@@ -3245,7 +3351,7 @@ def channels_body(ch, own_id="?", st=None, rotation=None):
               "<label>Name (11 bytes at most)<input type='text' name='name' maxlength='11' required></label>"
               "<label>Slot<select name='index'><option value=''>first free</option>" + "".join(f"<option value='{i}'>{i}</option>" for i in range(1, 8)) + "</select></label>"
               "<button type='submit'>Create the channel</button><div class='res meta' role='status'></div></form>")
-    adopt = (f"<form class='card' data-action='channel_adopt' data-risk='change' data-refresh='channels:channel-rows' data-confirm=\"{e(ado['confirm'])}\">"
+    adopt = (f"<form class='card' data-action='channel_adopt' method='post' action='/api/channel_adopt' data-risk='change' data-refresh='channels:channel-rows' data-confirm=\"{e(ado['confirm'])}\">"
              f"<h2 style='margin-top:0'>{e(ado['title'])}</h2><p class='meta'>{e(ado['description'])}</p>"
              "<label>Join URL<input type='text' name='url' required autocomplete='off'></label>"
              "<button type='button' class='line' id='decode'>Read it first</button><div id='decoded' class='meta' style='margin:.4rem 0'></div>"
@@ -3298,12 +3404,12 @@ def add_device_body(kind, bench, groups, st, own_id="?"):
              "<p class='meta'>It contains the channel key. Anyone who scans it can read and send on this mesh. Show it only to a phone you mean to join, "
              "and scan it in the Meshtastic app.</p>"
              f"<button type='button' data-qr-open data-qr-index='0' data-qr-name='{e(primary)}'>Show the channel code</button>"
-             f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Channel code' hidden><img src='/channels/qr.png' alt='Channel code for {e(primary)}' width='320' height='320'>"
+             f"<div class='sheet' id='qr-sheet' role='dialog' aria-modal='true' aria-label='Channel code' hidden><img alt='Channel code for {e(primary)}' width='320' height='320'>"
              f"<div><b data-qr-name>{e(primary)}</b> · {e(str(st.get('region') or '?'))} · {e(str(st.get('modem_preset') or '?'))}</div>"
              "<span class='meta' data-qr-count></span>" + icon_button("close", "Close the channel code", "Close the channel code", cls="line icon close", attrs="data-qr-close")
              + "</div></div>")
     ado = _act("channel_adopt")
-    given = (f"<form class='card' data-action='channel_adopt' data-risk='change' data-confirm=\"{e(ado['confirm'])}\" id='add-code'>"
+    given = (f"<form class='card' data-action='channel_adopt' method='post' action='/api/channel_adopt' data-risk='change' data-confirm=\"{e(ado['confirm'])}\" id='add-code'>"
              "<h2 style='margin-top:0'>A code you were given</h2><p class='meta'>Paste the channel code another unit gave you, then read it. "
              "It is read here first; the key in it is never shown.</p>"
              "<label>Code<input type='text' name='url' required autocomplete='off' spellcheck='false'></label>"
@@ -3850,13 +3956,38 @@ def series_chart(pts, key, unit="", lo=None, hi=None, guides=(), label=""):
             f"<polyline points='{line}'/><text x='30' y='{ht - 4}'>{e(pts[0]['ts'][5:16].replace('T', ' '))}Z</text><text x='{w - 110}' y='{ht - 4}'>{e(pts[-1]['ts'][5:16].replace('T', ' '))}Z</text></svg>")
 
 
-def node_body(n, tel, msgs, npos, hours, env=None, availability=None, reboots=None):
+def lists_section(n, lists, own=None):
+    """Spec 116: the node on the gateway radio's lists, and the requests that can be made."""
+    if not (lists or {}).get("supported"):
+        return ""
+    nid, asked = str(n.get("id") or ""), n.get("list_asked") or []
+    if (own or {}).get("id") and nid == (own or {}).get("id"):
+        return ""
+    if "favorite" in asked:
+        fav = "<p class='meta'>Favourite asked; waiting for the radio's node database to show it.</p>"
+    elif n.get("favorite"):
+        fav = "<p>★ A favourite: the radio keeps it however full its node database gets.</p>" + list_form(nid, "favorite", "off", "Remove from favourites", "Take this node off the radio's favourites? It can then be pushed out when the node database fills.")
+    else:
+        fav = list_form(nid, "favorite", "on", "Make a favourite", "Make this node a favourite? The gateway radio keeps it however full its node database gets.")
+    if "ignored" in asked:
+        ign = "<p class='meta'>Ignore asked; waiting for the radio's node database to show it.</p>"
+    elif n.get("ignored"):
+        ign = "<p>Ignored: the radio drops its traffic.</p>" + list_form(nid, "ignored", "off", "Stop ignoring", "Stop ignoring this node? The gateway radio hears it again, and it reaches TAK again.")
+    elif can_ignore(n, (own or {}).get("id")):
+        ign = list_form(nid, "ignored", "on", "Ignore", IGNORE_CONFIRM, cls="quiet")
+    else:
+        ign = "<p class='meta'>Never ignored: " + ("it is managed." if n.get("managed") else "it is a favourite." if n.get("favorite") else "it is seen through a site.") + "</p>"
+    return (f"<h2 id='lists'>On this radio's lists</h2><p class='meta'>Asked of the gateway radio; it does not answer, so each change shows as "
+            f"asked until its node database shows it.</p><div class='row-actions'>{fav}{ign}</div>")
+
+
+def node_body(n, tel, msgs, npos, hours, env=None, availability=None, reboots=None, own=None, silent_min=30, lists=None):
     """Spec 025: one node, its facts, its battery and voltage over time, its last messages."""
     pos = (f"{n['lat']:.5f}, {n['lon']:.5f} · {MG.mgrs(n['lat'], n['lon'], 4) or ''}".rstrip(" ·") if n.get("lat") is not None and n.get("lon") is not None else "no fix")
     heard = n.get("heard") or n.get("last_heard_db")
     facts = (card("Node", f"{e(dname(n))}<div class='sub'>{e(n.get('id') or '')}{(' · ' + e(str(n.get('name')))) if n.get('label') and n.get('name') else ''}</div>")
              + card("Hardware", e(str(n.get("hw") or "unknown")))
-             + card("Position", e(pos))
+             + card("Position", e(pos) + (f"<div class='sub'>{e(range_text(own, n, silent_min))} from {this_box()}</div>" if range_text(own, n, silent_min) else ""))
              + card("Heard", f"<time datetime='{e(str(heard))}' data-age>{e(age(heard))}</time>" if heard else "never")
              + card("Positions in the window", str(npos)))
     levels = [dict(r, level=(None if r.get("level") is None else (100 if int(r["level"]) > 100 else int(r["level"])))) for r in tel]
@@ -3890,7 +4021,7 @@ def node_body(n, tel, msgs, npos, hours, env=None, availability=None, reboots=No
             + f"<h2>Transmit air time</h2>{series_chart(tel, 'airutil', '%', 0, None, (), 'transmit air time')}"
             + envblock +
             f"<h2>Last messages</h2><div class='tablewrap'><table><thead><tr><th>When</th><th>To</th><th>Message</th></tr></thead><tbody>{rows or '<tr><td colspan=3 class=meta>No message from this node in the window.</td></tr>'}</tbody></table></div>"
-            + manage_section(n) + WRITE_JS)
+            + lists_section(n, lists, own) + manage_section(n) + WRITE_JS)
 
 
 def manage_section(n):
@@ -4476,7 +4607,7 @@ def _op_max_bytes(op, field="text", fallback=200):
 SEND_MAX = _op_max_bytes("send_text", fallback=200)
 PEER_MAX = _op_max_bytes("peer_send_text", fallback=180)
 
-def messages_body(web, nodes, chans=None, st=None, groups=None):
+def messages_body(web, nodes, chans=None, st=None, groups=None, own_pos=None, silent_min=30):
     """Spec 048: Messages as a chat. The list of chats on the left, up to three open on the right, from
     what the box holds and hears; the page's script derives the conversations."""
     send = _act("send_text")
@@ -4500,7 +4631,10 @@ def messages_body(web, nodes, chans=None, st=None, groups=None):
     picker = ("<template id='chat-picker'><div class='chat-picker'><div class='chat-head'><span class='nm'>New message</span>"
               f"<button type='button' class='line icon close' aria-label='Close' data-tip='Close'>{closex}</button></div>"
               "<input type='search' placeholder='Name or radio id' aria-label='Name or radio id' autocomplete='off'><div class='chat-picks' aria-live='polite'></div></div></template>")
-    return (f"<div class='chat' id='chat' data-chat='{data}' data-confirm-channel='Send to everyone on {{channel}}, {{count}} devices heard here: “{{text}}”' "
+    # Spec 114: the direct-message header shows the same distance as the node's row, read from here, never asked for
+    ranges = "".join(f"<i data-node='{e(str(n.get('id')))}' data-range='{e(range_text(own_pos, n, silent_min))}'></i>"
+                     for n in nodes if n.get("id") and range_text(own_pos, n, silent_min))
+    return (f"<div id='chat-ranges' hidden>{ranges}</div><div class='chat' id='chat' data-chat='{data}' data-confirm-channel='Send to everyone on {{channel}}, {{count}} devices heard here: “{{text}}”' "
             "data-confirm-direct='Send only to {node}: “{text}”. No one else on the mesh sees it.' "
             "data-confirm-group='Send to {group}: one direct message to each device, each with its own receipt: “{text}”' "
             "data-confirm-remote='Send to {site} over the link: it goes onto that mesh only if {site} allows it, prefixed with this site&#39;s name: “{text}”'>"
@@ -4651,6 +4785,7 @@ CHAT_JS = r"""<script>
       +(secure?'This channel has its own key.':'This channel uses the default key, so anyone with it can read what is sent.')
       +(precise?'':' Position on it is reduced.')+"'>"+(secure?(D.lock||''):(D.lockopen||D.lock||''))+"</span>";
   }
+  function chatRange(key){if(String(key).indexOf('dm:')!==0)return '';var el=document.querySelector("#chat-ranges [data-node='"+String(key).slice(3)+"']");return el&&el.dataset.range?' · '+el.dataset.range:'';}
   function renderPane(key){var panes=document.getElementById('chat-panes');var win=panes.querySelector("[data-key='"+key+"']");var chats=chatsFrom(msgs,own,D.channels,D.groups,seen);var c=chats.filter(function(x){return x.key===key;})[0]||{key:key,name:key,sub:''};
     if(!win){win=document.createElement('section');win.className='chat-win';win.dataset.key=key;win.dataset.seenAt=String(seen[key]||0);
       win.innerHTML="<div class='chat-head'><button type='button' class='line icon back' aria-label='Back to the chats' data-tip='Back to the chats'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M10 3 5 8l5 5'/></svg></button><span class='nodeicon'>"+chatIcon(c)+"</span><span class='nm'><span class='name'></span><br><span class='sub'></span></span><details class='chat-menu'><summary class='line icon' aria-label='More for this chat' data-tip='More for this chat' data-tip-more='Mark read or unread, pin, mute, hide'>"+(D.dots||'&#8943;')+"</summary><div class='menu-list' role='menu'></div></details><button type='button' class='line icon close' aria-label='Close this chat' data-tip='Close this chat'><svg viewBox='0 0 16 16' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' aria-hidden='true'><path d='M3.5 3.5l9 9M12.5 3.5l-9 9'/></svg></button></div><div class='chat-msgs'></div>";
@@ -4676,7 +4811,7 @@ CHAT_JS = r"""<script>
       win.querySelector('.chat-msgs').addEventListener('click',function(ev){var b=ev.target.closest('[data-act]');if(!b)return;var bub=b.closest('.bubble');var m=msgsFor(key)[parseInt(bub.dataset.i,10)];if(!m)return;
         if(b.dataset.act==='copy'){copyText(m.text||'',b);}else if(b.dataset.act==='resend'){sendBody(win,{text:m.text||'',channel:(m.channel===undefined||m.channel===null)?0:m.channel,to:String(m.to||'^all')},'',false,null);}});
       panes.appendChild(win);}
-    win.querySelector('.name').textContent=chatName(c);win.querySelector('.name').insertAdjacentHTML('beforeend',chatLock(c));win.querySelector('.sub').textContent=chatSub(c);win.querySelector('.menu-list').innerHTML=menuFor(key);
+    win.querySelector('.name').textContent=chatName(c);win.querySelector('.name').insertAdjacentHTML('beforeend',chatLock(c));win.querySelector('.sub').textContent=chatSub(c)+chatRange(key);win.querySelector('.menu-list').innerHTML=menuFor(key);
     var box=win.querySelector('.chat-msgs');var atBottom=box.scrollTop+box.clientHeight>=box.scrollHeight-40||!box.children.length;box.innerHTML='';var lastDay='';
     var list=msgsFor(key),divAt=firstUnreadIndex(list,own,parseInt(win.dataset.seenAt||'0',10));
     list.forEach(function(m,i){var day=String(m.ts||'').slice(0,10);if(day&&day!==lastDay){lastDay=day;var d=document.createElement('div');d.className='chat-day';d.textContent=day;box.appendChild(d);}
@@ -4776,7 +4911,7 @@ def mqtt_card(m, cfg=None):
     state = (f"<p><i class='lamp lamp--{lamp}'></i><b>{word}</b>"
              + (f" <span class='meta'>{e(why)}</span>" if why else "") + "</p>" + counts + topics)
     on = lambda k: " checked" if m.get(k) else ""  # noqa: E731
-    form = (f"<form data-action='gateway_mqtt_set' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\">"
+    form = (f"<form data-action='gateway_mqtt_set' method='post' action='/api/gateway_mqtt_set' data-risk='change' data-confirm=\"{e(a.get('confirm') or '')}\">"
             f"<label>Broker<span class='meta'> host, or host:port; 8883 with TLS, 1883 without</span>"
             f"<input type='text' name='address' value='{e(str(m.get('broker') or '').rsplit(':', 1)[0])}' maxlength='120' required></label>"
             f"<label>User<input type='text' name='username' value='{e(str(m.get('user') or ''))}' maxlength='60'></label>"
@@ -4924,7 +5059,7 @@ def proposal_form(pr):
         else:
             fields += f"<label>{e(i['name'])}<input type='text' name='{e(i['name'])}' value='{e(str(val))}'></label>"
     risk = a.get("risk", "read")
-    return (f"<form class='card proposal{' danger' if risk == 'unreachable' else ''}' data-action='{e(pr['action'])}' data-proposal='{e(pr['id'])}' data-risk='{e(risk)}' data-confirm=\"{e(a.get('confirm') or 'Run this now?')}\">"
+    return (f"<form class='card proposal{' danger' if risk == 'unreachable' else ''}' method='post' action='/api/proposal/run' data-action='{e(pr['action'])}' data-proposal='{e(pr['id'])}' data-risk='{e(risk)}' data-confirm=\"{e(a.get('confirm') or 'Run this now?')}\">"
             f"<div class='k'>{e(pr.get('who') or '')} proposes · <time datetime='{e(str(pr.get('created') or ''))}' data-age>{e(age(pr.get('created') or ''))}</time></div>"
             f"<div class='v'>{e(a.get('title', pr['action']))} <span class='pill'>{e(pr['action'])}</span></div><p>{e(pr.get('rationale') or '')}</p>{fields}"
             + ("<label class='check'><input type='checkbox' name='confirm_tick'><span>I understand the consequence named above; this radio is {own}.</span></label>".replace("{own}", f"the one on {this_box()}") if risk == "unreachable" else "")
@@ -5016,12 +5151,12 @@ def peers_section(p, kind="Box"):
              f"<tbody>{rows}{waiting}{'' if rows or waiting else '<tr><td colspan=5 class=meta>' + empty + '</td></tr>'}</tbody></table></div>{refused_line}")
     invite = join = ""
     if can_invite:
-        invite = ("<form data-action='peer_invite' class='card' data-risk='change' id='peer-invite'><h3 style='margin-top:0'>Invite a site</h3>"
+        invite = ("<form data-action='peer_invite' method='post' action='/api/peer_invite' class='card' data-risk='change' id='peer-invite'><h3 style='margin-top:0'>Invite a site</h3>"
                   "<p class='meta'>A code that works once, for ten minutes, for one other site to join this one.</p>"
                   "<label>Who is it for?<input type='text' name='label' maxlength='60' placeholder='for example: Brize laptop' autocomplete='off'></label>"
                   "<button>Make an invite</button><div class='res meta' role='status'></div><div class='invite-out' aria-live='polite'></div></form>")
     if can_join:
-        join = ("<form data-action='peer_join' class='card' data-risk='change' id='peer-join'><h3 style='margin-top:0'>Join a site</h3>"
+        join = ("<form data-action='peer_join' method='post' action='/api/peer_join' class='card' data-risk='change' id='peer-join'><h3 style='margin-top:0'>Join a site</h3>"
                 "<p class='meta'>Paste the invite the other site gave you, or open the file it was saved as. It is read first: nothing dials until you press Join.</p>"
                 "<label>Invite<textarea name='invite' rows='2' required placeholder='host:port/code/fingerprint/expires' autocomplete='off' spellcheck='false'></textarea></label>"
                 "<div class='row-actions'><button type='button' class='line' data-read>Read the invite</button>"
@@ -5452,6 +5587,10 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
         def do_GET(self):
             set_shape(web.desktop)   # Spec 069: before anything renders a word
             path = self.path.split("?")[0]
+            if SECRET_FIELDS & {k.lower() for k in urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "", keep_blank_values=True)}:
+                # a secret is never in a URL: a form that lost its method, or a link someone built, is refused before anything runs
+                # and the reply says nothing of the value (1.5.1 for an invite, 1.5.2 for every field that holds a secret)
+                return self._json(405, {"error": "a secret is sent in the body of a POST, never in a URL"})
             if path == "/healthz":
                 return self._json(200, {"ok": True, "bridge": web.client.reachable(), "version": __version__})
             if path == "/login":
@@ -5620,7 +5759,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 want_group = (q.get("group", [""])[0] or "").strip()
                 nodes_ = [n for n in (L.get("nodes") or []) if not want_group or str(n.get("group") or "") == want_group]
                 groups_ = sorted({str(g.get("name")) for g in (self._ask("groups").get("groups") or []) if g.get("name")} | {str(n.get("group")) for n in (L.get("nodes") or []) if n.get("group")})
-                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), silent_min=_silent_min(web), battery_pct=_battery_pct(web), groups=groups_, availability=_availability(web), reboots=_reboots(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
+                return self._send(200, self._page("Nodes", nodes_body(nodes_, routes=L.get("routes"), own=L.get("own"), lists=L.get("lists"), silent_min=_silent_min(web), battery_pct=_battery_pct(web), groups=groups_, availability=_availability(web), reboots=_reboots(web)) + "<script>window.onMesh=function(d){if(d.kind==='packet'||d.kind==='forwarded'||d.kind==='status'){window.mmNodes();}if(d.kind==='route'&&window.mmRoute){window.mmRoute(d);}if(d.kind==='position'&&window.mmPosition){window.mmPosition(d);}if(d.kind==='telemetry'&&window.mmTelemetry){window.mmTelemetry(d);}};</script>", "/nodes"))
             if path == "/log":
                 return self._send(200, self._page("Log", log_body(self._ask("log", n=300).get("lines", [])), "/log"))
             if path == "/channels":
@@ -5636,7 +5775,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
             if path == "/messages":
                 st = self._ask("status")
                 seed_messages(web)
-                return self._send(200, self._page("Messages", messages_body(web, self._ask("nodes").get("nodes", []), self._ask("channels").get("channels", []), st, groups=self._ask("groups")), "/messages", st=st))
+                return self._send(200, self._page("Messages", messages_body(web, self._ask("nodes").get("nodes", []), self._ask("channels").get("channels", []), st, groups=self._ask("groups"), own_pos=self._links().get("own"), silent_min=_silent_min(web)), "/messages", st=st))
             if path == "/radio":
                 st = self._ask("status")
                 own = (st.get("own") or {}).get("id") or "?"
@@ -5651,7 +5790,8 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 except ValueError:
                     hours = 24
                 hours = hours if hours in (24, 168) else 24
-                node = next((n for n in (self._links().get("nodes") or []) if n.get("id") == nid), None)
+                L_ = self._links()
+                node = next((n for n in (L_.get("nodes") or []) if n.get("id") == nid), None)
                 if not node:
                     return self._send(404, self._page("Not found", "<p class='meta'>No such node. It may have been forgotten, or the id is wrong. The <a href='/nodes'>Nodes</a> page lists what this radio hears.</p>"))
                 since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - hours * 3600))
@@ -5666,7 +5806,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 # device on its own page reads as unmanaged and the forms never appear.
                 _reg = next((r for r in (self._ask("register").get("rows") or []) if r.get("id") == nid), None)
                 node = dict(node, **{k: v for k, v in (_reg or {}).items() if v is not None}) if _reg else node
-                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av, reboots=rb), "/nodes"))
+                return self._send(200, self._page(dname(node), node_body(node, tel, msgs, npos, hours, env=env, availability=av, reboots=rb, own=L_.get("own"), silent_min=_silent_min(web), lists=L_.get("lists")), "/nodes"))
             if path == "/health":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 al = self._ask("alerts")
@@ -5759,7 +5899,7 @@ def make_server(bind, port, socket_path, etc_dir, config=None, state_dir=DEFAULT
                 action = C.by_id(aid)
                 if not action:
                     return self._json(404, {"error": f"no action {aid}"})
-                if action["risk"] != "read" or aid == "site_invite_read":   # an invite's code is never in a URL
+                if action["risk"] != "read" or aid in BODY_READS:   # an invite's code and a channel code's key are never in a URL
                     return self._json(405, {"error": f"{aid} is a POST"})
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
                 args = {k: v[0] for k, v in q.items()}
